@@ -1,0 +1,57 @@
+name = "visibility-marketing"
+main = "dist/index.js"
+compatibility_date = "2024-09-23"
+
+# ─── D1 Database (marketing-specific) ────────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "visibility-marketing-db"
+database_id = "<your-d1-id>"
+migrations_dir = "migrations"
+
+# ─── KV Namespace (campaign tracking, drip sequences, affiliate data) ────────
+[[kv_namespaces]]
+binding = "KV_MARKETING"
+id = "<your-kv-id>"
+
+# ─── R2 Bucket (email templates, marketing assets — optional) ────────────────
+# [[r2_buckets]]
+# binding = "R2_ASSETS"
+# bucket_name = "marketing-assets"
+
+# ─── Service Binding to visibility-analytics ─────────────────────────────────
+[[services]]
+binding = "ANALYTICS"
+service = "visibility-analytics"
+
+# ─── Cron Triggers (process due email sends every 5 minutes) ─────────────────
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ─── Environment Variables ───────────────────────────────────────────────────
+[vars]
+FROM_EMAIL = "product@clodo.dev"
+FROM_NAME = "Clodo SEO"
+ENVIRONMENT = "production"
+
+# Secrets (set via `wrangler secret put`):
+#   ADMIN_TOKEN
+#   EMAIL_API_KEY
+#   EMAIL_PROVIDER        (brevo | sendgrid)
+#   SLACK_WEBHOOK_URL
+#   DISCORD_WEBHOOK_URL
+
+# ─── Dev Environment ────────────────────────────────────────────────────────
+[env.development]
+name = "visibility-marketing-dev"
+vars = { ENVIRONMENT = "development", FROM_EMAIL = "dev@clodo.dev", FROM_NAME = "Clodo SEO (Dev)" }
+
+# ─── Build Configuration ────────────────────────────────────────────────────
+[build]
+command = "pnpm run build"
+cwd = "."
+watch_paths = ["src/**"]
+
+# ─── Observability ──────────────────────────────────────────────────────────
+[observability]
+enabled = true

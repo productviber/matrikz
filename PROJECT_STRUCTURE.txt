@@ -1,0 +1,180 @@
+PROJECT STRUCTURE - Visibility Cockpit Platform
+================================================
+
+visibility-platform/ (root)
+│
+├── 📄 Documentation Files
+│   ├── README.md                    - Platform overview (main doc)
+│   ├── ARCHITECTURE.md              - Design decisions & philosophy
+│   ├── DEPLOYMENT.md                - Production deployment guide
+│   ├── QUICKSTART.md                - 5-minute local setup
+│   ├── IMPLEMENTATION_SUMMARY.md    - This implementation summary
+│   │
+├── ⚙️  Configuration
+│   ├── package.json                 - Root scripts for monorepo
+│   ├── pnpm-workspace.yaml          - Workspace configuration
+│   ├── tsconfig.json                - Shared TypeScript config
+│   ├── .gitignore                   - Git ignore patterns
+│   ├── .env.example                 - Environment template
+│   │
+├── 📦 packages/design-system/       [SHARED DESIGN FOUNDATION]
+│   ├── README.md
+│   ├── package.json                 - Exports tokens, components, styles
+│   ├── tsconfig.json
+│   │
+│   └── src/
+│       ├── tokens/                  [Design System Tokens]
+│       │   ├── colors.ts            - Brand, status, neutral palette
+│       │   ├── typography.ts        - Font families, sizes, weights
+│       │   ├── spacing.ts           - Spacing scale, shadows, transitions
+│       │   ├── breakpoints.ts       - Responsive breakpoints
+│       │   └── index.ts             - Barrel export
+│       │
+│       ├── components/              [Reusable UI Components]
+│       │   ├── Button.tsx           - Variants: primary, secondary, ghost, danger
+│       │   ├── Card.tsx             - Container with header & actions
+│       │   ├── MetricCard.tsx       - Metric display (used in both workers!)
+│       │   ├── Badge.tsx            - Status indicators
+│       │   ├── Input.tsx            - Form inputs with validation
+│       │   ├── Alert.tsx            - Dismissible alerts
+│       │   └── index.tsx            - Barrel export
+│       │
+│       └── styles/
+│           └── index.css            - Resets, animations, utilities
+│
+├── 📦 packages/analytics/           [AUTHENTICATED PRODUCT WORKER]
+│   ├── README.md
+│   ├── package.json                 - Dependencies: Hono, React, Wrangler
+│   ├── tsconfig.json
+│   ├── vite.config.ts              - Build configuration
+│   ├── wrangler.toml               - Worker config (D1 & KV bindings)
+│   │
+│   ├── migrations/
+│   │   └── 0001_init.sql           - Database schema (users, sites, gsc_data, etc)
+│   │
+│   └── src/
+│       ├── index.ts                - Main Hono app with routing
+│       │   Routes:
+│       │   - GET /
+│       │   - GET /pulse            → Dashboard
+│       │   - GET /action           → Action center
+│       │   - GET /explore          → Deep insights
+│       │   - GET /ai               → AI assistant
+│       │   - GET /health           → Health check
+│       │   - GET /api/auth/me      → Current user
+│       │   - GET /api/sites        → User's sites
+│       │   - GET /internal/report-data/:domain → For marketer worker
+│       │
+│       ├── lib/                    [Utilities]
+│       │   ├── db.ts              - D1 database helpers
+│       │   ├── cache.ts           - KV cache manager
+│       │   └── render.ts          - SSR utilities
+│       │
+│       ├── routes/                [Page Handlers]
+│       │   ├── pulse.tsx          - Dashboard page
+│       │   ├── action.tsx         - Action center page
+│       │   ├── explore.tsx        - Deep insights page
+│       │   └── ai.tsx             - AI assistant page
+│       │
+│       ├── services/              [Business Logic] (ready to expand)
+│       ├── components/            [React Components] (ready to expand)
+│       └── pages/                 [Full Page Components] (ready to expand)
+│
+├── 📦 packages/marketer/           [PUBLIC-FACING GROWTH WORKER]
+│   ├── README.md
+│   ├── package.json                - Dependencies: Hono, React, Wrangler
+│   ├── tsconfig.json
+│   ├── vite.config.ts             - Build configuration
+│   ├── wrangler.toml              - Worker config (D1 & KV bindings)
+│   │
+│   └── src/
+│       ├── index.ts               - Main Hono app with routing
+│       │   Routes:
+│       │   - GET /                     → Home landing
+│       │   - GET /features             → Features page
+│       │   - GET /pricing              → Pricing page
+│       │   - GET /report/:domain       → Public SEO report (calls analytics)
+│       │   - GET /widget.js            → Embeddable widget
+│       │   - GET /affiliate/:code      → Affiliate tracking
+│       │   - POST /internal/record-conversion → Conversion tracking
+│       │   - GET /health                → Health check
+│       │
+│       ├── routes/                [Page Handlers] (ready to expand)
+│       ├── services/              [Integration Services] (ready to expand)
+│       ├── components/            [Marketing Components] (ready to expand)
+│       └── pages/                 [Full Page Components] (ready to expand)
+│
+└── 📁 node_modules/               (generated by pnpm install)
+
+TOTAL FILES CREATED: 50+
+
+KEY PATTERNS:
+
+1. Design System (Shared by Both Workers)
+   - All UI components import from @visibility/design-system/components
+   - All styles use tokens from @visibility/design-system/tokens
+   - Both workers use identical Button, Card, MetricCard components
+
+2. Monorepo Structure (pnpm workspaces)
+   - packages/design-system is dependency for both workers
+   - packages/analytics and packages/marketer are independent
+   - Easy to add more workers (visibility-ai, visibility-email, etc)
+
+3. Database Integration
+   - Both workers access shared D1 database
+   - Shared tables: users, sites
+   - Analytics-only: gsc_data, bing_data, cloudflare_data
+   - Marketer-only: conversions, affiliates, email_campaigns
+
+4. Service-to-Service Communication
+   - Marketer worker calls: GET analytics/internal/report-data/:domain
+   - Allows analytics to apply business logic before exposing data
+   - Caching strategy: marketer caches results in KV
+
+5. Deployment Strategy
+   - Two independent workers deployed to Cloudflare
+   - Routes configured at Cloudflare level (not in code)
+   - Automatic scaling per worker
+   - Clear traffic boundaries
+
+DEPENDENCIES:
+
+Root:
+- pnpm (package manager)
+- @necessary packages defined in individual package.jsons
+
+Each Worker:
+- hono ^4.0.0            (HTTP framework)
+- react ^18.2.0          (UI)
+- react-dom ^18.2.0      (React DOM)
+- @visibility/design-system (workspace:*)
+- wrangler ^3.0.0        (Cloudflare CLI)
+- vite ^5.0.0            (Build tool)
+- typescript ^5.3.0      (Type safety)
+
+NEXT ACTIONS:
+
+1. Install: pnpm install
+2. Build:   pnpm build
+3. Dev:     cd packages/analytics && pnpm dev
+4. Read:    QUICKSTART.md (5-min setup)
+              ARCHITECTURE.md (design decisions)
+              DEPLOYMENT.md (production guide)
+
+QUICK START COMMANDS:
+
+# Setup
+git clone <repo>
+cd visibility-platform
+pnpm install
+pnpm build
+
+# Development (two terminals)
+cd packages/analytics && pnpm dev    # http://localhost:8787
+cd packages/marketer && pnpm dev     # http://localhost:8788
+
+# Type checking
+pnpm typecheck
+
+# Production deployment
+FOLLOW: DEPLOYMENT.md (complete guide)

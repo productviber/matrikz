@@ -1,0 +1,33 @@
+name = "visibility-analytics"
+main = "dist/index.js"
+compatibility_date = "2024-01-15"
+type = "service"
+
+# Database binding
+[[d1_databases]]
+binding = "VISIBILITY_DB"
+id = "visibility-db-id"
+
+# KV namespace binding for caching
+[[kv_namespaces]]
+binding = "ANALYTICS_CACHE"
+id = "analytics-cache-id"
+
+# Environment variables
+[env.development]
+name = "visibility-analytics-dev"
+vars = { ENVIRONMENT = "development" }
+
+[env.production]
+name = "visibility-analytics-prod"
+vars = { ENVIRONMENT = "production" }
+
+# Build configuration
+[build]
+command = "npm run build"
+cwd = "."
+watch_paths = ["src/**"]
+
+# Observability
+[observability]
+enabled = true

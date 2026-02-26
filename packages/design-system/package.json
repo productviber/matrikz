@@ -1,0 +1,26 @@
+{
+  "name": "@visibility/design-system",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Shared design system for Visibility platform workers",
+  "exports": {
+    "./tokens": "./src/tokens/index.ts",
+    "./components": "./src/components/index.tsx",
+    "./styles": "./src/styles/index.css"
+  },
+  "files": [
+    "src",
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "typescript": "^5.3.0"
+  }
+}

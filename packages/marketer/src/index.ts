@@ -1,0 +1,202 @@
+/**
+ * Visibility Marketing Worker — Main Entry Point
+ *
+ * This Cloudflare Worker receives real-time events from visibility-analytics
+ * via service binding and powers the full affiliate-driven growth loop.
+ *
+ * Routes:
+ *   POST /events                        — Service binding event ingestion
+ *   GET  /health                        — Quick health check
+ *   GET  /api/health                    — Detailed health check
+ *   GET  /r/:slug                       — Referral link redirect
+ *
+ *   GET  /api/affiliate/portal          — Affiliate self-service dashboard
+ *   GET  /api/affiliate/stats           — Quick affiliate stats
+ *   POST /api/affiliate/apply           — Affiliate recruitment form
+ *   POST /api/affiliate/approve         — Admin: approve affiliate application
+ *   GET  /api/affiliate/applications    — Admin: list pending applications
+ *
+ *   POST /api/campaigns                 — Create campaign / referral link
+ *   GET  /api/campaigns                 — List campaigns
+ *   GET  /api/campaigns/:slug           — Get campaign details
+ *   PUT  /api/campaigns/:slug           — Update campaign
+ *
+ *   POST /api/payouts/batch             — Admin: create payout batch
+ *   POST /api/payouts/batch/:id/process — Admin: process payout batch
+ *   GET  /api/payouts                   — Admin: list payout batches
+ *   GET  /api/payouts/:id               — Admin: get payout batch details
+ *
+ *   GET  /api/admin/dashboard           — Admin: marketing dashboard metrics
+ *   GET  /api/admin/mrr                 — Admin: MRR/ARR history
+ *   GET  /api/admin/emails/sequences    — Admin: list email sequences
+ *   GET  /api/admin/emails/sends        — Admin: list email send history
+ *   POST /api/admin/emails/process      — Admin: trigger email processing
+ *   GET  /api/admin/contacts            — Admin: list CRM contacts
+ *   GET  /api/admin/notifications       — Admin: notification log
+ */
+
+import type { Env } from './types';
+import { routeEvent } from './events/router';
+import { handleHealthCheck, handleDetailedHealth } from './routes/health';
+import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
+import { handleAffiliateApply, handleAffiliateApprove, handleListApplications } from './routes/affiliate-recruitment';
+import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleReferralRedirect, handleUpdateCampaign } from './routes/campaigns';
+import { handleCreatePayoutBatch, handleProcessPayoutBatch, handleListPayoutBatches, handleGetPayoutBatch } from './routes/payouts';
+import {
+  handleAdminDashboard,
+  handleMrrHistory,
+  handleListSequences,
+  handleListEmailSends,
+  handleProcessEmails,
+  handleListContacts,
+  handleListNotifications,
+} from './routes/admin';
+import { corsPreflightResponse, notFound } from './lib/response';
+import { processDueEmails } from './lib/email';
+
+export default {
+  /**
+   * Main fetch handler — routes requests to the appropriate handler.
+   */
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Handle CORS preflight
+    if (request.method === 'OPTIONS') {
+      return corsPreflightResponse();
+    }
+
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const method = request.method;
+
+    try {
+      // ── Service binding events from visibility-analytics ──
+      if (method === 'POST' && path === '/events') {
+        return routeEvent(request, env, ctx);
+      }
+
+      // ── Health checks ──
+      if (method === 'GET' && path === '/health') {
+        return handleHealthCheck();
+      }
+      if (method === 'GET' && path === '/api/health') {
+        return handleDetailedHealth(env);
+      }
+
+      // ── Referral link redirect ──
+      if (method === 'GET' && path.startsWith('/r/')) {
+        const slug = path.slice(3); // Remove '/r/'
+        if (slug) return handleReferralRedirect(request, env, slug);
+      }
+
+      // ── Affiliate Portal Routes ──
+      if (method === 'GET' && path === '/api/affiliate/portal') {
+        return handleAffiliatePortal(request, env);
+      }
+      if (method === 'GET' && path === '/api/affiliate/stats') {
+        return handleAffiliateStats(request, env);
+      }
+      if (method === 'POST' && path === '/api/affiliate/apply') {
+        return handleAffiliateApply(request, env);
+      }
+      if (method === 'POST' && path === '/api/affiliate/approve') {
+        return handleAffiliateApprove(request, env);
+      }
+      if (method === 'GET' && path === '/api/affiliate/applications') {
+        return handleListApplications(request, env);
+      }
+
+      // ── Campaign Routes ──
+      if (method === 'POST' && path === '/api/campaigns') {
+        return handleCreateCampaign(request, env);
+      }
+      if (method === 'GET' && path === '/api/campaigns') {
+        return handleListCampaigns(request, env);
+      }
+      if (method === 'GET' && path.match(/^\/api\/campaigns\/[^/]+$/)) {
+        const slug = path.split('/').pop()!;
+        return handleGetCampaign(request, env, slug);
+      }
+      if (method === 'PUT' && path.match(/^\/api\/campaigns\/[^/]+$/)) {
+        const slug = path.split('/').pop()!;
+        return handleUpdateCampaign(request, env, slug);
+      }
+
+      // ── Payout Routes ──
+      if (method === 'POST' && path === '/api/payouts/batch') {
+        return handleCreatePayoutBatch(request, env);
+      }
+      if (method === 'POST' && path.match(/^\/api\/payouts\/batch\/\d+\/process$/)) {
+        const batchId = parseInt(path.split('/')[4], 10);
+        return handleProcessPayoutBatch(request, env, batchId);
+      }
+      if (method === 'GET' && path === '/api/payouts') {
+        return handleListPayoutBatches(request, env);
+      }
+      if (method === 'GET' && path.match(/^\/api\/payouts\/\d+$/)) {
+        const batchId = parseInt(path.split('/').pop()!, 10);
+        return handleGetPayoutBatch(request, env, batchId);
+      }
+
+      // ── Admin Routes ──
+      if (method === 'GET' && path === '/api/admin/dashboard') {
+        return handleAdminDashboard(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/mrr') {
+        return handleMrrHistory(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/emails/sequences') {
+        return handleListSequences(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/emails/sends') {
+        return handleListEmailSends(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/emails/process') {
+        return handleProcessEmails(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/contacts') {
+        return handleListContacts(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/notifications') {
+        return handleListNotifications(request, env);
+      }
+
+      // ── Root — worker identifier ──
+      if (method === 'GET' && path === '/') {
+        return new Response(
+          JSON.stringify({
+            worker: 'visibility-marketing',
+            version: '1.0.0',
+            status: 'ok',
+          }),
+          { headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // ── 404 ──
+      return notFound('Route not found');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[Worker] Unhandled error on ${method} ${path}:`, msg);
+      return new Response(
+        JSON.stringify({ ok: false, error: 'Internal server error' }),
+        { status: 500, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+  },
+
+  /**
+   * Scheduled (Cron) handler - processes due email sends.
+   * Configure crons in wrangler.toml triggers section.
+   */
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}`);
+
+    ctx.waitUntil(
+      processDueEmails(env, 100).then((count) => {
+        console.log(`[Cron] Processed ${count} due emails`);
+      }).catch((err) => {
+        console.error('[Cron] Email processing error:', err);
+      })
+    );
+  },
+};

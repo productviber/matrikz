@@ -1,0 +1,27 @@
+{
+  "name": "visibility-analytics",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Analytics & dashboard worker for Visibility Cockpit",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "vite build",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@visibility/design-system": "file:../design-system",
+    "@tamyla/clodo-framework": "^4.4.1",
+    "itty-router": "^4.2.2",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "@cloudflare/workers-types": "^4.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0",
+    "@vitejs/plugin-react": "^4.0.0",
+    "typescript": "^5.3.0",
+    "@types/react": "^18.2.0",
+    "wrangler": "^3.0.0"
+  }
+}
