@@ -19,7 +19,10 @@ describe('event router', () => {
   function makeEventRequest(body: unknown): Request {
     return new Request('https://test.workers.dev/events', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'cf-worker': 'visibility-analytics',
+      },
       body: JSON.stringify(body),
     });
   }

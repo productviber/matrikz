@@ -113,9 +113,10 @@ export async function handleAffiliatePortal(
 }
 
 /**
- * GET /api/affiliate/stats?code=<code>
+ * GET /api/affiliate/stats?code=<code>&email=<email>
  *
  * Quick stats endpoint (lighter than full portal).
+ * Requires code + email for auth (same as portal).
  */
 export async function handleAffiliateStats(
   request: Request,
@@ -123,9 +124,16 @@ export async function handleAffiliateStats(
 ): Promise<Response> {
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
+  const email = url.searchParams.get('email');
 
-  if (!code) {
-    return badRequest(MESSAGES.errors.missingParamCode);
+  if (!code || !email) {
+    return badRequest(MESSAGES.errors.missingCodeEmail);
+  }
+
+  // Require the same code+email verification used by the portal
+  const isVerified = await verifyAffiliate(env, code, email);
+  if (!isVerified) {
+    return unauthorized(MESSAGES.errors.invalidCredentials);
   }
 
   const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);

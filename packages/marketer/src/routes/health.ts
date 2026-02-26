@@ -3,7 +3,8 @@
  */
 
 import type { Env } from '../types';
-import { ok } from '../lib/response';
+import { ok, unauthorized } from '../lib/response';
+import { isAdmin } from '../lib/response';
 import { WORKER_NAME, WORKER_VERSION, KV_PREFIX, INTERNAL_BASE_URL } from '../constants';
 
 export function handleHealthCheck(): Response {
@@ -15,7 +16,12 @@ export function handleHealthCheck(): Response {
   });
 }
 
-export async function handleDetailedHealth(env: Env): Promise<Response> {
+export async function handleDetailedHealth(request: Request, env: Env): Promise<Response> {
+  // Detailed health exposes internal topology — require admin token
+  if (!isAdmin(request, env)) {
+    return unauthorized('Admin token required for detailed health check');
+  }
+
   const checks: Record<string, string> = {};
 
   // D1 check

@@ -105,11 +105,15 @@ describe('affiliate-portal', () => {
     });
 
     it('returns default stats when no data in KV', async () => {
-      const req = makeRequest('GET', '/api/affiliate/stats?code=new-aff');
+      const code = 'new-aff';
+      const email = 'new-aff@test.com';
+      await env.KV_MARKETING.put(`affiliate-email:${code}`, email);
+
+      const req = makeRequest('GET', `/api/affiliate/stats?code=${code}&email=${email}`);
       const res = await handleAffiliateStats(req, env as any);
       expect(res.status).toBe(200);
       const body = await res.json() as any;
-      expect(body.data.code).toBe('new-aff');
+      expect(body.data.code).toBe(code);
       expect(body.data.totalConversions).toBe(0);
       expect(body.data.totalEarnedCents).toBe(0);
       expect(body.data.tier).toBe(COMMISSION_TIERS[0].name);
@@ -117,12 +121,15 @@ describe('affiliate-portal', () => {
     });
 
     it('returns actual stats from KV when available', async () => {
+      const code = 'active-aff';
+      const email = 'active-aff@test.com';
+      await env.KV_MARKETING.put(`affiliate-email:${code}`, email);
       await env.KV_MARKETING.put(
-        'affiliate-stats:active-aff',
+        `affiliate-stats:${code}`,
         JSON.stringify({ totalConversions: 55, totalEarnedCents: 75000, lastConversionAt: '2025-02-01' })
       );
 
-      const req = makeRequest('GET', '/api/affiliate/stats?code=active-aff');
+      const req = makeRequest('GET', `/api/affiliate/stats?code=${code}&email=${email}`);
       const res = await handleAffiliateStats(req, env as any);
       expect(res.status).toBe(200);
       const body = await res.json() as any;

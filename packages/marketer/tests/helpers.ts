@@ -212,6 +212,14 @@ export function makeRequest(
 
 // ─── Mock ExecutionContext ──────────────────────────────────────────────────
 
+// Cloudflare Workers execution context type (minimal subset used by tests)
+declare global {
+  interface ExecutionContext {
+    waitUntil(promise: Promise<unknown>): void;
+    passThroughOnException(): void;
+  }
+}
+
 export function createMockCtx(): ExecutionContext {
   const promises: Promise<unknown>[] = [];
   return {

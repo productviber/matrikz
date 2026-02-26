@@ -22,7 +22,7 @@ describe('response helpers', () => {
 
     it('includes CORS headers', () => {
       const res = json({});
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://visibility.clodo.dev');
       expect(res.headers.get('Access-Control-Allow-Methods')).toContain('GET');
       expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
     });
@@ -116,7 +116,7 @@ describe('response helpers', () => {
     it('returns 204 with CORS headers', () => {
       const res = corsPreflightResponse();
       expect(res.status).toBe(204);
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://visibility.clodo.dev');
       expect(res.headers.get('Access-Control-Allow-Methods')).toBeTruthy();
     });
   });

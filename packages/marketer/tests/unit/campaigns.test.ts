@@ -91,7 +91,7 @@ describe('campaigns routes', () => {
 
   describe('handleListCampaigns()', () => {
     it('returns empty list when no campaigns', async () => {
-      const req = makeRequest('GET', '/api/campaigns');
+      const req = adminRequest('GET', '/api/campaigns');
       const res = await handleListCampaigns(req, env as any);
       expect(res.status).toBe(200);
       const body = await res.json() as any;
@@ -117,7 +117,7 @@ describe('campaigns routes', () => {
         },
       ]);
 
-      const req = makeRequest('GET', '/api/campaigns');
+      const req = adminRequest('GET', '/api/campaigns');
       const res = await handleListCampaigns(req, env as any);
       const body = await res.json() as any;
       expect(body.data.campaigns).toHaveLength(1);
@@ -126,7 +126,7 @@ describe('campaigns routes', () => {
     });
 
     it('filters by affiliate code', async () => {
-      const req = makeRequest('GET', '/api/campaigns?affiliate=aff-1');
+      const req = adminRequest('GET', '/api/campaigns?affiliate=aff-1');
       const res = await handleListCampaigns(req, env as any);
       expect(res.status).toBe(200);
 
@@ -135,7 +135,7 @@ describe('campaigns routes', () => {
     });
 
     it('supports pagination', async () => {
-      const req = makeRequest('GET', '/api/campaigns?page=2&limit=10');
+      const req = adminRequest('GET', '/api/campaigns?page=2&limit=10');
       const res = await handleListCampaigns(req, env as any);
       const body = await res.json() as any;
       expect(body.data.page).toBe(2);

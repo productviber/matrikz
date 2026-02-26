@@ -25,7 +25,7 @@ describe('worker fetch handler', () => {
       const req = makeRequest('OPTIONS', '/api/campaigns');
       const res = await worker.fetch(req, env as any, ctx);
       expect(res.status).toBe(204);
-      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('*');
+      expect(res.headers.get('Access-Control-Allow-Origin')).toBe('https://visibility.clodo.dev');
     });
   });
 
@@ -122,11 +122,19 @@ describe('worker fetch handler', () => {
   });
 
   describe('GET /api/campaigns', () => {
-    it('lists campaigns without auth', async () => {
+    it('returns 401 without auth', async () => {
+      const req = makeRequest('GET', '/api/campaigns');
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(401);
+    });
+
+    it('lists campaigns with admin auth', async () => {
       env.DB.onQuery(/SELECT \* FROM campaigns/, () => []);
       env.DB.onQuery(/SELECT COUNT/, () => [{ 'COUNT(*)': 0 }]);
 
-      const req = makeRequest('GET', '/api/campaigns');
+      const req = makeRequest('GET', '/api/campaigns', undefined, {
+        Authorization: `Bearer ${env.ADMIN_TOKEN}`,
+      });
       const res = await worker.fetch(req, env as any, ctx);
       expect(res.status).toBe(200);
     });
@@ -236,19 +244,24 @@ describe('worker fetch handler', () => {
 
   describe('POST /events', () => {
     it('accepts valid event envelopes', async () => {
-      const req = makeRequest('POST', '/events', {
-        event: 'affiliate.conversion',
-        source: 'visibility-analytics',
-        timestamp: new Date().toISOString(),
-        data: {
-          affiliateCode: 'test',
-          userId: 'u@t.com',
-          eventType: 'purchase',
-          amountCents: 1000,
-          commissionCents: 200,
-          plan: 'pro',
+      const req = makeRequest(
+        'POST',
+        '/events',
+        {
+          event: 'affiliate.conversion',
+          source: 'visibility-analytics',
+          timestamp: new Date().toISOString(),
+          data: {
+            affiliateCode: 'test',
+            userId: 'u@t.com',
+            eventType: 'purchase',
+            amountCents: 1000,
+            commissionCents: 200,
+            plan: 'pro',
+          },
         },
-      });
+        { 'cf-worker': 'visibility-analytics' }
+      );
       const res = await worker.fetch(req, env as any, ctx);
       expect(res.status).toBe(200);
       const body = await res.json() as any;

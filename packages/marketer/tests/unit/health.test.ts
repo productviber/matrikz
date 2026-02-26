@@ -6,7 +6,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { handleHealthCheck, handleDetailedHealth } from '../../src/routes/health';
-import { createMockEnv, createMockFetcher, type MockEnv } from '../helpers';
+import { createMockEnv, createMockFetcher, makeRequest, type MockEnv } from '../helpers';
 import { WORKER_NAME } from '../../src/constants';
 
 describe('health routes', () => {
@@ -50,7 +50,10 @@ describe('health routes', () => {
         }) as any,
       });
 
-      const res = await handleDetailedHealth(env as any);
+      const res = await handleDetailedHealth(
+        makeRequest('GET', '/health/detailed', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env as any
+      );
       expect(res.status).toBe(200);
       const body = await res.json() as any;
       expect(body.data.status).toBe('healthy');
@@ -73,7 +76,10 @@ describe('health routes', () => {
         }) as any,
       });
 
-      const res = await handleDetailedHealth(env as any);
+      const res = await handleDetailedHealth(
+        makeRequest('GET', '/health/detailed', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env as any
+      );
       const body = await res.json() as any;
       expect(body.data.status).toBe('degraded');
       expect(body.data.checks.d1).toBe('error');
@@ -84,7 +90,10 @@ describe('health routes', () => {
         ANALYTICS: createMockFetcher({}) as any, // no /health route → 404
       });
 
-      const res = await handleDetailedHealth(env as any);
+      const res = await handleDetailedHealth(
+        makeRequest('GET', '/health/detailed', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env as any
+      );
       const body = await res.json() as any;
       // Analytics returns 404 (not ok), so shows error:404
       expect(body.data.checks.analytics).toMatch(/error|unavailable/);
@@ -97,7 +106,10 @@ describe('health routes', () => {
         }) as any,
       });
 
-      const res = await handleDetailedHealth(env as any);
+      const res = await handleDetailedHealth(
+        makeRequest('GET', '/health/detailed', undefined, { Authorization: 'Bearer test-admin-token' }),
+        env as any
+      );
       const body = await res.json() as any;
       expect(body.data.worker).toBe(WORKER_NAME);
     });

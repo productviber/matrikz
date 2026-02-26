@@ -12,6 +12,7 @@ import {
   MAX_LENGTH,
   CONTACT_STATUS,
   CONTACT_SOURCE,
+  CF_SERVICE_HEADER,
 } from '../constants';
 import { handleAffiliateConversion } from './affiliate-conversion';
 import { handleUserConverted } from './user-converted';
@@ -27,6 +28,19 @@ export async function routeEvent(
   try {
     const envelope: EventEnvelope = await request.json();
     const { event, source, timestamp, data } = envelope;
+
+    // ── Validate the Cloudflare service-binding header ──
+    // When visibility-analytics calls us via a service binding, Cloudflare
+    // automatically sets the cf-worker header.  Plain HTTP requests never
+    // carry this header, so its absence indicates a spoofed request.
+    const cfWorker = request.headers.get(CF_SERVICE_HEADER);
+    if (!cfWorker) {
+      console.warn('[Events] Missing cf-worker header — not a service binding call');
+      return new Response(JSON.stringify({ ok: false, error: 'Service binding header required' }), {
+        status: 401,
+        headers: { 'Content-Type': CONTENT_TYPE_JSON },
+      });
+    }
 
     // ── Validate source ──
     if (source !== TRUSTED_SOURCE) {

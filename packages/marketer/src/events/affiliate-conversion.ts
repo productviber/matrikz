@@ -12,7 +12,7 @@
  */
 
 import type { Env, AffiliateConversionData } from '../types';
-import { KV_PREFIX, TTL, NOTE_TYPE } from '../constants';
+import { KV_PREFIX, TTL, NOTE_TYPE, MESSAGES } from '../constants';
 import { execute, queryOne, now, formatCents, hashEmail } from '../lib/db';
 import { enrollInSequences } from '../lib/email';
 import {
@@ -42,8 +42,20 @@ export async function handleAffiliateConversion(
     plan,
   } = data;
 
+  // ── Guard: reject self-referrals ──
+  // A user cannot be both the affiliate and the converting user
+  const userHash = await hashEmail(userId);
+  const affiliateEmailCached = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${affiliateCode}`);
+  if (affiliateEmailCached) {
+    const affiliateHash = await hashEmail(affiliateEmailCached);
+    if (affiliateHash === userHash) {
+      console.warn(`[AffiliateConversion] Self-referral blocked for ${affiliateCode} / user ${userHash}`);
+      return;
+    }
+  }
+
   console.log(
-    `[AffiliateConversion] code=${affiliateCode} user=${await hashEmail(userId)} ` +
+    `[AffiliateConversion] code=${affiliateCode} user=${userHash} ` +
     `amount=${formatCents(amountCents)} commission=${formatCents(commissionCents)} plan=${plan}`
   );
 

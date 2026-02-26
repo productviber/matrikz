@@ -13,6 +13,7 @@ import type { Env, PayoutBatchRow, PayoutItemRow } from '../types';
 import { ok, badRequest, notFound, serverError, unauthorized, isAdmin } from '../lib/response';
 import { query, queryOne, execute, now, formatCents } from '../lib/db';
 import { notifyPayoutCompleted } from '../lib/notifications';
+import { processPayoutItem } from '../lib/payout-provider';
 import {
   KV_PREFIX,
   PAYOUT_STATUS,
@@ -180,31 +181,53 @@ export async function handleProcessPayoutBatch(
 
     let successCount = 0;
     for (const item of items) {
-      const reference = bodyData.references?.[item.affiliate_code]
-        ?? `payout-${batch.id}-${item.affiliate_code}-${Date.now()}`;
-
       try {
-        // In production, this is where you'd call PayPal/bank API
-        // For now, we mark as sent with a reference
+        // Resolve affiliate email from item record or KV cache
+        const affiliateEmail =
+          item.affiliate_email ??
+          (await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${item.affiliate_code}`)) ??
+          item.affiliate_code;
 
-        await execute(
-          env.DB,
-          `UPDATE payout_items SET status = '${PAYOUT_STATUS.SENT}', method = ?, reference = ? WHERE id = ?`,
-          [defaultMethod, reference, item.id]
-        );
+        // Call the pluggable payout provider (stub by default)
+        const result = await processPayoutItem(env, {
+          affiliateCode: item.affiliate_code,
+          email: affiliateEmail,
+          amountCents: item.amount_cents,
+          batchId: batch.id,
+        });
 
-        // Log to affiliate notes
-        await execute(
-          env.DB,
-          `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-           VALUES (?, '${NOTE_TYPE.PAYOUT}', ?)`,
-          [
-            item.affiliate_code,
-            MESSAGES.notes.payoutProcessed(formatCents(item.amount_cents), defaultMethod, reference),
-          ]
-        );
+        const reference =
+          result.reference ||
+          bodyData.references?.[item.affiliate_code] ||
+          `payout-${batch.id}-${item.affiliate_code}-${Date.now()}`;
 
-        successCount++;
+        if (result.success) {
+          await execute(
+            env.DB,
+            `UPDATE payout_items SET status = '${PAYOUT_STATUS.SENT}', method = ?, reference = ? WHERE id = ?`,
+            [defaultMethod, reference, item.id]
+          );
+
+          // Log to affiliate notes
+          await execute(
+            env.DB,
+            `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
+             VALUES (?, '${NOTE_TYPE.PAYOUT}', ?)`,
+            [
+              item.affiliate_code,
+              MESSAGES.notes.payoutProcessed(formatCents(item.amount_cents), defaultMethod, reference),
+            ]
+          );
+
+          successCount++;
+        } else {
+          console.error(`[Payouts] Provider rejected item ${item.id}: ${result.errorMessage}`);
+          await execute(
+            env.DB,
+            `UPDATE payout_items SET status = '${PAYOUT_STATUS.FAILED}' WHERE id = ?`,
+            [item.id]
+          );
+        }
       } catch (err) {
         console.error(`[Payouts] Failed to process item ${item.id}:`, err);
         await execute(

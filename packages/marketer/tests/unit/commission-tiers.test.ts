@@ -10,7 +10,6 @@ import {
   checkTierUpgrade,
   tierLabel,
   checkEarningsMilestone,
-  EARNINGS_MILESTONES,
   recordTierUpgrade,
 } from '../../src/lib/commission-tiers';
 import { createMockEnv, MockD1Database } from '../helpers';

@@ -31,6 +31,10 @@ export interface Env {
   SLACK_WEBHOOK_URL?: string;
   DISCORD_WEBHOOK_URL?: string;
   ENVIRONMENT: 'development' | 'production';
+  /** Allowed CORS origin, defaults to CORS.ALLOWED_ORIGIN constant */
+  ALLOWED_ORIGIN?: string;
+  /** Payout provider key: 'stub' (default) | 'paypal' | 'stripe' */
+  PAYOUT_PROVIDER?: string;
 }
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────

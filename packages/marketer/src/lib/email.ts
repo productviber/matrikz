@@ -18,6 +18,7 @@ import {
   MESSAGES,
 } from '../constants';
 import { query, queryOne, execute, now } from './db';
+import { isUnsubscribed } from '../routes/gdpr';
 
 // ─── Sequence Enrollment ────────────────────────────────────────────────────
 
@@ -187,6 +188,12 @@ interface EmailPayload {
  */
 async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
   const { to, subject, templateKey, context } = payload;
+
+  // Never send to unsubscribed addresses (CAN-SPAM / GDPR)
+  if (await isUnsubscribed(env, to)) {
+    console.log(`[Email] Skipping send to ${to} — unsubscribed`);
+    return;
+  }
 
   // Render template (simple mustache-like replacement)
   const htmlBody = await renderTemplate(env, templateKey, { ...context, subject, to });

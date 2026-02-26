@@ -7,14 +7,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   healthCheck,
-  getBillingTiers,
-  getCockpitData,
-  getBillingStatus,
   createAffiliate,
   listAffiliates,
   getAffiliateByCode,
-  getMigrationStatus,
-  runMigrations,
 } from '../../src/lib/analytics-client';
 import { createMockEnv, createMockFetcher, type MockEnv } from '../helpers';
 
@@ -25,12 +20,7 @@ describe('analytics-client', () => {
     env = createMockEnv({
       ANALYTICS: createMockFetcher({
         '/health': { body: { status: 'ok' } },
-        '/api/v1/billing/tiers': { body: { tiers: ['free', 'pro'] } },
-        '/api/v1/cockpit': { body: { dashboard: 'data' } },
-        '/api/v1/billing/status': { body: { active: true } },
         '/admin/affiliates': { body: { affiliates: [] } },
-        '/admin/migrations': { body: { pending: 0 } },
-        '/admin/migrations/run': { body: { applied: 0 } },
       }) as any,
     });
   });
@@ -42,27 +32,6 @@ describe('analytics-client', () => {
     });
   });
 
-  describe('getBillingTiers()', () => {
-    it('fetches billing tiers', async () => {
-      const result = await getBillingTiers(env as any);
-      expect(result).toEqual({ tiers: ['free', 'pro'] });
-    });
-  });
-
-  describe('getCockpitData()', () => {
-    it('fetches cockpit data with session token', async () => {
-      const result = await getCockpitData(env as any, 'session-123');
-      expect(result).toEqual({ dashboard: 'data' });
-    });
-  });
-
-  describe('getBillingStatus()', () => {
-    it('fetches billing status with session token', async () => {
-      const result = await getBillingStatus(env as any, 'session-123');
-      expect(result).toEqual({ active: true });
-    });
-  });
-
   describe('createAffiliate()', () => {
     it('creates an affiliate via admin endpoint', async () => {
       const result = await createAffiliate(env as any, {
@@ -71,14 +40,16 @@ describe('analytics-client', () => {
         email: 'jane@test.com',
         commissionRate: 0.25,
       });
-      expect(result).toEqual({ affiliates: [] });
+      expect(result.ok).toBe(true);
+      expect(result.data).toEqual({ affiliates: [] });
     });
   });
 
   describe('listAffiliates()', () => {
     it('lists affiliates via admin endpoint', async () => {
       const result = await listAffiliates(env as any);
-      expect(result).toEqual({ affiliates: [] });
+      expect(result.ok).toBe(true);
+      expect(result.data).toEqual({ affiliates: [] });
     });
   });
 
@@ -91,17 +62,5 @@ describe('analytics-client', () => {
     });
   });
 
-  describe('getMigrationStatus()', () => {
-    it('fetches migration status', async () => {
-      const result = await getMigrationStatus(env as any);
-      expect(result).toEqual({ pending: 0 });
-    });
-  });
-
-  describe('runMigrations()', () => {
-    it('triggers migration run', async () => {
-      const result = await runMigrations(env as any);
-      expect(result).toEqual({ applied: 0 });
-    });
-  });
 });
+

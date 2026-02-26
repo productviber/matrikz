@@ -44,6 +44,7 @@ import {
   PATTERNS,
   ROUTE,
   MESSAGES,
+  RATE_LIMIT,
 } from './constants';
 import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
@@ -60,8 +61,10 @@ import {
   handleListContacts,
   handleListNotifications,
 } from './routes/admin';
-import { corsPreflightResponse, notFound } from './lib/response';
+import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
+import { corsPreflightResponse, notFound, tooManyRequests } from './lib/response';
 import { processDueEmails } from './lib/email';
+import { checkRateLimit } from './lib/rate-limit';
 
 export default {
   /**
@@ -88,7 +91,7 @@ export default {
         return handleHealthCheck();
       }
       if (method === 'GET' && path === '/api/health') {
-        return handleDetailedHealth(env);
+        return handleDetailedHealth(request, env);
       }
 
       // ── Referral link redirect ──
@@ -105,6 +108,10 @@ export default {
         return handleAffiliateStats(request, env);
       }
       if (method === 'POST' && path === '/api/affiliate/apply') {
+        // Rate limit: 5 applications per hour per IP
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        const rl = await checkRateLimit(env, `apply:${ip}`, RATE_LIMIT.APPLY_MAX, RATE_LIMIT.APPLY_WINDOW_SECS);
+        if (!rl.allowed) return tooManyRequests(MESSAGES.errors.rateLimitExceeded);
         return handleAffiliateApply(request, env);
       }
       if (method === 'POST' && path === '/api/affiliate/approve') {
@@ -144,6 +151,26 @@ export default {
       if (method === 'GET' && path.match(PATTERNS.ROUTE_PAYOUT_ID)) {
         const batchId = parseInt(path.split('/').pop()!, 10);
         return handleGetPayoutBatch(request, env, batchId);
+      }
+
+      // ── GDPR / Compliance Routes ──
+      if (method === 'GET' && path === '/api/affiliate/gdpr/export') {
+        const code = new URL(request.url).searchParams.get('code') ?? 'anon';
+        const rl = await checkRateLimit(env, `gdpr:${code}`, RATE_LIMIT.GDPR_MAX, RATE_LIMIT.GDPR_WINDOW_SECS);
+        if (!rl.allowed) return tooManyRequests(MESSAGES.errors.rateLimitExceeded);
+        return handleGdprExport(request, env);
+      }
+      if (method === 'DELETE' && path === '/api/affiliate/gdpr/delete') {
+        const code = new URL(request.url).searchParams.get('code') ?? 'anon';
+        const rl = await checkRateLimit(env, `gdpr:${code}`, RATE_LIMIT.GDPR_MAX, RATE_LIMIT.GDPR_WINDOW_SECS);
+        if (!rl.allowed) return tooManyRequests(MESSAGES.errors.rateLimitExceeded);
+        return handleGdprDelete(request, env);
+      }
+      if (method === 'POST' && path === '/api/unsubscribe') {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        const rl = await checkRateLimit(env, `unsub:${ip}`, RATE_LIMIT.UNSUB_MAX, RATE_LIMIT.UNSUB_WINDOW_SECS);
+        if (!rl.allowed) return tooManyRequests(MESSAGES.errors.rateLimitExceeded);
+        return handleUnsubscribe(request, env);
       }
 
       // ── Admin Routes ──

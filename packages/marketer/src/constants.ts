@@ -127,6 +127,7 @@ export const MAX_LENGTH = {
 // ─── KV Key Prefixes ───────────────────────────────────────────────────────
 
 export const KV_PREFIX = {
+  CLICK_DEDUP: 'click-dedup:',
   AFFILIATE_STATS: 'affiliate-stats:',
   AFFILIATE_EMAIL: 'affiliate-email:',
   AFFILIATE_APPLICATION: 'affiliate-application:',
@@ -233,10 +234,34 @@ export const CONTENT_TYPE_JSON = 'application/json';
 // ─── CORS Configuration ─────────────────────────────────────────────────────
 
 export const CORS = {
-  ALLOWED_ORIGIN: '*',
+  /** Fallback allowed origin — override via env.ALLOWED_ORIGIN in wrangler.toml */
+  ALLOWED_ORIGIN: 'https://visibility.clodo.dev',
   ALLOWED_METHODS: 'GET, POST, PUT, DELETE, OPTIONS',
   ALLOWED_HEADERS: 'Content-Type, Authorization',
 } as const;
+
+// ─── Rate Limiting ──────────────────────────────────────────────────────────
+
+export const RATE_LIMIT = {
+  /** Affiliate application endpoint — 5 per hour per IP */
+  APPLY_MAX: 5,
+  APPLY_WINDOW_SECS: 3600,
+  /** Unsubscribe endpoint — 10 per hour per IP */
+  UNSUB_MAX: 10,
+  UNSUB_WINDOW_SECS: 3600,
+  /** GDPR export/delete — 3 per day per code */
+  GDPR_MAX: 3,
+  GDPR_WINDOW_SECS: 86_400,
+} as const;
+
+// ─── Service Binding Header ─────────────────────────────────────────────────
+
+/** Cloudflare sets this header on inbound service-binding requests */
+export const CF_SERVICE_HEADER = 'cf-worker';
+
+// ─── GDPR KV Prefix (also exported from gdpr.ts for consumer convenience) ──
+
+export const KV_UNSUBSCRIBE_PREFIX = 'unsub:';
 
 // ─── Commission Tiers ───────────────────────────────────────────────────────
 
@@ -318,11 +343,18 @@ export const MESSAGES = {
     failedProcessBatch: 'Failed to process payout batch',
     failedDashboard: 'Failed to load dashboard',
     failedProcessEmails: 'Failed to process emails',
+    invalidJson: 'Invalid JSON body',
+    rateLimitExceeded: 'Too many requests — please try again later',
+    selfReferralBlocked: 'Self-referral is not permitted',
   },
+  // ── GDPR / unsubscribe ──
   // ── Success Messages ──
   success: {
     applicationReceived: "Application received! We'll review it within 48 hours.",
     processedEmails: (count: number) => `Processed ${count} due emails`,
+    gdprDeleted: 'All personal data has been erased.',
+    unsubscribed: 'You have been unsubscribed from all marketing emails.',
+    clickForwarded: 'Click event forwarded to analytics.',
   },
   // ── Email Template Copy ──
   email: {

@@ -18,7 +18,9 @@ import {
   DEFAULTS,
   MESSAGES,
   SQLITE_BOOL,
+  KV_PREFIX,
 } from '../constants';
+import { forwardClickEvent } from '../lib/analytics-client';
 
 /**
  * POST /api/campaigns
@@ -96,11 +98,15 @@ export async function handleCreateCampaign(
  * GET /api/campaigns
  *
  * List campaigns, optionally filtered by affiliate code.
+ * Requires admin auth (campaigns list exposes business data).
  */
 export async function handleListCampaigns(
   request: Request,
   env: Env
 ): Promise<Response> {
+  if (!isAdmin(request, env)) {
+    return unauthorized(MESSAGES.errors.authRequired);
+  }
   const url = new URL(request.url);
   const affiliateCode = url.searchParams.get('affiliate');
   const page = parseInt(url.searchParams.get('page') ?? '1', 10);
@@ -190,6 +196,23 @@ export async function handleReferralRedirect(
     `UPDATE campaigns SET clicks = clicks + 1, updated_at = ? WHERE id = ?`,
     [now(), campaign.id]
   ).catch(() => {});
+
+  // Dedup clicks using KV so rapid reloads don't inflate counts
+  const ua = request.headers.get('User-Agent') ?? 'unknown';
+  const ipRaw = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  const dedupKey = `${KV_PREFIX.CLICK_DEDUP}${slug}:${ipRaw}`;
+  const alreadySeen = await env.KV_MARKETING.get(dedupKey);
+  if (!alreadySeen) {
+    // Forward a unique click event to analytics
+    forwardClickEvent(env, {
+      slug,
+      affiliateCode: campaign.affiliate_code ?? undefined,
+      referrer: request.headers.get('Referer') ?? undefined,
+      userAgent: ua,
+    }).catch(() => {});
+
+    await env.KV_MARKETING.put(dedupKey, '1', { expirationTtl: TTL.DAYS_7 });
+  }
 
   // Build destination URL with UTM params
   const destUrl = buildReferralUrl(campaign);
