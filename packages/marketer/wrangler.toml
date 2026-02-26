@@ -6,13 +6,13 @@ compatibility_date = "2024-09-23"
 [[d1_databases]]
 binding = "DB"
 database_name = "visibility-marketing-db"
-database_id = "<your-d1-id>"
+database_id = "00bb447b-f813-4f00-929b-b709f64f8872"
 migrations_dir = "migrations"
 
 # ─── KV Namespace (campaign tracking, drip sequences, affiliate data) ────────
 [[kv_namespaces]]
 binding = "KV_MARKETING"
-id = "<your-kv-id>"
+id = "8fae6d27403d4ca5be5f901097464901"
 
 # ─── R2 Bucket (email templates, marketing assets — optional) ────────────────
 # [[r2_buckets]]
@@ -50,7 +50,6 @@ vars = { ENVIRONMENT = "development", FROM_EMAIL = "dev@clodo.dev", FROM_NAME = 
 [build]
 command = "pnpm run build"
 cwd = "."
-watch_paths = ["src/**"]
 
 # ─── Observability ──────────────────────────────────────────────────────────
 [observability]
