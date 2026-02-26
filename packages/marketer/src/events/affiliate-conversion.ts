@@ -12,6 +12,7 @@
  */
 
 import type { Env, AffiliateConversionData } from '../types';
+import { KV_PREFIX, TTL, NOTE_TYPE } from '../constants';
 import { execute, queryOne, now, formatCents, hashEmail } from '../lib/db';
 import { enrollInSequences } from '../lib/email';
 import {
@@ -50,7 +51,7 @@ export async function handleAffiliateConversion(
   await execute(
     env.DB,
     `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-     VALUES (?, 'conversion', ?)`,
+     VALUES (?, '${NOTE_TYPE.CONVERSION}', ?)`,
     [
       affiliateCode,
       `Conversion: ${plan} plan, sale ${formatCents(amountCents)}, ` +
@@ -62,7 +63,7 @@ export async function handleAffiliateConversion(
   await markAsCustomer(env, userId, plan, 'affiliate', amountCents, affiliateCode);
 
   // ── 3. Track cumulative affiliate stats in KV for fast reads ──
-  const kvKey = `affiliate-stats:${affiliateCode}`;
+  const kvKey = `${KV_PREFIX.AFFILIATE_STATS}${affiliateCode}`;
   const existingJson = await env.KV_MARKETING.get(kvKey);
   const stats = existingJson
     ? JSON.parse(existingJson)
@@ -76,7 +77,7 @@ export async function handleAffiliateConversion(
   stats.lastConversionAt = timestamp;
 
   await env.KV_MARKETING.put(kvKey, JSON.stringify(stats), {
-    expirationTtl: 365 * 86_400, // 1 year
+    expirationTtl: TTL.YEAR_1,
   });
 
   // ── 4. Check for tier upgrade ──
@@ -112,14 +113,14 @@ export async function handleAffiliateConversion(
     await execute(
       env.DB,
       `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-       VALUES (?, 'general', ?)`,
+       VALUES (?, '${NOTE_TYPE.GENERAL}', ?)`,
       [affiliateCode, `Reached earnings milestone: ${formatCents(milestone)}`]
     );
   }
 
   // ── 6. Enroll affiliate in commission notification email sequence ──
   // We need the affiliate's email — try KV cache first, then fall back to notes context
-  const affiliateEmailKey = `affiliate-email:${affiliateCode}`;
+  const affiliateEmailKey = `${KV_PREFIX.AFFILIATE_EMAIL}${affiliateCode}`;
   let affiliateEmail = await env.KV_MARKETING.get(affiliateEmailKey);
 
   if (!affiliateEmail) {
@@ -130,7 +131,7 @@ export async function handleAffiliateConversion(
       if (affData && (affData as any).owner_email) {
         affiliateEmail = (affData as any).owner_email;
         await env.KV_MARKETING.put(affiliateEmailKey, affiliateEmail!, {
-          expirationTtl: 30 * 86_400,
+          expirationTtl: TTL.DAYS_30,
         });
       }
     } catch {

@@ -10,6 +10,7 @@ import { ok, badRequest, unauthorized, serverError } from '../lib/response';
 import { query, queryOne, execute, now, todayKey, formatCents } from '../lib/db';
 import { getContactStats, getLatestMrrSnapshot, getMrrHistory } from '../lib/crm';
 import { processDueEmails } from '../lib/email';
+import { KV_PREFIX, PAGINATION, DEFAULTS, PAYOUT_STATUS } from '../constants';
 
 // ─── Auth Middleware ─────────────────────────────────────────────────────────
 
@@ -41,11 +42,11 @@ export async function handleAdminDashboard(
 
     // Daily conversions from KV
     const dailyConversions = parseInt(
-      await env.KV_MARKETING.get(`daily-conversions:${today}`) ?? '0',
+      await env.KV_MARKETING.get(`${KV_PREFIX.DAILY_CONVERSIONS}${today}`) ?? '0',
       10
     );
     const dailyRevenue = parseInt(
-      await env.KV_MARKETING.get(`daily-revenue:${today}`) ?? '0',
+      await env.KV_MARKETING.get(`${KV_PREFIX.DAILY_REVENUE}${today}`) ?? '0',
       10
     );
 
@@ -53,7 +54,7 @@ export async function handleAdminDashboard(
     const pendingPayouts = await queryOne<{ total: number }>(
       env.DB,
       `SELECT COALESCE(SUM(total_amount_cents), 0) as total
-       FROM payout_batches WHERE status = 'pending'`
+       FROM payout_batches WHERE status = '${PAYOUT_STATUS.PENDING}'`
     );
 
     // Active sequences
@@ -112,7 +113,7 @@ export async function handleMrrHistory(
   if (!isAdmin(request, env)) return unauthorized();
 
   const url = new URL(request.url);
-  const start = url.searchParams.get('start') ?? '2024-01-01';
+  const start = url.searchParams.get('start') ?? DEFAULTS.MRR_HISTORY_START;
   const end = url.searchParams.get('end') ?? todayKey();
 
   const snapshots = await getMrrHistory(env, start, end);
@@ -172,7 +173,7 @@ export async function handleListEmailSends(
 
   const url = new URL(request.url);
   const status = url.searchParams.get('status');
-  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 200);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? String(PAGINATION.DEFAULT_PAGE_SIZE), 10), PAGINATION.MAX_PAGE_SIZE);
 
   let sql = `SELECT es.*, est.subject, est.template_key, seq.name as sequence_name
      FROM email_sends es
@@ -227,7 +228,7 @@ export async function handleListContacts(
   const url = new URL(request.url);
   const status = url.searchParams.get('status');
   const page = parseInt(url.searchParams.get('page') ?? '1', 10);
-  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 200);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? String(PAGINATION.DEFAULT_PAGE_SIZE), 10), PAGINATION.MAX_PAGE_SIZE);
   const offset = (page - 1) * limit;
 
   let sql = `SELECT * FROM marketing_contacts`;
@@ -258,7 +259,7 @@ export async function handleListNotifications(
   if (!isAdmin(request, env)) return unauthorized();
 
   const url = new URL(request.url);
-  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 200);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? String(PAGINATION.DEFAULT_PAGE_SIZE), 10), PAGINATION.MAX_PAGE_SIZE);
 
   const notifications = await query(
     env.DB,

@@ -10,6 +10,7 @@
 
 import { COMMISSION_TIERS, type CommissionTier, type Env } from '../types';
 import { execute, queryOne } from './db';
+import { NOTE_TYPE } from '../constants';
 
 /**
  * Determine the commission tier for a given conversion count.
@@ -61,7 +62,7 @@ export async function recordTierUpgrade(
   await execute(
     env.DB,
     `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-     VALUES (?, 'tier_upgrade', ?)`,
+     VALUES (?, '${NOTE_TYPE.TIER_UPGRADE}', ?)`,
     [
       affiliateCode,
       `Upgraded to ${newTier.name} tier (${(newTier.rate * 100).toFixed(0)}% commission) at ${totalConversions} conversions`,

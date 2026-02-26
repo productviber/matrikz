@@ -13,6 +13,13 @@ import type { Env, PayoutBatchRow, PayoutItemRow } from '../types';
 import { ok, badRequest, notFound, serverError, unauthorized } from '../lib/response';
 import { query, queryOne, execute, now, formatCents } from '../lib/db';
 import { notifyPayoutCompleted } from '../lib/notifications';
+import {
+  KV_PREFIX,
+  PAYOUT_STATUS,
+  PAGINATION,
+  DEFAULTS,
+  NOTE_TYPE,
+} from '../constants';
 
 /**
  * POST /api/payouts/batch (Admin only)
@@ -43,7 +50,7 @@ export async function handleCreatePayoutBatch(
       const code = aff.affiliate_code;
 
       // Get total earned from KV
-      const statsJson = await env.KV_MARKETING.get(`affiliate-stats:${code}`);
+      const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
       if (!statsJson) continue;
       const stats = JSON.parse(statsJson);
 
@@ -52,7 +59,7 @@ export async function handleCreatePayoutBatch(
         env.DB,
         `SELECT COALESCE(SUM(amount_cents), 0) as total_paid
          FROM payout_items
-         WHERE affiliate_code = ? AND status = 'sent'`,
+         WHERE affiliate_code = ? AND status = '${PAYOUT_STATUS.SENT}'`,
         [code]
       );
       const totalPaid = paidResult?.total_paid ?? 0;
@@ -61,7 +68,7 @@ export async function handleCreatePayoutBatch(
       if (unpaid <= 0) continue;
 
       // Get affiliate email
-      const email = await env.KV_MARKETING.get(`affiliate-email:${code}`);
+      const email = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`);
       if (!email) continue;
 
       items.push({ code, email, amountCents: unpaid });
@@ -77,7 +84,7 @@ export async function handleCreatePayoutBatch(
     await execute(
       env.DB,
       `INSERT INTO payout_batches (status, total_amount_cents, affiliate_count)
-       VALUES ('pending', ?, ?)`,
+       VALUES ('${PAYOUT_STATUS.PENDING}', ?, ?)`,
       [totalAmount, items.length]
     );
 
@@ -103,7 +110,7 @@ export async function handleCreatePayoutBatch(
     return ok({
       batch: {
         id: batch.id,
-        status: 'pending',
+        status: PAYOUT_STATUS.PENDING,
         totalAmountCents: totalAmount,
         totalFormatted: formatCents(totalAmount),
         affiliateCount: items.length,
@@ -141,7 +148,7 @@ export async function handleProcessPayoutBatch(
   );
 
   if (!batch) return notFound('Batch not found');
-  if (batch.status !== 'pending') {
+  if (batch.status !== PAYOUT_STATUS.PENDING) {
     return badRequest(`Batch is already ${batch.status}`);
   }
 
@@ -149,14 +156,14 @@ export async function handleProcessPayoutBatch(
     // Mark batch as processing
     await execute(
       env.DB,
-      `UPDATE payout_batches SET status = 'processing' WHERE id = ?`,
+      `UPDATE payout_batches SET status = '${PAYOUT_STATUS.PROCESSING}' WHERE id = ?`,
       [batchId]
     );
 
     // Get items
     const items = await query<PayoutItemRow>(
       env.DB,
-      `SELECT * FROM payout_items WHERE batch_id = ? AND status = 'pending'`,
+      `SELECT * FROM payout_items WHERE batch_id = ? AND status = '${PAYOUT_STATUS.PENDING}'`,
       [batchId]
     );
 
@@ -168,7 +175,7 @@ export async function handleProcessPayoutBatch(
       // Empty body is fine
     }
 
-    const defaultMethod = bodyData.method ?? 'manual';
+    const defaultMethod = bodyData.method ?? DEFAULTS.PAYOUT_METHOD;
 
     let successCount = 0;
     for (const item of items) {
@@ -181,7 +188,7 @@ export async function handleProcessPayoutBatch(
 
         await execute(
           env.DB,
-          `UPDATE payout_items SET status = 'sent', method = ?, reference = ? WHERE id = ?`,
+          `UPDATE payout_items SET status = '${PAYOUT_STATUS.SENT}', method = ?, reference = ? WHERE id = ?`,
           [defaultMethod, reference, item.id]
         );
 
@@ -189,7 +196,7 @@ export async function handleProcessPayoutBatch(
         await execute(
           env.DB,
           `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-           VALUES (?, 'payout', ?)`,
+           VALUES (?, '${NOTE_TYPE.PAYOUT}', ?)`,
           [
             item.affiliate_code,
             `Payout of ${formatCents(item.amount_cents)} via ${defaultMethod} (ref: ${reference})`,
@@ -201,14 +208,14 @@ export async function handleProcessPayoutBatch(
         console.error(`[Payouts] Failed to process item ${item.id}:`, err);
         await execute(
           env.DB,
-          `UPDATE payout_items SET status = 'failed' WHERE id = ?`,
+          `UPDATE payout_items SET status = '${PAYOUT_STATUS.FAILED}' WHERE id = ?`,
           [item.id]
         );
       }
     }
 
     // Update batch status
-    const finalStatus = successCount === items.length ? 'completed' : 'failed';
+    const finalStatus = successCount === items.length ? PAYOUT_STATUS.COMPLETED : PAYOUT_STATUS.FAILED;
     await execute(
       env.DB,
       `UPDATE payout_batches SET status = ?, completed_at = ? WHERE id = ?`,
@@ -216,7 +223,7 @@ export async function handleProcessPayoutBatch(
     );
 
     // Send notifications
-    if (finalStatus === 'completed') {
+    if (finalStatus === PAYOUT_STATUS.COMPLETED) {
       await notifyPayoutCompleted(env, batchId, batch.total_amount_cents, batch.affiliate_count);
     }
 
@@ -231,7 +238,7 @@ export async function handleProcessPayoutBatch(
     console.error('[Payouts:Process] Error:', err);
     await execute(
       env.DB,
-      `UPDATE payout_batches SET status = 'failed' WHERE id = ?`,
+      `UPDATE payout_batches SET status = '${PAYOUT_STATUS.FAILED}' WHERE id = ?`,
       [batchId]
     );
     return serverError('Failed to process payout batch');
@@ -251,7 +258,7 @@ export async function handleListPayoutBatches(
 
   const batches = await query<PayoutBatchRow>(
     env.DB,
-    `SELECT * FROM payout_batches ORDER BY initiated_at DESC LIMIT 50`
+    `SELECT * FROM payout_batches ORDER BY initiated_at DESC LIMIT ${PAGINATION.DEFAULT_PAGE_SIZE}`
   );
 
   return ok({

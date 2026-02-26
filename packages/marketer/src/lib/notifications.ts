@@ -3,6 +3,13 @@
  */
 
 import type { Env } from '../types';
+import {
+  CONTENT_TYPE_JSON,
+  DEFAULTS,
+  MAX_LENGTH,
+  NOTIFICATION_CHANNEL,
+  PAYOUT_STATUS,
+} from '../constants';
 import { execute, formatCents } from './db';
 
 // ─── Slack ──────────────────────────────────────────────────────────────────
@@ -23,16 +30,16 @@ export async function sendSlackNotification(
 
     const res = await fetch(env.SLACK_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': CONTENT_TYPE_JSON },
       body: JSON.stringify(payload),
     });
 
     const success = res.ok;
-    await logNotification(env, 'slack', 'general', message, success);
+    await logNotification(env, NOTIFICATION_CHANNEL.SLACK, DEFAULTS.NOTIFICATION_EVENT_TYPE, message, success);
     return success;
   } catch (err) {
     console.error('[Slack] Error:', err);
-    await logNotification(env, 'slack', 'general', message, false);
+    await logNotification(env, NOTIFICATION_CHANNEL.SLACK, DEFAULTS.NOTIFICATION_EVENT_TYPE, message, false);
     return false;
   }
 }
@@ -55,16 +62,16 @@ export async function sendDiscordNotification(
 
     const res = await fetch(env.DISCORD_WEBHOOK_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': CONTENT_TYPE_JSON },
       body: JSON.stringify(payload),
     });
 
     const success = res.ok;
-    await logNotification(env, 'discord', 'general', message, success);
+    await logNotification(env, NOTIFICATION_CHANNEL.DISCORD, DEFAULTS.NOTIFICATION_EVENT_TYPE, message, success);
     return success;
   } catch (err) {
     console.error('[Discord] Error:', err);
-    await logNotification(env, 'discord', 'general', message, false);
+    await logNotification(env, NOTIFICATION_CHANNEL.DISCORD, DEFAULTS.NOTIFICATION_EVENT_TYPE, message, false);
     return false;
   }
 }
@@ -155,7 +162,7 @@ async function logNotification(
       env.DB,
       `INSERT INTO notification_log (channel, event_type, payload_summary, status)
        VALUES (?, ?, ?, ?)`,
-      [channel, eventType, summary.slice(0, 500), success ? 'sent' : 'failed']
+      [channel, eventType, summary.slice(0, MAX_LENGTH.NOTIFICATION_SUMMARY), success ? PAYOUT_STATUS.SENT : PAYOUT_STATUS.FAILED]
     );
   } catch {
     // Don't let logging failures break the flow

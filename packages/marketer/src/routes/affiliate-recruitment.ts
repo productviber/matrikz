@@ -5,8 +5,17 @@
  */
 
 import type { Env } from '../types';
-import { ok, badRequest, serverError, created } from '../lib/response';
+import { COMMISSION_TIERS } from '../types';
+import { ok, badRequest, serverError, created, unauthorized } from '../lib/response';
 import { execute, queryOne, now } from '../lib/db';
+import {
+  KV_PREFIX,
+  TTL,
+  NOTE_TYPE,
+  APPLICATION_STATUS,
+  CONTENT_TYPE_JSON,
+  MAX_LENGTH,
+} from '../constants';
 
 interface AffiliateApplication {
   email: string;
@@ -43,7 +52,7 @@ export async function handleAffiliateApply(
     const code = generateCode(name);
 
     // Store application in KV for admin review
-    const applicationKey = `affiliate-application:${code}`;
+    const applicationKey = `${KV_PREFIX.AFFILIATE_APPLICATION}${code}`;
     const existingApp = await env.KV_MARKETING.get(applicationKey);
     if (existingApp) {
       return badRequest('An application with this name already exists');
@@ -61,7 +70,7 @@ export async function handleAffiliateApply(
     };
 
     await env.KV_MARKETING.put(applicationKey, JSON.stringify(application), {
-      expirationTtl: 90 * 86_400, // 90 days
+      expirationTtl: TTL.DAYS_90,
     });
 
     // Also store in a list for admin review
@@ -69,20 +78,20 @@ export async function handleAffiliateApply(
     const pendingList: string[] = JSON.parse(pendingListJson);
     if (!pendingList.includes(code)) {
       pendingList.push(code);
-      await env.KV_MARKETING.put('affiliate-applications:pending', JSON.stringify(pendingList));
+      await env.KV_MARKETING.put(KV_PREFIX.AFFILIATE_APPLICATIONS_PENDING, JSON.stringify(pendingList));
     }
 
     // Log the application
     await execute(
       env.DB,
       `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-       VALUES (?, 'general', ?)`,
+       VALUES (?, '${NOTE_TYPE.GENERAL}', ?)`,
       [code, `Application submitted by ${email} (${name}). Website: ${website ?? 'N/A'}`]
     );
 
     // Cache email mapping
-    await env.KV_MARKETING.put(`affiliate-email:${code}`, email.toLowerCase().trim(), {
-      expirationTtl: 365 * 86_400,
+    await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`, email.toLowerCase().trim(), {
+      expirationTtl: TTL.YEAR_1,
     });
 
     return created({
@@ -108,10 +117,7 @@ export async function handleAffiliateApprove(
   // Admin auth check
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return unauthorized();
   }
 
   try {
@@ -125,14 +131,14 @@ export async function handleAffiliateApprove(
     }
 
     // Load application
-    const appJson = await env.KV_MARKETING.get(`affiliate-application:${code}`);
+    const appJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_APPLICATION}${code}`);
     if (!appJson) {
       return badRequest('Application not found');
     }
 
     const application = JSON.parse(appJson);
 
-    if (application.status === 'approved') {
+    if (application.status === APPLICATION_STATUS.APPROVED) {
       return badRequest('Application already approved');
     }
 
@@ -143,7 +149,7 @@ export async function handleAffiliateApprove(
         code: application.code,
         name: application.name,
         email: application.email,
-        commissionRate: commissionRate ?? 0.20,
+        commissionRate: commissionRate ?? COMMISSION_TIERS[0].rate,
       });
     } catch (err) {
       console.error('[AffiliateApprove] Failed to create in analytics:', err);
@@ -151,18 +157,18 @@ export async function handleAffiliateApprove(
     }
 
     // Update application status
-    application.status = 'approved';
+    application.status = APPLICATION_STATUS.APPROVED;
     application.approvedAt = new Date().toISOString();
-    await env.KV_MARKETING.put(`affiliate-application:${code}`, JSON.stringify(application));
+    await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_APPLICATION}${code}`, JSON.stringify(application));
 
     // Remove from pending list
-    const pendingListJson = await env.KV_MARKETING.get('affiliate-applications:pending') ?? '[]';
+    const pendingListJson = await env.KV_MARKETING.get(KV_PREFIX.AFFILIATE_APPLICATIONS_PENDING) ?? '[]';
     const pendingList: string[] = JSON.parse(pendingListJson);
     const filtered = pendingList.filter((c) => c !== code);
-    await env.KV_MARKETING.put('affiliate-applications:pending', JSON.stringify(filtered));
+    await env.KV_MARKETING.put(KV_PREFIX.AFFILIATE_APPLICATIONS_PENDING, JSON.stringify(filtered));
 
     // Initialize stats
-    await env.KV_MARKETING.put(`affiliate-stats:${code}`, JSON.stringify({
+    await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_STATS}${code}`, JSON.stringify({
       totalConversions: 0,
       totalEarnedCents: 0,
       lastConversionAt: null,
@@ -172,16 +178,16 @@ export async function handleAffiliateApprove(
     await execute(
       env.DB,
       `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
-       VALUES (?, 'general', ?)`,
-      [code, `Approved with ${((commissionRate ?? 0.20) * 100).toFixed(0)}% commission rate`]
+       VALUES (?, '${NOTE_TYPE.GENERAL}', ?)`,
+      [code, `Approved with ${((commissionRate ?? COMMISSION_TIERS[0].rate) * 100).toFixed(0)}% commission rate`]
     );
 
     return ok({
       code,
       email: application.email,
       name: application.name,
-      commissionRate: commissionRate ?? 0.20,
-      status: 'approved',
+      commissionRate: commissionRate ?? COMMISSION_TIERS[0].rate,
+      status: APPLICATION_STATUS.APPROVED,
     });
   } catch (err) {
     console.error('[AffiliateApprove] Error:', err);
@@ -200,18 +206,15 @@ export async function handleListApplications(
 ): Promise<Response> {
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return new Response(JSON.stringify({ ok: false, error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return unauthorized();
   }
 
-  const pendingListJson = await env.KV_MARKETING.get('affiliate-applications:pending') ?? '[]';
+  const pendingListJson = await env.KV_MARKETING.get(KV_PREFIX.AFFILIATE_APPLICATIONS_PENDING) ?? '[]';
   const pendingCodes: string[] = JSON.parse(pendingListJson);
 
   const applications = [];
   for (const code of pendingCodes) {
-    const appJson = await env.KV_MARKETING.get(`affiliate-application:${code}`);
+    const appJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_APPLICATION}${code}`);
     if (appJson) {
       applications.push(JSON.parse(appJson));
     }
@@ -231,7 +234,7 @@ function generateCode(name: string): string {
     .trim()
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
-    .slice(0, 30);
+    .slice(0, MAX_LENGTH.AFFILIATE_CODE);
 
   // Add a short random suffix for uniqueness
   const suffix = Math.random().toString(36).slice(2, 6);

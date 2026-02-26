@@ -6,6 +6,16 @@
  */
 
 import type { Env, EmailSendRow } from '../types';
+import {
+  KV_PREFIX,
+  TTL,
+  EMAIL_STATUS,
+  EMAIL_CONFIG,
+  CONTENT_TYPE_JSON,
+  PAGINATION,
+  APP_URLS,
+  EMAIL_STYLES,
+} from '../constants';
 import { query, queryOne, execute, now } from './db';
 
 // ─── Sequence Enrollment ────────────────────────────────────────────────────
@@ -36,7 +46,7 @@ export async function enrollInSequences(
     // Check if already enrolled (dedupe)
     const existing = await queryOne(
       env.DB,
-      `SELECT id FROM email_sends WHERE contact_email = ? AND sequence_id = ? AND status IN ('scheduled', 'sent') LIMIT 1`,
+      `SELECT id FROM email_sends WHERE contact_email = ? AND sequence_id = ? AND status IN ('${EMAIL_STATUS.SCHEDULED}', '${EMAIL_STATUS.SENT}') LIMIT 1`,
       [contactEmail, seq.id]
     );
     if (existing) {
@@ -56,7 +66,7 @@ export async function enrollInSequences(
       await execute(
         env.DB,
         `INSERT INTO email_sends (contact_email, sequence_id, step_id, status, scheduled_at)
-         VALUES (?, ?, ?, 'scheduled', ?)`,
+         VALUES (?, ?, ?, '${EMAIL_STATUS.SCHEDULED}', ?)`,
         [contactEmail, seq.id, step.id, scheduledAt]
       );
       totalScheduled++;
@@ -65,9 +75,9 @@ export async function enrollInSequences(
     // Store context data in KV for template rendering
     if (contextData) {
       await env.KV_MARKETING.put(
-        `email-ctx:${contactEmail}:${seq.id}`,
+        `${KV_PREFIX.EMAIL_CONTEXT}${contactEmail}:${seq.id}`,
         JSON.stringify(contextData),
-        { expirationTtl: 30 * 86_400 } // 30 days
+        { expirationTtl: TTL.DAYS_30 }
       );
     }
 
@@ -83,7 +93,7 @@ export async function enrollInSequences(
  * Process due emails. Should be called periodically (e.g. via Cron trigger).
  * Returns the number of emails sent.
  */
-export async function processDueEmails(env: Env, batchSize = 50): Promise<number> {
+export async function processDueEmails(env: Env, batchSize: number = PAGINATION.DEFAULT_PAGE_SIZE): Promise<number> {
   const currentTime = now();
 
   // Fetch due sends
@@ -93,7 +103,7 @@ export async function processDueEmails(env: Env, batchSize = 50): Promise<number
      FROM email_sends es
      JOIN email_steps est ON es.step_id = est.id
      JOIN email_sequences seq ON es.sequence_id = seq.id
-     WHERE es.status = 'scheduled' AND es.scheduled_at <= ?
+     WHERE es.status = '${EMAIL_STATUS.SCHEDULED}' AND es.scheduled_at <= ?
      ORDER BY es.scheduled_at ASC
      LIMIT ?`,
     [currentTime, batchSize]
@@ -106,7 +116,7 @@ export async function processDueEmails(env: Env, batchSize = 50): Promise<number
   for (const send of dueSends) {
     try {
       // Load context data from KV
-      const contextJson = await env.KV_MARKETING.get(`email-ctx:${send.contact_email}:${send.sequence_id}`);
+      const contextJson = await env.KV_MARKETING.get(`${KV_PREFIX.EMAIL_CONTEXT}${send.contact_email}:${send.sequence_id}`);
       const context = contextJson ? JSON.parse(contextJson) : {};
 
       // Send the email
@@ -120,7 +130,7 @@ export async function processDueEmails(env: Env, batchSize = 50): Promise<number
       // Mark as sent
       await execute(
         env.DB,
-        `UPDATE email_sends SET status = 'sent', sent_at = ? WHERE id = ?`,
+        `UPDATE email_sends SET status = '${EMAIL_STATUS.SENT}', sent_at = ? WHERE id = ?`,
         [now(), send.id]
       );
       sentCount++;
@@ -129,7 +139,7 @@ export async function processDueEmails(env: Env, batchSize = 50): Promise<number
       console.error(`[Email] Failed to send ${send.id} to ${send.contact_email}: ${errorMsg}`);
       await execute(
         env.DB,
-        `UPDATE email_sends SET status = 'failed', error = ? WHERE id = ?`,
+        `UPDATE email_sends SET status = '${EMAIL_STATUS.FAILED}', error = ? WHERE id = ?`,
         [errorMsg, send.id]
       );
     }
@@ -149,7 +159,7 @@ export async function cancelPendingEmails(
   contactEmail: string,
   triggerEvent?: string
 ): Promise<number> {
-  let sql = `UPDATE email_sends SET status = 'cancelled' WHERE contact_email = ? AND status = 'scheduled'`;
+  let sql = `UPDATE email_sends SET status = '${EMAIL_STATUS.CANCELLED}' WHERE contact_email = ? AND status = '${EMAIL_STATUS.SCHEDULED}'`;
   const params: unknown[] = [contactEmail];
 
   if (triggerEvent) {
@@ -185,7 +195,7 @@ async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
     return;
   }
 
-  const provider = env.EMAIL_PROVIDER ?? 'brevo';
+  const provider = env.EMAIL_PROVIDER ?? EMAIL_CONFIG.DEFAULT_PROVIDER;
 
   if (provider === 'brevo') {
     await sendViaBrevo(env, to, subject, htmlBody);
@@ -195,11 +205,11 @@ async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
 }
 
 async function sendViaBrevo(env: Env, to: string, subject: string, html: string) {
-  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+  const res = await fetch(EMAIL_CONFIG.BREVO_API_URL, {
     method: 'POST',
     headers: {
       'api-key': env.EMAIL_API_KEY!,
-      'Content-Type': 'application/json',
+      'Content-Type': CONTENT_TYPE_JSON,
     },
     body: JSON.stringify({
       sender: { name: env.FROM_NAME, email: env.FROM_EMAIL },
@@ -216,11 +226,11 @@ async function sendViaBrevo(env: Env, to: string, subject: string, html: string)
 }
 
 async function sendViaSendGrid(env: Env, to: string, subject: string, html: string) {
-  const res = await fetch('https://api.sendgrid.com/v3/mail/send', {
+  const res = await fetch(EMAIL_CONFIG.SENDGRID_API_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${env.EMAIL_API_KEY!}`,
-      'Content-Type': 'application/json',
+      'Content-Type': CONTENT_TYPE_JSON,
     },
     body: JSON.stringify({
       personalizations: [{ to: [{ email: to }] }],
@@ -274,72 +284,72 @@ function interpolate(template: string, vars: Record<string, unknown>): string {
 
 const BUILT_IN_TEMPLATES: Record<string, string> = {
   generic: `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">{{subject}}</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">{{subject}}</h2>
       <p>Hello,</p>
       <p>Thank you for being part of Visibility.</p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'onboarding-welcome': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Welcome to Visibility! 🚀</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Welcome to Visibility! \uD83D\uDE80</h2>
       <p>Hi there,</p>
       <p>You've just unlocked the <strong>{{plan}}</strong> plan. Here's how to get the most out of Visibility:</p>
       <ol>
-        <li><strong>Connect your site</strong> — Add your domain in the Cockpit dashboard</li>
-        <li><strong>Link Google Search Console</strong> — We'll pull in your real performance data</li>
-        <li><strong>Check your Pulse</strong> — Your SEO health score updates daily</li>
+        <li><strong>Connect your site</strong> \u2014 Add your domain in the Cockpit dashboard</li>
+        <li><strong>Link Google Search Console</strong> \u2014 We'll pull in your real performance data</li>
+        <li><strong>Check your Pulse</strong> \u2014 Your SEO health score updates daily</li>
       </ol>
-      <p><a href="https://visibility.clodo.dev/cockpit" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Open Your Dashboard →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Open Your Dashboard \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'onboarding-day1': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Set up your first site in 2 minutes ⏱️</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Set up your first site in 2 minutes \u23F1\uFE0F</h2>
       <p>Hi there,</p>
       <p>Most users see their first insights within 24 hours of connecting. If you haven't already:</p>
       <ol>
-        <li>Go to your <a href="https://visibility.clodo.dev/cockpit">Cockpit</a></li>
+        <li>Go to your <a href="${APP_URLS.COCKPIT}">Cockpit</a></li>
         <li>Click "Add Site" and enter your domain</li>
         <li>Authorize Google Search Console access</li>
       </ol>
       <p>That's it! We'll start analyzing your SEO health immediately.</p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'onboarding-day3': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Your first insights are ready 📊</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Your first insights are ready \uD83D\uDCCA</h2>
       <p>Hi there,</p>
       <p>By now, Visibility has been analyzing your site for a few days. Check your dashboard for:</p>
       <ul>
         <li>Your <strong>SEO Health Score</strong></li>
-        <li><strong>Top opportunities</strong> — pages with quick-win potential</li>
-        <li><strong>Action items</strong> — prioritized fixes for maximum impact</li>
+        <li><strong>Top opportunities</strong> \u2014 pages with quick-win potential</li>
+        <li><strong>Action items</strong> \u2014 prioritized fixes for maximum impact</li>
       </ul>
-      <p><a href="https://visibility.clodo.dev/cockpit" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">See Your Insights →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">See Your Insights \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'onboarding-day7': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Pro tips from power users 💡</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Pro tips from power users \uD83D\uDCA1</h2>
       <p>Hi there,</p>
       <p>You've been using Visibility for a week! Here are tips from our top users:</p>
       <ul>
-        <li><strong>Set up weekly reports</strong> — Track your progress automatically</li>
-        <li><strong>Use the AI assistant</strong> — Ask it about any metric for deeper analysis</li>
-        <li><strong>Share reports</strong> — Send SEO snapshots to your team or clients</li>
+        <li><strong>Set up weekly reports</strong> \u2014 Track your progress automatically</li>
+        <li><strong>Use the AI assistant</strong> \u2014 Ask it about any metric for deeper analysis</li>
+        <li><strong>Share reports</strong> \u2014 Send SEO snapshots to your team or clients</li>
       </ul>
-      <p>Questions? Just reply to this email — we read every message.</p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p>Questions? Just reply to this email \u2014 we read every message.</p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'affiliate-commission': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">You earned a commission! 🎉</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">You earned a commission! \uD83C\uDF89</h2>
       <p>Great news!</p>
       <p>A user you referred just made a purchase. Here are the details:</p>
       <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
@@ -348,52 +358,52 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
         <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Your Commission</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">{{commissionAmount}}</td></tr>
         <tr><td style="padding: 8px;"><strong>Total Earnings</strong></td><td style="padding: 8px;">{{totalEarnings}}</td></tr>
       </table>
-      <p><a href="https://visibility.clodo.dev/affiliate/portal" style="display: inline-block; background: #059669; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">View Your Dashboard →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Affiliate Program</p>
+      <p><a href="${APP_URLS.AFFILIATE_PORTAL}" style="${EMAIL_STYLES.CTA_SUCCESS}">View Your Dashboard \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF_AFFILIATE}</p>
     </div>
   `,
   'welcome-signup': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Welcome to Visibility 👋</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Welcome to Visibility \uD83D\uDC4B</h2>
       <p>Hi there,</p>
       <p>Thanks for signing up! Visibility gives you real-time insights into your search engine performance.</p>
       <p>Here's what you can do right now:</p>
       <ol>
         <li><strong>Connect your Google Search Console</strong></li>
-        <li><strong>Check your SEO Pulse</strong> — your site's health score</li>
+        <li><strong>Check your SEO Pulse</strong> \u2014 your site's health score</li>
         <li><strong>Explore AI-powered insights</strong></li>
       </ol>
-      <p><a href="https://visibility.clodo.dev/cockpit" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Get Started →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Get Started \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'welcome-day1': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Your first SEO check ✅</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Your first SEO check \u2705</h2>
       <p>Hi there,</p>
       <p>Have you connected your first site yet? It only takes a minute:</p>
-      <p><a href="https://visibility.clodo.dev/cockpit" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Connect a Site →</a></p>
+      <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Connect a Site \u2192</a></p>
       <p>Once connected, you'll get daily insights on your search performance.</p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'welcome-day3': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Tips that top users love 🌟</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Tips that top users love \uD83C\uDF1F</h2>
       <p>Hi there,</p>
       <p>Our most successful users do these 3 things:</p>
       <ol>
-        <li><strong>Check their Pulse daily</strong> — Even a 1-minute glance keeps you ahead</li>
-        <li><strong>Act on the top recommendation</strong> — Our AI prioritizes what matters most</li>
-        <li><strong>Share reports with their team</strong> — Alignment drives results</li>
+        <li><strong>Check their Pulse daily</strong> \u2014 Even a 1-minute glance keeps you ahead</li>
+        <li><strong>Act on the top recommendation</strong> \u2014 Our AI prioritizes what matters most</li>
+        <li><strong>Share reports with their team</strong> \u2014 Alignment drives results</li>
       </ol>
-      <p>Ready to try the pro features? <a href="https://visibility.clodo.dev/pricing">See our plans →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p>Ready to try the pro features? <a href="${APP_URLS.PRICING}">See our plans \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'winback-day1': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">We miss you 👋</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">We miss you \uD83D\uDC4B</h2>
       <p>Hi there,</p>
       <p>We noticed your Visibility subscription has ended. Here's what's new since you left:</p>
       <ul>
@@ -401,37 +411,37 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
         <li>Improved keyword tracking accuracy</li>
         <li>Faster dashboard loading</li>
       </ul>
-      <p><a href="https://visibility.clodo.dev/pricing" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Reactivate Your Account →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p><a href="${APP_URLS.PRICING}" style="${EMAIL_STYLES.CTA_PRIMARY}">Reactivate Your Account \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'winback-day3': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Your SEO data is waiting 📈</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Your SEO data is waiting \uD83D\uDCC8</h2>
       <p>Hi there,</p>
-      <p>Your historical SEO data is still in our system. Reactivate to pick up right where you left off — no setup needed.</p>
-      <p><a href="https://visibility.clodo.dev/pricing" style="display: inline-block; background: #2563eb; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Come Back →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p>Your historical SEO data is still in our system. Reactivate to pick up right where you left off \u2014 no setup needed.</p>
+      <p><a href="${APP_URLS.PRICING}" style="${EMAIL_STYLES.CTA_PRIMARY}">Come Back \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'winback-day7': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">20% off to come back 🎁</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">20% off to come back \uD83C\uDF81</h2>
       <p>Hi there,</p>
-      <p>We'd love to have you back. Use code <strong>COMEBACK20</strong> for 20% off any plan.</p>
-      <p><a href="https://visibility.clodo.dev/pricing?promo=COMEBACK20" style="display: inline-block; background: #059669; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Claim 20% Off →</a></p>
+      <p>We'd love to have you back. Use code <strong>${EMAIL_CONFIG.PROMO_CODE}</strong> for 20% off any plan.</p>
+      <p><a href="${APP_URLS.PRICING_PROMO(EMAIL_CONFIG.PROMO_CODE)}" style="${EMAIL_STYLES.CTA_SUCCESS}">Claim 20% Off \u2192</a></p>
       <p style="font-size: 14px; color: #888;">Offer valid for 7 days.</p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
   'winback-day14': `
-    <div style="font-family: -apple-system, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px;">
-      <h2 style="color: #1a1a1a;">Final reminder — your data expires soon ⏳</h2>
+    <div style="${EMAIL_STYLES.CONTAINER}">
+      <h2 style="${EMAIL_STYLES.HEADING}">Final reminder \u2014 your data expires soon \u23F3</h2>
       <p>Hi there,</p>
       <p>Your historical SEO data will be archived in 14 days. After that, you'll need to start fresh.</p>
       <p>Reactivate now to keep your data and continue tracking your progress.</p>
-      <p><a href="https://visibility.clodo.dev/pricing?promo=COMEBACK20" style="display: inline-block; background: #dc2626; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 6px;">Reactivate Now →</a></p>
-      <p style="margin-top: 24px; color: #666;">— The Clodo SEO Team</p>
+      <p><a href="${APP_URLS.PRICING_PROMO(EMAIL_CONFIG.PROMO_CODE)}" style="${EMAIL_STYLES.CTA_DANGER}">Reactivate Now \u2192</a></p>
+      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
     </div>
   `,
 };

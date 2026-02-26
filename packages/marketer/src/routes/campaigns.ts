@@ -7,6 +7,14 @@
 import type { Env, CampaignRow } from '../types';
 import { ok, badRequest, notFound, created, serverError, unauthorized } from '../lib/response';
 import { query, queryOne, execute, now } from '../lib/db';
+import {
+  UTM_DEFAULTS,
+  BASE_URL,
+  PAGINATION,
+  COOKIE,
+  TTL,
+  MAX_LENGTH,
+} from '../constants';
 
 /**
  * POST /api/campaigns
@@ -55,12 +63,12 @@ export async function handleCreateCampaign(
         body.name,
         slug,
         body.affiliateCode ?? null,
-        body.utmSource ?? 'affiliate',
-        body.utmMedium ?? 'referral',
+        body.utmSource ?? UTM_DEFAULTS.SOURCE,
+        body.utmMedium ?? UTM_DEFAULTS.MEDIUM,
         body.utmCampaign ?? slug,
         body.utmContent ?? null,
         body.utmTerm ?? null,
-        body.destinationUrl ?? 'https://visibility.clodo.dev',
+        body.destinationUrl ?? BASE_URL,
       ]
     );
 
@@ -92,7 +100,7 @@ export async function handleListCampaigns(
   const url = new URL(request.url);
   const affiliateCode = url.searchParams.get('affiliate');
   const page = parseInt(url.searchParams.get('page') ?? '1', 10);
-  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 100);
+  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? String(PAGINATION.DEFAULT_PAGE_SIZE), 10), PAGINATION.MAX_CAMPAIGN_PAGE_SIZE);
   const offset = (page - 1) * limit;
 
   let sql = `SELECT * FROM campaigns`;
@@ -167,7 +175,7 @@ export async function handleReferralRedirect(
     return new Response(null, {
       status: 302,
       headers: {
-        Location: `https://visibility.clodo.dev/?ref=${encodeURIComponent(slug)}`,
+        Location: `${BASE_URL}/?ref=${encodeURIComponent(slug)}`,
       },
     });
   }
@@ -186,7 +194,7 @@ export async function handleReferralRedirect(
   const headers: Record<string, string> = { Location: destUrl };
   if (campaign.affiliate_code) {
     headers['Set-Cookie'] =
-      `__aff=${campaign.affiliate_code}; Path=/; Max-Age=${30 * 86_400}; SameSite=Lax; Secure`;
+      `${COOKIE.AFFILIATE_NAME}=${campaign.affiliate_code}; Path=/; Max-Age=${TTL.DAYS_30}; SameSite=Lax; Secure`;
   }
 
   return new Response(null, { status: 302, headers });
@@ -263,7 +271,7 @@ function generateSlug(name: string): string {
     .trim()
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
-    .slice(0, 50);
+    .slice(0, MAX_LENGTH.CAMPAIGN_SLUG);
 }
 
 function buildReferralUrl(campaign: CampaignRow): string {

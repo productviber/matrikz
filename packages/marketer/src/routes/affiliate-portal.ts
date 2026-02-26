@@ -9,6 +9,8 @@ import type { Env, AffiliatePortalData } from '../types';
 import { ok, badRequest, notFound, unauthorized } from '../lib/response';
 import { query, queryOne, hashEmail, formatCents } from '../lib/db';
 import { getTierForConversions, tierLabel } from '../lib/commission-tiers';
+import { COMMISSION_TIERS } from '../types';
+import { KV_PREFIX, TTL, PAGINATION, PAYOUT_STATUS, NOTE_TYPE } from '../constants';
 
 /**
  * GET /api/affiliate/portal?code=<code>&email=<email>
@@ -45,8 +47,8 @@ export async function handleAffiliatePortal(
   const recentNotes = await query<{ content: string; created_at: number }>(
     env.DB,
     `SELECT content, created_at FROM affiliate_notes
-     WHERE affiliate_code = ? AND note_type = 'conversion'
-     ORDER BY created_at DESC LIMIT 20`,
+     WHERE affiliate_code = ? AND note_type = '${NOTE_TYPE.CONVERSION}'
+     ORDER BY created_at DESC LIMIT ${PAGINATION.PORTAL_RECENT_ITEMS}`,
     [code]
   );
 
@@ -60,8 +62,8 @@ export async function handleAffiliatePortal(
     env.DB,
     `SELECT amount_cents, method, reference, created_at
      FROM payout_items
-     WHERE affiliate_code = ? AND status = 'sent'
-     ORDER BY created_at DESC LIMIT 20`,
+     WHERE affiliate_code = ? AND status = '${PAYOUT_STATUS.SENT}'
+     ORDER BY created_at DESC LIMIT ${PAGINATION.PORTAL_RECENT_ITEMS}`,
     [code]
   );
 
@@ -126,14 +128,14 @@ export async function handleAffiliateStats(
     return badRequest('Missing required param: code');
   }
 
-  const statsJson = await env.KV_MARKETING.get(`affiliate-stats:${code}`);
+  const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
   if (!statsJson) {
     return ok({
       code,
-      tier: 'Starter',
+      tier: COMMISSION_TIERS[0].name,
       totalConversions: 0,
       totalEarnedCents: 0,
-      commissionRate: 0.20,
+      commissionRate: COMMISSION_TIERS[0].rate,
     });
   }
 
@@ -154,7 +156,7 @@ export async function handleAffiliateStats(
 
 async function verifyAffiliate(env: Env, code: string, email: string): Promise<boolean> {
   // Check KV cache first
-  const cachedEmail = await env.KV_MARKETING.get(`affiliate-email:${code}`);
+  const cachedEmail = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`);
   if (cachedEmail && cachedEmail.toLowerCase() === email.toLowerCase()) {
     return true;
   }
@@ -165,8 +167,8 @@ async function verifyAffiliate(env: Env, code: string, email: string): Promise<b
     const data = await getAffiliateByCode(env, code);
     if (data && (data as any).owner_email?.toLowerCase() === email.toLowerCase()) {
       // Cache for future lookups
-      await env.KV_MARKETING.put(`affiliate-email:${code}`, email, {
-        expirationTtl: 30 * 86_400,
+      await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`, email, {
+        expirationTtl: TTL.DAYS_30,
       });
       return true;
     }

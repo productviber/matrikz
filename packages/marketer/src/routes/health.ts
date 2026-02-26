@@ -4,12 +4,13 @@
 
 import type { Env } from '../types';
 import { ok } from '../lib/response';
+import { WORKER_NAME, WORKER_VERSION, KV_PREFIX, INTERNAL_BASE_URL } from '../constants';
 
 export function handleHealthCheck(): Response {
   return ok({
     status: 'ok',
-    worker: 'visibility-marketing',
-    version: '1.0.0',
+    worker: WORKER_NAME,
+    version: WORKER_VERSION,
     timestamp: new Date().toISOString(),
   });
 }
@@ -27,7 +28,7 @@ export async function handleDetailedHealth(env: Env): Promise<Response> {
 
   // KV check
   try {
-    await env.KV_MARKETING.get('__health_check__');
+    await env.KV_MARKETING.get(KV_PREFIX.HEALTH_CHECK);
     checks.kv = 'ok';
   } catch {
     checks.kv = 'error';
@@ -35,7 +36,7 @@ export async function handleDetailedHealth(env: Env): Promise<Response> {
 
   // Analytics service binding check
   try {
-    const res = await env.ANALYTICS.fetch('https://internal/health') as unknown as Response;
+    const res = await env.ANALYTICS.fetch(`${INTERNAL_BASE_URL}/health`) as unknown as Response;
     checks.analytics = res.ok ? 'ok' : `error:${res.status}`;
   } catch {
     checks.analytics = 'unavailable';
@@ -45,7 +46,7 @@ export async function handleDetailedHealth(env: Env): Promise<Response> {
 
   return ok({
     status: allOk ? 'healthy' : 'degraded',
-    worker: 'visibility-marketing',
+    worker: WORKER_NAME,
     checks,
     timestamp: new Date().toISOString(),
   });

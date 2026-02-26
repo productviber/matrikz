@@ -36,6 +36,12 @@
  */
 
 import type { Env } from './types';
+import {
+  WORKER_NAME,
+  WORKER_VERSION,
+  CONTENT_TYPE_JSON,
+  PAGINATION,
+} from './constants';
 import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
 import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
@@ -164,11 +170,11 @@ export default {
       if (method === 'GET' && path === '/') {
         return new Response(
           JSON.stringify({
-            worker: 'visibility-marketing',
-            version: '1.0.0',
+            worker: WORKER_NAME,
+            version: WORKER_VERSION,
             status: 'ok',
           }),
-          { headers: { 'Content-Type': 'application/json' } }
+          { headers: { 'Content-Type': CONTENT_TYPE_JSON } }
         );
       }
 
@@ -179,7 +185,7 @@ export default {
       console.error(`[Worker] Unhandled error on ${method} ${path}:`, msg);
       return new Response(
         JSON.stringify({ ok: false, error: 'Internal server error' }),
-        { status: 500, headers: { 'Content-Type': 'application/json' } }
+        { status: 500, headers: { 'Content-Type': CONTENT_TYPE_JSON } }
       );
     }
   },
@@ -192,7 +198,7 @@ export default {
     console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}`);
 
     ctx.waitUntil(
-      processDueEmails(env, 100).then((count) => {
+      processDueEmails(env, PAGINATION.CRON_BATCH_SIZE).then((count) => {
         console.log(`[Cron] Processed ${count} due emails`);
       }).catch((err) => {
         console.error('[Cron] Email processing error:', err);

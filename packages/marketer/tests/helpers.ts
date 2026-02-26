@@ -101,6 +101,11 @@ export class MockD1Database {
     this._queries = [];
   }
 
+  /** Clear all registered query handlers */
+  clearHandlers(): void {
+    this._handlers = [];
+  }
+
   _findHandler(sql: string): ((params: unknown[]) => unknown[]) | undefined {
     for (const { pattern, handler } of this._handlers) {
       if (pattern.test(sql)) return handler;

@@ -5,8 +5,7 @@
  */
 
 import type { Env } from '../types';
-
-const INTERNAL_BASE = 'https://internal';
+import { INTERNAL_BASE_URL, CONTENT_TYPE_JSON } from '../constants';
 
 interface FetchOptions {
   method?: string;
@@ -16,11 +15,11 @@ interface FetchOptions {
 
 async function internalFetch(env: Env, path: string, opts: FetchOptions = {}): Promise<Response> {
   const { method = 'GET', headers = {}, body } = opts;
-  const url = `${INTERNAL_BASE}${path}`;
+  const url = `${INTERNAL_BASE_URL}${path}`;
   const init: RequestInit = {
     method,
     headers: {
-      'Content-Type': 'application/json',
+      'Content-Type': CONTENT_TYPE_JSON,
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,

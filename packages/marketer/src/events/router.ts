@@ -5,10 +5,16 @@
  */
 
 import type { Env, EventEnvelope, AffiliateConversionData, UserConvertedData } from '../types';
+import {
+  TRUSTED_SOURCE,
+  EVENT_TYPES,
+  CONTENT_TYPE_JSON,
+  MAX_LENGTH,
+  CONTACT_STATUS,
+  CONTACT_SOURCE,
+} from '../constants';
 import { handleAffiliateConversion } from './affiliate-conversion';
 import { handleUserConverted } from './user-converted';
-
-const TRUSTED_SOURCE = 'visibility-analytics';
 
 /**
  * Main event handler — called by the worker entry point for POST /events.
@@ -27,7 +33,7 @@ export async function routeEvent(
       console.warn(`[Events] Rejected event from unknown source: ${source}`);
       return new Response(JSON.stringify({ ok: false, error: 'Unknown source' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': CONTENT_TYPE_JSON },
       });
     }
 
@@ -35,7 +41,7 @@ export async function routeEvent(
     if (!event || !timestamp || !data) {
       return new Response(JSON.stringify({ ok: false, error: 'Invalid event envelope' }), {
         status: 400,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': CONTENT_TYPE_JSON },
       });
     }
 
@@ -43,56 +49,56 @@ export async function routeEvent(
 
     // ── Route by event type ──
     switch (event) {
-      case 'affiliate.conversion':
+      case EVENT_TYPES.AFFILIATE_CONVERSION:
         ctx.waitUntil(
           handleAffiliateConversion(env, data as AffiliateConversionData, timestamp)
         );
         break;
 
-      case 'user.converted':
+      case EVENT_TYPES.USER_CONVERTED:
         ctx.waitUntil(
           handleUserConverted(env, data as UserConvertedData, timestamp)
         );
         break;
 
       // ── Future events (forward-compatible stubs) ──
-      case 'user.signup':
+      case EVENT_TYPES.USER_SIGNUP:
         ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
         break;
 
-      case 'user.churned':
+      case EVENT_TYPES.USER_CHURNED:
         ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
         break;
 
-      case 'user.milestone':
+      case EVENT_TYPES.USER_MILESTONE:
         ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
         break;
 
-      case 'affiliate.click':
+      case EVENT_TYPES.AFFILIATE_CLICK:
         ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
         break;
 
-      case 'insight.generated':
+      case EVENT_TYPES.INSIGHT_GENERATED:
         ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
         break;
 
       default:
         console.log(
           `[Events] Unknown event type: ${event}`,
-          JSON.stringify(data).slice(0, 200)
+          JSON.stringify(data).slice(0, MAX_LENGTH.JSON_PREVIEW_SHORT)
         );
     }
 
     return new Response(JSON.stringify({ ok: true, event }), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': CONTENT_TYPE_JSON },
     });
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
     console.error('[Events] Handler error:', errMsg);
     return new Response(JSON.stringify({ ok: false, error: 'Event processing error' }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': CONTENT_TYPE_JSON },
     });
   }
 }
@@ -106,7 +112,7 @@ async function handleFutureEvent(
   data: unknown,
   timestamp: string
 ): Promise<void> {
-  console.log(`[Events:Future] ${eventType} received, data:`, JSON.stringify(data).slice(0, 300));
+  console.log(`[Events:Future] ${eventType} received, data:`, JSON.stringify(data).slice(0, MAX_LENGTH.JSON_PREVIEW_LONG));
 
   // Attempt to enroll in email sequences if the data has a userId
   const payload = data as Record<string, unknown>;
@@ -119,15 +125,15 @@ async function handleFutureEvent(
       await enrollInSequences(env, payload.userId, eventType, payload as Record<string, unknown>);
 
       // Handle user.churned specifically
-      if (eventType === 'user.churned') {
-        await upsertContact(env, payload.userId, { status: 'churned' });
+      if (eventType === EVENT_TYPES.USER_CHURNED) {
+        await upsertContact(env, payload.userId, { status: CONTACT_STATUS.CHURNED });
       }
 
       // Handle user.signup specifically
-      if (eventType === 'user.signup') {
+      if (eventType === EVENT_TYPES.USER_SIGNUP) {
         await upsertContact(env, payload.userId, {
-          status: 'lead',
-          source: payload.affiliateCode ? 'affiliate' : 'organic',
+          status: CONTACT_STATUS.LEAD,
+          source: payload.affiliateCode ? CONTACT_SOURCE.AFFILIATE : CONTACT_SOURCE.ORGANIC,
           affiliate_code: payload.affiliateCode as string | undefined,
         });
       }

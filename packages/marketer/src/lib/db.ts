@@ -3,6 +3,7 @@
  */
 
 import type { Env } from '../types';
+import { MAX_LENGTH } from '../constants';
 
 /**
  * Run a single D1 query and return all rows.
@@ -70,7 +71,7 @@ export async function hashEmail(email: string): Promise<string> {
   const data = encoder.encode(email.toLowerCase().trim());
   const hashBuffer = await crypto.subtle.digest('SHA-256', data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, MAX_LENGTH.HASH_OUTPUT_HEX);
 }
 
 /**

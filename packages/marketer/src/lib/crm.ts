@@ -3,6 +3,7 @@
  */
 
 import type { Env, MarketingContactRow, MrrSnapshotRow } from '../types';
+import { CONTACT_STATUS, CONTACT_SOURCE, DEFAULTS } from '../constants';
 import { query, queryOne, execute, now, todayKey, formatCents } from './db';
 
 // ─── Contact Management ─────────────────────────────────────────────────────
@@ -55,8 +56,8 @@ export async function upsertContact(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         email,
-        updates.status ?? 'lead',
-        updates.source ?? 'direct',
+        updates.status ?? CONTACT_STATUS.LEAD,
+        updates.source ?? CONTACT_SOURCE.DIRECT,
         updates.affiliate_code ?? null,
         updates.plan ?? null,
         updates.gateway ?? null,
@@ -90,12 +91,12 @@ export async function markAsCustomer(
   affiliateCode?: string
 ): Promise<void> {
   await upsertContact(env, email, {
-    status: 'customer',
+    status: CONTACT_STATUS.CUSTOMER,
     plan,
     gateway,
     converted_at: now(),
     total_spent_cents: amountCents,
-    source: affiliateCode ? 'affiliate' : undefined,
+    source: affiliateCode ? CONTACT_SOURCE.AFFILIATE : undefined,
     affiliate_code: affiliateCode ?? undefined,
   });
 }
@@ -104,7 +105,7 @@ export async function markAsCustomer(
  * Move a contact to churned status.
  */
 export async function markAsChurned(env: Env, email: string): Promise<void> {
-  await upsertContact(env, email, { status: 'churned' });
+  await upsertContact(env, email, { status: CONTACT_STATUS.CHURNED });
 }
 
 // ─── Revenue Metrics ────────────────────────────────────────────────────────
@@ -122,10 +123,10 @@ export async function updateMrrSnapshot(
 
   // Calculate monthly equivalent
   let mrrDelta = amountCents;
-  if (plan === 'yearly') {
-    mrrDelta = Math.round(amountCents / 12);
+  if (plan === DEFAULTS.PLAN_YEARLY) {
+    mrrDelta = Math.round(amountCents / DEFAULTS.MONTHS_PER_YEAR);
   }
-  const arrDelta = mrrDelta * 12;
+  const arrDelta = mrrDelta * DEFAULTS.MONTHS_PER_YEAR;
 
   const existing = await queryOne<MrrSnapshotRow>(
     env.DB,

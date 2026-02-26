@@ -12,6 +12,7 @@
  */
 
 import type { Env, UserConvertedData } from '../types';
+import { KV_PREFIX, TTL, CONTACT_STATUS, EVENT_TYPES } from '../constants';
 import { hashEmail, formatCents } from '../lib/db';
 import { enrollInSequences, cancelPendingEmails } from '../lib/email';
 import { markAsCustomer, getContact, updateMrrSnapshot } from '../lib/crm';
@@ -34,22 +35,22 @@ export async function handleUserConverted(
 
   // ── 1. Check existing contact state (for trial detection) ──
   const existingContact = await getContact(env, userId);
-  const wasTrial = existingContact?.status === 'trial';
-  const wasLead = !existingContact || existingContact.status === 'lead';
+  const wasTrial = existingContact?.status === CONTACT_STATUS.TRIAL;
+  const wasLead = !existingContact || existingContact.status === CONTACT_STATUS.LEAD;
 
   // ── 2. Move user to "customer" in CRM ──
   await markAsCustomer(env, userId, plan, gateway, amountCents);
 
   // ── 3. If was on trial, cancel trial-expiry reminders ──
   if (wasTrial) {
-    const cancelled = await cancelPendingEmails(env, userId, 'trial.expiring');
+    const cancelled = await cancelPendingEmails(env, userId, EVENT_TYPES.TRIAL_EXPIRING);
     if (cancelled > 0) {
       console.log(`[UserConverted] Cancelled ${cancelled} trial-expiry emails for ${hashedUserId}`);
     }
   }
 
   // ── 4. Enroll in post-purchase onboarding email sequence ──
-  const enrolledSteps = await enrollInSequences(env, userId, 'user.converted', {
+  const enrolledSteps = await enrollInSequences(env, userId, EVENT_TYPES.USER_CONVERTED, {
     plan,
     purchaseType,
     amountCents,
@@ -63,7 +64,7 @@ export async function handleUserConverted(
   await updateMrrSnapshot(env, amountCents, plan);
 
   // ── 6. Store conversion metadata in KV for quick access ──
-  const kvKey = `user-conversion:${userId}`;
+  const kvKey = `${KV_PREFIX.USER_CONVERSION}${userId}`;
   await env.KV_MARKETING.put(
     kvKey,
     JSON.stringify({
@@ -74,22 +75,22 @@ export async function handleUserConverted(
       convertedAt: timestamp,
       previousStatus: existingContact?.status ?? 'unknown',
     }),
-    { expirationTtl: 365 * 86_400 } // 1 year
+    { expirationTtl: TTL.YEAR_1 }
   );
 
   // ── 7. Increment daily conversion counter in KV ──
   const todayKey = new Date().toISOString().slice(0, 10);
-  const counterKey = `daily-conversions:${todayKey}`;
+  const counterKey = `${KV_PREFIX.DAILY_CONVERSIONS}${todayKey}`;
   const currentCount = parseInt(await env.KV_MARKETING.get(counterKey) ?? '0', 10);
   await env.KV_MARKETING.put(counterKey, String(currentCount + 1), {
-    expirationTtl: 90 * 86_400, // 90 days retention
+    expirationTtl: TTL.DAYS_90,
   });
 
   // Also track daily revenue
-  const revenueKey = `daily-revenue:${todayKey}`;
+  const revenueKey = `${KV_PREFIX.DAILY_REVENUE}${todayKey}`;
   const currentRevenue = parseInt(await env.KV_MARKETING.get(revenueKey) ?? '0', 10);
   await env.KV_MARKETING.put(revenueKey, String(currentRevenue + amountCents), {
-    expirationTtl: 90 * 86_400,
+    expirationTtl: TTL.DAYS_90,
   });
 
   // ── 8. Send real-time notification to team ──
