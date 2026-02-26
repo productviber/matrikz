@@ -15,6 +15,7 @@ import {
   PAGINATION,
   APP_URLS,
   EMAIL_STYLES,
+  MESSAGES,
 } from '../constants';
 import { query, queryOne, execute, now } from './db';
 
@@ -208,7 +209,7 @@ async function sendViaBrevo(env: Env, to: string, subject: string, html: string)
   const res = await fetch(EMAIL_CONFIG.BREVO_API_URL, {
     method: 'POST',
     headers: {
-      'api-key': env.EMAIL_API_KEY!,
+      [EMAIL_CONFIG.BREVO_AUTH_HEADER]: env.EMAIL_API_KEY!,
       'Content-Type': CONTENT_TYPE_JSON,
     },
     body: JSON.stringify({
@@ -236,7 +237,7 @@ async function sendViaSendGrid(env: Env, to: string, subject: string, html: stri
       personalizations: [{ to: [{ email: to }] }],
       from: { email: env.FROM_EMAIL, name: env.FROM_NAME },
       subject,
-      content: [{ type: 'text/html', value: html }],
+      content: [{ type: EMAIL_CONFIG.SENDGRID_CONTENT_TYPE, value: html }],
     }),
   });
 
@@ -263,7 +264,7 @@ async function renderTemplate(
       const obj = await env.R2_ASSETS.get(`templates/${templateKey}.html`);
       if (obj) {
         let html = await obj.text();
-        return interpolate(html, vars);
+        return interpolate(html, { ...vars, unsubscribe: unsubscribeFooter(String(vars.to ?? '')) });
       }
     } catch {
       // Fall through to built-in
@@ -272,7 +273,7 @@ async function renderTemplate(
 
   // Built-in fallback templates
   const template = BUILT_IN_TEMPLATES[templateKey] ?? BUILT_IN_TEMPLATES['generic'];
-  return interpolate(template, vars);
+  return interpolate(template, { ...vars, unsubscribe: unsubscribeFooter(String(vars.to ?? '')) });
 }
 
 function interpolate(template: string, vars: Record<string, unknown>): string {
@@ -282,13 +283,19 @@ function interpolate(template: string, vars: Record<string, unknown>): string {
   });
 }
 
+/** Unsubscribe footer appended to all email templates */
+function unsubscribeFooter(to: string): string {
+  return `<p style="${EMAIL_STYLES.SMALL_PRINT}; margin-top: 32px; border-top: 1px solid #eee; padding-top: 12px;"><a href="${APP_URLS.UNSUBSCRIBE(to)}" style="color: #888;">${MESSAGES.email.unsubscribeText}</a></p>`;
+}
+
 const BUILT_IN_TEMPLATES: Record<string, string> = {
   generic: `
     <div style="${EMAIL_STYLES.CONTAINER}">
       <h2 style="${EMAIL_STYLES.HEADING}">{{subject}}</h2>
-      <p>Hello,</p>
-      <p>Thank you for being part of Visibility.</p>
+      <p>${MESSAGES.email.greeting}</p>
+      <p>${MESSAGES.email.genericBody}</p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'onboarding-welcome': `
@@ -303,6 +310,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ol>
       <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Open Your Dashboard \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'onboarding-day1': `
@@ -317,6 +325,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ol>
       <p>That's it! We'll start analyzing your SEO health immediately.</p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'onboarding-day3': `
@@ -331,6 +340,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ul>
       <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">See Your Insights \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'onboarding-day7': `
@@ -345,21 +355,23 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ul>
       <p>Questions? Just reply to this email \u2014 we read every message.</p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'affiliate-commission': `
     <div style="${EMAIL_STYLES.CONTAINER}">
-      <h2 style="${EMAIL_STYLES.HEADING}">You earned a commission! \uD83C\uDF89</h2>
+      <h2 style="${EMAIL_STYLES.HEADING}">${MESSAGES.email.commissionTitle}</h2>
       <p>Great news!</p>
-      <p>A user you referred just made a purchase. Here are the details:</p>
-      <table style="width: 100%; border-collapse: collapse; margin: 16px 0;">
-        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Plan</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">{{plan}}</td></tr>
-        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Sale Amount</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">{{saleAmount}}</td></tr>
-        <tr><td style="padding: 8px; border-bottom: 1px solid #eee;"><strong>Your Commission</strong></td><td style="padding: 8px; border-bottom: 1px solid #eee;">{{commissionAmount}}</td></tr>
-        <tr><td style="padding: 8px;"><strong>Total Earnings</strong></td><td style="padding: 8px;">{{totalEarnings}}</td></tr>
+      <p>${MESSAGES.email.commissionBody}</p>
+      <table style="${EMAIL_STYLES.TABLE}">
+        <tr><td style="${EMAIL_STYLES.TABLE_CELL}"><strong>${MESSAGES.email.labelPlan}</strong></td><td style="${EMAIL_STYLES.TABLE_CELL}">{{plan}}</td></tr>
+        <tr><td style="${EMAIL_STYLES.TABLE_CELL}"><strong>${MESSAGES.email.labelSaleAmount}</strong></td><td style="${EMAIL_STYLES.TABLE_CELL}">{{saleAmount}}</td></tr>
+        <tr><td style="${EMAIL_STYLES.TABLE_CELL}"><strong>${MESSAGES.email.labelCommission}</strong></td><td style="${EMAIL_STYLES.TABLE_CELL}">{{commissionAmount}}</td></tr>
+        <tr><td style="${EMAIL_STYLES.TABLE_CELL_LAST}"><strong>${MESSAGES.email.labelTotalEarnings}</strong></td><td style="${EMAIL_STYLES.TABLE_CELL_LAST}">{{totalEarnings}}</td></tr>
       </table>
-      <p><a href="${APP_URLS.AFFILIATE_PORTAL}" style="${EMAIL_STYLES.CTA_SUCCESS}">View Your Dashboard \u2192</a></p>
+      <p><a href="${APP_URLS.AFFILIATE_PORTAL}" style="${EMAIL_STYLES.CTA_SUCCESS}">${MESSAGES.email.ctaAffiliateDashboard}</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF_AFFILIATE}</p>
+      {{unsubscribe}}
     </div>
   `,
   'welcome-signup': `
@@ -375,6 +387,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ol>
       <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Get Started \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'welcome-day1': `
@@ -385,6 +398,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p><a href="${APP_URLS.COCKPIT}" style="${EMAIL_STYLES.CTA_PRIMARY}">Connect a Site \u2192</a></p>
       <p>Once connected, you'll get daily insights on your search performance.</p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'welcome-day3': `
@@ -399,6 +413,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ol>
       <p>Ready to try the pro features? <a href="${APP_URLS.PRICING}">See our plans \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'winback-day1': `
@@ -413,6 +428,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       </ul>
       <p><a href="${APP_URLS.PRICING}" style="${EMAIL_STYLES.CTA_PRIMARY}">Reactivate Your Account \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'winback-day3': `
@@ -422,6 +438,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>Your historical SEO data is still in our system. Reactivate to pick up right where you left off \u2014 no setup needed.</p>
       <p><a href="${APP_URLS.PRICING}" style="${EMAIL_STYLES.CTA_PRIMARY}">Come Back \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'winback-day7': `
@@ -430,8 +447,9 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>Hi there,</p>
       <p>We'd love to have you back. Use code <strong>${EMAIL_CONFIG.PROMO_CODE}</strong> for 20% off any plan.</p>
       <p><a href="${APP_URLS.PRICING_PROMO(EMAIL_CONFIG.PROMO_CODE)}" style="${EMAIL_STYLES.CTA_SUCCESS}">Claim 20% Off \u2192</a></p>
-      <p style="font-size: 14px; color: #888;">Offer valid for 7 days.</p>
+      <p style="${EMAIL_STYLES.SMALL_PRINT}">Offer valid for 7 days.</p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
   'winback-day14': `
@@ -442,6 +460,7 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>Reactivate now to keep your data and continue tracking your progress.</p>
       <p><a href="${APP_URLS.PRICING_PROMO(EMAIL_CONFIG.PROMO_CODE)}" style="${EMAIL_STYLES.CTA_DANGER}">Reactivate Now \u2192</a></p>
       <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      {{unsubscribe}}
     </div>
   `,
 };

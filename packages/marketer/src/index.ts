@@ -41,6 +41,9 @@ import {
   WORKER_VERSION,
   CONTENT_TYPE_JSON,
   PAGINATION,
+  PATTERNS,
+  ROUTE,
+  MESSAGES,
 } from './constants';
 import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
@@ -90,7 +93,7 @@ export default {
 
       // ── Referral link redirect ──
       if (method === 'GET' && path.startsWith('/r/')) {
-        const slug = path.slice(3); // Remove '/r/'
+        const slug = path.slice(ROUTE.REFERRAL_PREFIX_LEN);
         if (slug) return handleReferralRedirect(request, env, slug);
       }
 
@@ -118,11 +121,11 @@ export default {
       if (method === 'GET' && path === '/api/campaigns') {
         return handleListCampaigns(request, env);
       }
-      if (method === 'GET' && path.match(/^\/api\/campaigns\/[^/]+$/)) {
+      if (method === 'GET' && path.match(PATTERNS.ROUTE_CAMPAIGN_SLUG)) {
         const slug = path.split('/').pop()!;
         return handleGetCampaign(request, env, slug);
       }
-      if (method === 'PUT' && path.match(/^\/api\/campaigns\/[^/]+$/)) {
+      if (method === 'PUT' && path.match(PATTERNS.ROUTE_CAMPAIGN_SLUG)) {
         const slug = path.split('/').pop()!;
         return handleUpdateCampaign(request, env, slug);
       }
@@ -131,14 +134,14 @@ export default {
       if (method === 'POST' && path === '/api/payouts/batch') {
         return handleCreatePayoutBatch(request, env);
       }
-      if (method === 'POST' && path.match(/^\/api\/payouts\/batch\/\d+\/process$/)) {
-        const batchId = parseInt(path.split('/')[4], 10);
+      if (method === 'POST' && path.match(PATTERNS.ROUTE_PAYOUT_BATCH_PROCESS)) {
+        const batchId = parseInt(path.split('/')[ROUTE.PAYOUT_BATCH_ID_INDEX], 10);
         return handleProcessPayoutBatch(request, env, batchId);
       }
       if (method === 'GET' && path === '/api/payouts') {
         return handleListPayoutBatches(request, env);
       }
-      if (method === 'GET' && path.match(/^\/api\/payouts\/\d+$/)) {
+      if (method === 'GET' && path.match(PATTERNS.ROUTE_PAYOUT_ID)) {
         const batchId = parseInt(path.split('/').pop()!, 10);
         return handleGetPayoutBatch(request, env, batchId);
       }
@@ -179,12 +182,12 @@ export default {
       }
 
       // ── 404 ──
-      return notFound('Route not found');
+      return notFound(MESSAGES.errors.routeNotFound);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[Worker] Unhandled error on ${method} ${path}:`, msg);
       return new Response(
-        JSON.stringify({ ok: false, error: 'Internal server error' }),
+        JSON.stringify({ ok: false, error: MESSAGES.errors.internalError }),
         { status: 500, headers: { 'Content-Type': CONTENT_TYPE_JSON } }
       );
     }

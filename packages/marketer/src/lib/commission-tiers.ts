@@ -10,7 +10,7 @@
 
 import { COMMISSION_TIERS, type CommissionTier, type Env } from '../types';
 import { execute, queryOne } from './db';
-import { NOTE_TYPE } from '../constants';
+import { NOTE_TYPE, EARNINGS_MILESTONES, MESSAGES } from '../constants';
 
 /**
  * Determine the commission tier for a given conversion count.
@@ -63,17 +63,9 @@ export async function recordTierUpgrade(
     env.DB,
     `INSERT INTO affiliate_notes (affiliate_code, note_type, content)
      VALUES (?, '${NOTE_TYPE.TIER_UPGRADE}', ?)`,
-    [
-      affiliateCode,
-      `Upgraded to ${newTier.name} tier (${(newTier.rate * 100).toFixed(0)}% commission) at ${totalConversions} conversions`,
-    ]
+    [affiliateCode, MESSAGES.notes.tierUpgrade(newTier.name, (newTier.rate * 100).toFixed(0), totalConversions)]
   );
 }
-
-/**
- * Earnings thresholds that also trigger special notifications.
- */
-export const EARNINGS_MILESTONES = [10_000, 50_000, 100_000, 500_000]; // in cents: $100, $500, $1K, $5K
 
 /**
  * Check if cumulative earnings crossed a milestone.

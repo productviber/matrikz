@@ -10,7 +10,7 @@ import { ok, badRequest, notFound, unauthorized } from '../lib/response';
 import { query, queryOne, hashEmail, formatCents } from '../lib/db';
 import { getTierForConversions, tierLabel } from '../lib/commission-tiers';
 import { COMMISSION_TIERS } from '../types';
-import { KV_PREFIX, TTL, PAGINATION, PAYOUT_STATUS, NOTE_TYPE } from '../constants';
+import { KV_PREFIX, TTL, PAGINATION, PAYOUT_STATUS, NOTE_TYPE, DEFAULTS, PATTERNS, MESSAGES } from '../constants';
 
 /**
  * GET /api/affiliate/portal?code=<code>&email=<email>
@@ -26,17 +26,17 @@ export async function handleAffiliatePortal(
   const email = url.searchParams.get('email');
 
   if (!code || !email) {
-    return badRequest('Missing required params: code, email');
+    return badRequest(MESSAGES.errors.missingCodeEmail);
   }
 
   // Verify affiliate identity via KV cache or analytics service
   const isVerified = await verifyAffiliate(env, code, email);
   if (!isVerified) {
-    return unauthorized('Invalid affiliate credentials');
+    return unauthorized(MESSAGES.errors.invalidCredentials);
   }
 
   // Load stats from KV
-  const statsJson = await env.KV_MARKETING.get(`affiliate-stats:${code}`);
+  const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
   const stats = statsJson
     ? JSON.parse(statsJson)
     : { totalConversions: 0, totalEarnedCents: 0, lastConversionAt: null };
@@ -95,7 +95,7 @@ export async function handleAffiliatePortal(
     totalEarnedCents: stats.totalEarnedCents,
     unpaidEarningsCents: Math.max(0, unpaidCents),
     recentConversions: recentNotes.map((n) => ({
-      userId: 'redacted',
+      userId: DEFAULTS.REDACTED_USER_ID,
       plan: extractPlanFromNote(n.content),
       amountCents: extractAmountFromNote(n.content),
       commissionCents: extractCommissionFromNote(n.content),
@@ -103,7 +103,7 @@ export async function handleAffiliatePortal(
     })),
     payoutHistory: payouts.map((p) => ({
       amountCents: p.amount_cents,
-      method: p.method ?? 'pending',
+      method: p.method ?? DEFAULTS.PAYOUT_METHOD,
       reference: p.reference ?? '',
       createdAt: new Date(p.created_at * 1000).toISOString(),
     })),
@@ -125,7 +125,7 @@ export async function handleAffiliateStats(
   const code = url.searchParams.get('code');
 
   if (!code) {
-    return badRequest('Missing required param: code');
+    return badRequest(MESSAGES.errors.missingParamCode);
   }
 
   const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
@@ -180,16 +180,16 @@ async function verifyAffiliate(env: Env, code: string, email: string): Promise<b
 }
 
 function extractPlanFromNote(content: string): string {
-  const match = content.match(/Conversion:\s*(\w+)\s*plan/);
-  return match?.[1] ?? 'unknown';
+  const match = content.match(PATTERNS.NOTE_PLAN);
+  return match?.[1] ?? DEFAULTS.UNKNOWN_PLAN;
 }
 
 function extractAmountFromNote(content: string): number {
-  const match = content.match(/sale\s*\$(\d+\.\d+)/);
+  const match = content.match(PATTERNS.NOTE_SALE_AMOUNT);
   return match ? Math.round(parseFloat(match[1]) * 100) : 0;
 }
 
 function extractCommissionFromNote(content: string): number {
-  const match = content.match(/commission\s*\$(\d+\.\d+)/);
+  const match = content.match(PATTERNS.NOTE_COMMISSION);
   return match ? Math.round(parseFloat(match[1]) * 100) : 0;
 }

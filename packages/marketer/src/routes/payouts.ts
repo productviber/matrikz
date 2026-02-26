@@ -10,7 +10,7 @@
  */
 
 import type { Env, PayoutBatchRow, PayoutItemRow } from '../types';
-import { ok, badRequest, notFound, serverError, unauthorized } from '../lib/response';
+import { ok, badRequest, notFound, serverError, unauthorized, isAdmin } from '../lib/response';
 import { query, queryOne, execute, now, formatCents } from '../lib/db';
 import { notifyPayoutCompleted } from '../lib/notifications';
 import {
@@ -19,6 +19,7 @@ import {
   PAGINATION,
   DEFAULTS,
   NOTE_TYPE,
+  MESSAGES,
 } from '../constants';
 
 /**
@@ -37,11 +38,11 @@ export async function handleCreatePayoutBatch(
     // We'll list affiliate codes from notes table
     const affiliates = await query<{ affiliate_code: string }>(
       env.DB,
-      `SELECT DISTINCT affiliate_code FROM affiliate_notes WHERE note_type = 'conversion'`
+      `SELECT DISTINCT affiliate_code FROM affiliate_notes WHERE note_type = '${NOTE_TYPE.CONVERSION}'`
     );
 
     if (affiliates.length === 0) {
-      return ok({ message: 'No affiliates with conversions found', batch: null });
+      return ok({ message: MESSAGES.errors.noAffiliatesFound, batch: null });
     }
 
     const items: { code: string; email: string; amountCents: number }[] = [];
@@ -75,7 +76,7 @@ export async function handleCreatePayoutBatch(
     }
 
     if (items.length === 0) {
-      return ok({ message: 'No unpaid earnings to process', batch: null });
+      return ok({ message: MESSAGES.errors.noUnpaidEarnings, batch: null });
     }
 
     const totalAmount = items.reduce((sum, i) => sum + i.amountCents, 0);
@@ -94,7 +95,7 @@ export async function handleCreatePayoutBatch(
     );
 
     if (!batch) {
-      return serverError('Failed to create payout batch');
+      return serverError(MESSAGES.errors.failedCreateBatch);
     }
 
     // Create payout items
@@ -124,7 +125,7 @@ export async function handleCreatePayoutBatch(
     });
   } catch (err) {
     console.error('[Payouts:Create] Error:', err);
-    return serverError('Failed to create payout batch');
+    return serverError(MESSAGES.errors.failedCreateBatch);
   }
 }
 
@@ -147,9 +148,9 @@ export async function handleProcessPayoutBatch(
     [batchId]
   );
 
-  if (!batch) return notFound('Batch not found');
+  if (!batch) return notFound(MESSAGES.errors.batchNotFound);
   if (batch.status !== PAYOUT_STATUS.PENDING) {
-    return badRequest(`Batch is already ${batch.status}`);
+    return badRequest(MESSAGES.errors.batchAlreadyProcessed(batch.status));
   }
 
   try {
@@ -199,7 +200,7 @@ export async function handleProcessPayoutBatch(
            VALUES (?, '${NOTE_TYPE.PAYOUT}', ?)`,
           [
             item.affiliate_code,
-            `Payout of ${formatCents(item.amount_cents)} via ${defaultMethod} (ref: ${reference})`,
+            MESSAGES.notes.payoutProcessed(formatCents(item.amount_cents), defaultMethod, reference),
           ]
         );
 
@@ -241,7 +242,7 @@ export async function handleProcessPayoutBatch(
       `UPDATE payout_batches SET status = '${PAYOUT_STATUS.FAILED}' WHERE id = ?`,
       [batchId]
     );
-    return serverError('Failed to process payout batch');
+    return serverError(MESSAGES.errors.failedProcessBatch);
   }
 }
 
@@ -287,7 +288,7 @@ export async function handleGetPayoutBatch(
     [batchId]
   );
 
-  if (!batch) return notFound('Batch not found');
+  if (!batch) return notFound(MESSAGES.errors.batchNotFound);
 
   const items = await query<PayoutItemRow>(
     env.DB,
@@ -309,7 +310,3 @@ export async function handleGetPayoutBatch(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function isAdmin(request: Request, env: Env): boolean {
-  const authHeader = request.headers.get('Authorization');
-  return authHeader === `Bearer ${env.ADMIN_TOKEN}`;
-}

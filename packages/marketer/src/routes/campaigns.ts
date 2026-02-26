@@ -5,7 +5,7 @@
  */
 
 import type { Env, CampaignRow } from '../types';
-import { ok, badRequest, notFound, created, serverError, unauthorized } from '../lib/response';
+import { ok, badRequest, notFound, created, serverError, unauthorized, isAdmin } from '../lib/response';
 import { query, queryOne, execute, now } from '../lib/db';
 import {
   UTM_DEFAULTS,
@@ -14,6 +14,10 @@ import {
   COOKIE,
   TTL,
   MAX_LENGTH,
+  PATTERNS,
+  DEFAULTS,
+  MESSAGES,
+  SQLITE_BOOL,
 } from '../constants';
 
 /**
@@ -28,7 +32,7 @@ export async function handleCreateCampaign(
   // Admin/affiliate auth check
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized('Authentication required to create campaigns');
+    return unauthorized(MESSAGES.errors.authRequired);
   }
 
   try {
@@ -44,7 +48,7 @@ export async function handleCreateCampaign(
     };
 
     if (!body.name) {
-      return badRequest('Missing required field: name');
+      return badRequest(MESSAGES.errors.missingFieldName);
     }
 
     const slug = generateSlug(body.name);
@@ -52,7 +56,7 @@ export async function handleCreateCampaign(
     // Check for duplicate slug
     const existing = await queryOne(env.DB, `SELECT id FROM campaigns WHERE slug = ?`, [slug]);
     if (existing) {
-      return badRequest(`Campaign with slug "${slug}" already exists`);
+      return badRequest(MESSAGES.errors.campaignSlugExists(slug));
     }
 
     await execute(
@@ -84,7 +88,7 @@ export async function handleCreateCampaign(
     });
   } catch (err) {
     console.error('[Campaign:Create] Error:', err);
-    return serverError('Failed to create campaign');
+    return serverError(MESSAGES.errors.failedCreateCampaign);
   }
 }
 
@@ -120,7 +124,7 @@ export async function handleListCampaigns(
     campaigns: campaigns.map((c) => ({
       ...c,
       referralUrl: buildReferralUrl(c),
-      conversionRate: c.clicks > 0 ? ((c.conversions / c.clicks) * 100).toFixed(1) + '%' : '0.0%',
+      conversionRate: c.clicks > 0 ? ((c.conversions / c.clicks) * 100).toFixed(1) + '%' : DEFAULTS.ZERO_CONVERSION_RATE,
     })),
     page,
     limit,
@@ -144,7 +148,7 @@ export async function handleGetCampaign(
   );
 
   if (!campaign) {
-    return notFound('Campaign not found');
+    return notFound(MESSAGES.errors.campaignNotFound);
   }
 
   return ok({
@@ -152,7 +156,7 @@ export async function handleGetCampaign(
     referralUrl: buildReferralUrl(campaign),
     conversionRate: campaign.clicks > 0
       ? ((campaign.conversions / campaign.clicks) * 100).toFixed(1) + '%'
-      : '0.0%',
+      : DEFAULTS.ZERO_CONVERSION_RATE,
   });
 }
 
@@ -166,7 +170,7 @@ export async function handleReferralRedirect(
 ): Promise<Response> {
   const campaign = await queryOne<CampaignRow>(
     env.DB,
-    `SELECT * FROM campaigns WHERE slug = ? AND is_active = 1`,
+    `SELECT * FROM campaigns WHERE slug = ? AND is_active = ${SQLITE_BOOL.TRUE}`,
     [slug]
   );
 
@@ -211,7 +215,7 @@ export async function handleUpdateCampaign(
   // Admin auth check
   const authHeader = request.headers.get('Authorization');
   if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized('Authentication required to update campaigns');
+    return unauthorized(MESSAGES.errors.authRequiredUpdate);
   }
 
   const campaign = await queryOne<CampaignRow>(
@@ -221,7 +225,7 @@ export async function handleUpdateCampaign(
   );
 
   if (!campaign) {
-    return notFound('Campaign not found');
+    return notFound(MESSAGES.errors.campaignNotFound);
   }
 
   try {
@@ -243,7 +247,7 @@ export async function handleUpdateCampaign(
     if (updates.utmTerm !== undefined) { sets.push('utm_term = ?'); params.push(updates.utmTerm); }
 
     if (sets.length === 0) {
-      return badRequest('No valid fields to update');
+      return badRequest(MESSAGES.errors.noValidFields);
     }
 
     sets.push('updated_at = ?');
@@ -259,7 +263,7 @@ export async function handleUpdateCampaign(
     return ok({ slug, updated: true });
   } catch (err) {
     console.error('[Campaign:Update] Error:', err);
-    return serverError('Failed to update campaign');
+    return serverError(MESSAGES.errors.failedUpdateCampaign);
   }
 }
 
@@ -269,8 +273,8 @@ function generateSlug(name: string): string {
   return name
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s-]/g, '')
-    .replace(/\s+/g, '-')
+    .replace(PATTERNS.SLUG_STRIP, '')
+    .replace(PATTERNS.SLUG_SPACES, '-')
     .slice(0, MAX_LENGTH.CAMPAIGN_SLUG);
 }
 

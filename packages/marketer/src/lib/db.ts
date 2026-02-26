@@ -3,7 +3,7 @@
  */
 
 import type { Env } from '../types';
-import { MAX_LENGTH } from '../constants';
+import { MAX_LENGTH, CURRENCY } from '../constants';
 
 /**
  * Run a single D1 query and return all rows.
@@ -75,10 +75,11 @@ export async function hashEmail(email: string): Promise<string> {
 }
 
 /**
- * Format cents to dollar string (e.g. 2900 → "$29.00").
+ * Format cents to currency string (e.g. 2900 → "$29.00").
+ * Uses CURRENCY constants for locale-aware formatting.
  */
 export function formatCents(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+  return `${CURRENCY.SYMBOL}${(cents / 100).toFixed(CURRENCY.DECIMALS)}`;
 }
 
 /**

@@ -6,18 +6,11 @@
  */
 
 import type { Env, DashboardMetrics } from '../types';
-import { ok, badRequest, unauthorized, serverError } from '../lib/response';
+import { ok, badRequest, unauthorized, serverError, isAdmin } from '../lib/response';
 import { query, queryOne, execute, now, todayKey, formatCents } from '../lib/db';
 import { getContactStats, getLatestMrrSnapshot, getMrrHistory } from '../lib/crm';
 import { processDueEmails } from '../lib/email';
-import { KV_PREFIX, PAGINATION, DEFAULTS, PAYOUT_STATUS } from '../constants';
-
-// ─── Auth Middleware ─────────────────────────────────────────────────────────
-
-function isAdmin(request: Request, env: Env): boolean {
-  const auth = request.headers.get('Authorization');
-  return auth === `Bearer ${env.ADMIN_TOKEN}`;
-}
+import { KV_PREFIX, PAGINATION, DEFAULTS, PAYOUT_STATUS, EMAIL_STATUS, NOTE_TYPE, SQLITE_BOOL, MESSAGES } from '../constants';
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
 
@@ -60,13 +53,13 @@ export async function handleAdminDashboard(
     // Active sequences
     const activeSequences = await queryOne<{ count: number }>(
       env.DB,
-      `SELECT COUNT(*) as count FROM email_sequences WHERE is_active = 1`
+      `SELECT COUNT(*) as count FROM email_sequences WHERE is_active = ${SQLITE_BOOL.TRUE}`
     );
 
     // Emails sent today
     const emailsSentToday = await queryOne<{ count: number }>(
       env.DB,
-      `SELECT COUNT(*) as count FROM email_sends WHERE status = 'sent' AND sent_at >= ?`,
+      `SELECT COUNT(*) as count FROM email_sends WHERE status = '${EMAIL_STATUS.SENT}' AND sent_at >= ?`,
       [Math.floor(new Date(today).getTime() / 1000)]
     );
 
@@ -74,7 +67,7 @@ export async function handleAdminDashboard(
     const affConversionsToday = await queryOne<{ count: number }>(
       env.DB,
       `SELECT COUNT(*) as count FROM affiliate_notes
-       WHERE note_type = 'conversion' AND created_at >= ?`,
+       WHERE note_type = '${NOTE_TYPE.CONVERSION}' AND created_at >= ?`,
       [Math.floor(new Date(today).getTime() / 1000)]
     );
 
@@ -97,7 +90,7 @@ export async function handleAdminDashboard(
     });
   } catch (err) {
     console.error('[Admin:Dashboard] Error:', err);
-    return serverError('Failed to load dashboard');
+    return serverError(MESSAGES.errors.failedDashboard);
   }
 }
 
@@ -207,10 +200,10 @@ export async function handleProcessEmails(
 
   try {
     const sent = await processDueEmails(env);
-    return ok({ processed: sent, message: `Processed ${sent} due emails` });
+    return ok({ processed: sent, message: MESSAGES.success.processedEmails(sent) });
   } catch (err) {
     console.error('[Admin:ProcessEmails] Error:', err);
-    return serverError('Failed to process emails');
+    return serverError(MESSAGES.errors.failedProcessEmails);
   }
 }
 

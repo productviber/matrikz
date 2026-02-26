@@ -2,14 +2,26 @@
  * Response helpers — consistent JSON responses for the marketing worker.
  */
 
-import type { ApiResponse } from '../types';
+import type { ApiResponse, Env } from '../types';
+import { CORS, CONTENT_TYPE_JSON } from '../constants';
 
-const JSON_HEADERS = { 'Content-Type': 'application/json' };
+const JSON_HEADERS = { 'Content-Type': CONTENT_TYPE_JSON };
 const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Origin': CORS.ALLOWED_ORIGIN,
+  'Access-Control-Allow-Methods': CORS.ALLOWED_METHODS,
+  'Access-Control-Allow-Headers': CORS.ALLOWED_HEADERS,
 };
+
+// ─── Auth Middleware (shared) ───────────────────────────────────────────────
+
+/**
+ * Check if the request has a valid admin Bearer token.
+ * Shared across admin.ts, payouts.ts, recruitment.ts, campaigns.ts.
+ */
+export function isAdmin(request: Request, env: Env): boolean {
+  const auth = request.headers.get('Authorization');
+  return auth === `Bearer ${env.ADMIN_TOKEN}`;
+}
 
 export function json<T>(data: T, status = 200, extra?: Record<string, string>): Response {
   return new Response(JSON.stringify(data), {

@@ -9,6 +9,7 @@ import {
   MAX_LENGTH,
   NOTIFICATION_CHANNEL,
   PAYOUT_STATUS,
+  MESSAGES,
 } from '../constants';
 import { execute, formatCents } from './db';
 
@@ -82,7 +83,7 @@ export async function notifyNewConversion(
   env: Env,
   data: { userId: string; plan: string; amountCents: number; gateway: string }
 ): Promise<void> {
-  const msg = `💰 **New Conversion!**\nPlan: ${data.plan}\nAmount: ${formatCents(data.amountCents)}\nGateway: ${data.gateway}`;
+  const msg = MESSAGES.notifications.newConversion(data.plan, formatCents(data.amountCents), data.gateway);
 
   await Promise.allSettled([
     sendSlackNotification(env, msg),
@@ -99,7 +100,7 @@ export async function notifyAffiliateConversion(
     commissionCents: number;
   }
 ): Promise<void> {
-  const msg = `🤝 **Affiliate Conversion!**\nAffiliate: ${data.affiliateCode}\nPlan: ${data.plan}\nSale: ${formatCents(data.amountCents)}\nCommission: ${formatCents(data.commissionCents)}`;
+  const msg = MESSAGES.notifications.affiliateConversion(data.affiliateCode, data.plan, formatCents(data.amountCents), formatCents(data.commissionCents));
 
   await Promise.allSettled([
     sendSlackNotification(env, msg),
@@ -113,7 +114,7 @@ export async function notifyTierUpgrade(
   tierName: string,
   rate: number
 ): Promise<void> {
-  const msg = `🏆 **Affiliate Tier Upgrade!**\nAffiliate: ${affiliateCode}\nNew Tier: ${tierName} (${(rate * 100).toFixed(0)}% commission)`;
+  const msg = MESSAGES.notifications.tierUpgrade(affiliateCode, tierName, rate);
 
   await Promise.allSettled([
     sendSlackNotification(env, msg),
@@ -126,7 +127,7 @@ export async function notifyEarningsMilestone(
   affiliateCode: string,
   milestoneCents: number
 ): Promise<void> {
-  const msg = `🎯 **Affiliate Milestone!**\nAffiliate: ${affiliateCode}\nTotal Earnings: ${formatCents(milestoneCents)}`;
+  const msg = MESSAGES.notifications.earningsMilestone(affiliateCode, formatCents(milestoneCents));
 
   await Promise.allSettled([
     sendSlackNotification(env, msg),
@@ -140,7 +141,7 @@ export async function notifyPayoutCompleted(
   totalCents: number,
   affiliateCount: number
 ): Promise<void> {
-  const msg = `💸 **Payout Batch Completed!**\nBatch #${batchId}\nTotal: ${formatCents(totalCents)}\nAffiliates: ${affiliateCount}`;
+  const msg = MESSAGES.notifications.payoutCompleted(batchId, formatCents(totalCents), affiliateCount);
 
   await Promise.allSettled([
     sendSlackNotification(env, msg),

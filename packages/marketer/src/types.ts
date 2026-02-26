@@ -231,12 +231,8 @@ export interface CommissionTier {
   rate: number;  // 0.0–1.0
 }
 
-export const COMMISSION_TIERS: CommissionTier[] = [
-  { name: 'Starter',   minConversions: 0,   rate: 0.20 },
-  { name: 'Silver',    minConversions: 10,  rate: 0.25 },
-  { name: 'Gold',      minConversions: 50,  rate: 0.30 },
-  { name: 'Platinum',  minConversions: 200, rate: 0.35 },
-];
+// Re-export from constants so existing imports still work
+export { COMMISSION_TIERS } from './constants';
 
 // ─── Email Sequence Definitions ─────────────────────────────────────────────
 
