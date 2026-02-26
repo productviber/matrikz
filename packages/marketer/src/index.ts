@@ -15,6 +15,8 @@
  *   POST /api/affiliate/apply           — Affiliate recruitment form
  *   POST /api/affiliate/approve         — Admin: approve affiliate application
  *   GET  /api/affiliate/applications    — Admin: list pending applications
+ *   PUT  /api/affiliate/:code/payout-details — Admin: set affiliate payout method
+ *   GET  /api/affiliate/:code/payout-details — Admin: get affiliate payout method
  *
  *   POST /api/campaigns                 — Create campaign / referral link
  *   GET  /api/campaigns                 — List campaigns
@@ -45,8 +47,7 @@ import {
   ROUTE,
   MESSAGES,
   RATE_LIMIT,
-} from './constants';
-import { routeEvent } from './events/router';
+} from './constants';import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
 import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
 import { handleAffiliateApply, handleAffiliateApprove, handleListApplications } from './routes/affiliate-recruitment';
@@ -62,6 +63,7 @@ import {
   handleListNotifications,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
+import { handleSetAffiliatePayoutDetails, handleGetAffiliatePayoutDetails } from './routes/affiliate-payout-setup';
 import { corsPreflightResponse, notFound, tooManyRequests } from './lib/response';
 import { processDueEmails } from './lib/email';
 import { checkRateLimit } from './lib/rate-limit';
@@ -119,6 +121,16 @@ export default {
       }
       if (method === 'GET' && path === '/api/affiliate/applications') {
         return handleListApplications(request, env);
+      }
+
+      // ── Affiliate Payout Details Routes (Admin) ──
+      if (method === 'PUT' && path.match(PATTERNS.ROUTE_AFFILIATE_PAYOUT_DETAILS)) {
+        const code = path.split('/')[ROUTE.AFFILIATE_CODE_INDEX];
+        return handleSetAffiliatePayoutDetails(request, env, code);
+      }
+      if (method === 'GET' && path.match(PATTERNS.ROUTE_AFFILIATE_PAYOUT_DETAILS)) {
+        const code = path.split('/')[ROUTE.AFFILIATE_CODE_INDEX];
+        return handleGetAffiliatePayoutDetails(request, env, code);
       }
 
       // ── Campaign Routes ──

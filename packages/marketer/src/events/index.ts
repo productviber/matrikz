@@ -5,3 +5,4 @@
 export { routeEvent } from './router';
 export { handleAffiliateConversion } from './affiliate-conversion';
 export { handleUserConverted } from './user-converted';
+export { handleUserSignup } from './user-signup';

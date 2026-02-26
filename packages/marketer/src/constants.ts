@@ -137,6 +137,53 @@ export const KV_PREFIX = {
   DAILY_CONVERSIONS: 'daily-conversions:',
   DAILY_REVENUE: 'daily-revenue:',
   HEALTH_CHECK: '__health_check__',
+  /** Stores per-affiliate payout method details (bank/UPI/Stripe account) */
+  AFFILIATE_PAYOUT_DETAILS: 'affiliate-payout:',
+} as const;
+
+// ─── Payout Providers ──────────────────────────────────────────────────────
+
+/**
+ * Supported payout provider keys — set `PAYOUT_PROVIDER` env var to activate.
+ * 'stub' is the default and safe for development.
+ */
+export const PAYOUT_PROVIDERS = {
+  STUB: 'stub',
+  RAZORPAY: 'razorpay',
+  STRIPE: 'stripe',
+} as const;
+
+/** Payout method types stored in KV for each affiliate */
+export const PAYOUT_METHOD = {
+  UPI: 'upi',
+  BANK: 'bank',
+  STRIPE: 'stripe',
+} as const;
+
+/** Razorpay X2B (Business→Beneficiary) payout API endpoints */
+export const RAZORPAY_API = {
+  BASE: 'https://api.razorpay.com/v1',
+  CONTACTS: 'https://api.razorpay.com/v1/contacts',
+  FUND_ACCOUNTS: 'https://api.razorpay.com/v1/fund_accounts',
+  PAYOUTS: 'https://api.razorpay.com/v1/payouts',
+} as const;
+
+/** Stripe API base */
+export const STRIPE_API = {
+  BASE: 'https://api.stripe.com/v1',
+  TRANSFERS: 'https://api.stripe.com/v1/transfers',
+  PAYOUTS: 'https://api.stripe.com/v1/payouts',
+} as const;
+
+/** Payout event types for the payout_events audit log */
+export const PAYOUT_EVENT = {
+  INITIATED: 'initiated',
+  CONTACT_CREATED: 'contact_created',
+  FUND_ACCOUNT_CREATED: 'fund_account_created',
+  TRANSFER_SENT: 'transfer_sent',
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  SKIPPED: 'skipped',
 } as const;
 
 // ─── UTM Defaults ───────────────────────────────────────────────────────────
@@ -166,6 +213,8 @@ export const ROUTE = {
   REFERRAL_PREFIX_LEN: 3,
   /** Index of batch ID segment in /api/payouts/batch/:id/process */
   PAYOUT_BATCH_ID_INDEX: 4,
+  /** Index of affiliate code in /api/affiliate/:code/payout-details */
+  AFFILIATE_CODE_INDEX: 3,
 } as const;
 
 // ─── Regex Patterns ─────────────────────────────────────────────────────────
@@ -180,6 +229,8 @@ export const PATTERNS = {
   ROUTE_CAMPAIGN_SLUG: /^\/api\/campaigns\/[^/]+$/,
   ROUTE_PAYOUT_BATCH_PROCESS: /^\/api\/payouts\/batch\/\d+\/process$/,
   ROUTE_PAYOUT_ID: /^\/api\/payouts\/\d+$/,
+  /** Matches /api/affiliate/:code/payout-details */
+  ROUTE_AFFILIATE_PAYOUT_DETAILS: /^\/api\/affiliate\/[^/]+\/payout-details$/,
 } as const;
 
 // ─── Email Configuration ────────────────────────────────────────────────────
@@ -346,6 +397,12 @@ export const MESSAGES = {
     invalidJson: 'Invalid JSON body',
     rateLimitExceeded: 'Too many requests — please try again later',
     selfReferralBlocked: 'Self-referral is not permitted',
+    affiliateNotFound: 'Affiliate not found',
+    invalidPayoutMethod: 'Invalid payout method — must be upi, bank, or stripe',
+    missingUpiId: 'upiId is required for UPI payout method',
+    missingBankDetails: 'bankAccount (name, ifsc, accountNumber) required for bank payout method',
+    missingStripeAccountId: 'stripeAccountId is required for stripe payout method',
+    payoutDetailsNotFound: 'No payout details configured for this affiliate',
   },
   // ── GDPR / unsubscribe ──
   // ── Success Messages ──
@@ -355,6 +412,7 @@ export const MESSAGES = {
     gdprDeleted: 'All personal data has been erased.',
     unsubscribed: 'You have been unsubscribed from all marketing emails.',
     clickForwarded: 'Click event forwarded to analytics.',
+    payoutDetailsSaved: 'Payout details saved successfully.',
   },
   // ── Email Template Copy ──
   email: {
@@ -453,6 +511,12 @@ export const MESSAGES = {
       `Upgraded to ${tierName} tier (${ratePercent}% commission) at ${conversions} conversions`,
     payoutProcessed: (amount: string, method: string, reference: string) =>
       `Payout of ${amount} via ${method} (ref: ${reference})`,
+    payoutFailed: (amount: string, method: string, errorMessage: string) =>
+      `Payout of ${amount} via ${method} failed: ${errorMessage}`,
+    payoutDetailsUpdated: (method: string) =>
+      `Payout details updated — method: ${method}`,
+    userSignupEnrolled: (email: string, steps: number) =>
+      `User ${email} enrolled in ${steps} welcome email step(s)`,
   },
 } as const;
 

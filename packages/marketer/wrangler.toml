@@ -35,13 +35,20 @@ FROM_NAME = "Clodo SEO"
 ENVIRONMENT = "production"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
+# When using PAYOUT_PROVIDER = "razorpay", also set:
+#   RAZORPAY_ACCOUNT_NUMBER = "your-razorpay-account-number"  (plain var — not secret)
 
 # Secrets (set via `wrangler secret put`):
 #   ADMIN_TOKEN
 #   EMAIL_API_KEY
-#   EMAIL_PROVIDER        (brevo | sendgrid)
+#   EMAIL_PROVIDER                (brevo | sendgrid)
 #   SLACK_WEBHOOK_URL
 #   DISCORD_WEBHOOK_URL
+#
+# Payout provider secrets (only required for the selected PAYOUT_PROVIDER):
+#   RAZORPAY_KEY_ID               Razorpay X2B key ID (for PAYOUT_PROVIDER=razorpay)
+#   RAZORPAY_KEY_SECRET           Razorpay X2B key secret
+#   STRIPE_SECRET_KEY             Stripe secret key sk_live_... (for PAYOUT_PROVIDER=stripe)
 
 # ─── Dev Environment ────────────────────────────────────────────────────────
 [env.development]

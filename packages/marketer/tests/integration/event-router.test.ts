@@ -127,19 +127,20 @@ describe('event router', () => {
     expect(res.status).toBe(200);
   });
 
-  it('handles future event stubs (user.signup)', async () => {
+  it('routes user.signup events to handleUserSignup', async () => {
     const ctx = createMockCtx();
     const req = makeEventRequest({
       event: 'user.signup',
       source: 'visibility-analytics',
       timestamp: new Date().toISOString(),
-      data: { userId: 'new@test.com', provider: 'google' },
+      data: { userId: 'new@test.com', provider: 'google', affiliateCode: 'aff-ref' },
     });
 
     const res = await routeEvent(req, env as any, ctx);
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.ok).toBe(true);
+    expect(body.event).toBe('user.signup');
   });
 
   it('returns 500 for malformed JSON', async () => {

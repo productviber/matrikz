@@ -33,8 +33,13 @@ export interface Env {
   ENVIRONMENT: 'development' | 'production';
   /** Allowed CORS origin, defaults to CORS.ALLOWED_ORIGIN constant */
   ALLOWED_ORIGIN?: string;
-  /** Payout provider key: 'stub' (default) | 'paypal' | 'stripe' */
+  /** Payout provider key: 'stub' (default) | 'razorpay' | 'stripe' */
   PAYOUT_PROVIDER?: string;
+  /** Razorpay X2B credentials for payout disbursement */
+  RAZORPAY_KEY_ID?: string;
+  RAZORPAY_KEY_SECRET?: string;
+  /** Stripe secret key for transfer disbursement */
+  STRIPE_SECRET_KEY?: string;
 }
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────
@@ -204,6 +209,47 @@ export interface PayoutItemRow {
   method: string | null;
   reference: string | null;
   status: 'pending' | 'sent' | 'failed';
+  created_at: number;
+}
+
+// ─── Payout Details (stored in KV per affiliate) ────────────────────────────
+
+/** UPI payout details — used by Razorpay X2B for Indian transfers */
+export interface UpiPayoutDetails {
+  method: 'upi';
+  upiId: string;
+  accountHolderName: string;
+}
+
+/** Bank account payout details — used by Razorpay X2B IMPS/NEFT transfers */
+export interface BankPayoutDetails {
+  method: 'bank';
+  accountHolderName: string;
+  ifsc: string;
+  accountNumber: string;
+}
+
+/** Stripe connected account — used for Stripe Transfer API */
+export interface StripePayoutDetails {
+  method: 'stripe';
+  stripeAccountId: string;  // acct_xxxxx
+}
+
+/** Union of all supported affiliate payout detail types */
+export type PayoutDetails = UpiPayoutDetails | BankPayoutDetails | StripePayoutDetails;
+
+// ─── Payout Events (D1 audit log) ──────────────────────────────────────────
+
+export interface PayoutEventRow {
+  id: number;
+  batch_id: number;
+  affiliate_code: string;
+  event_type: string;     // initiated | contact_created | fund_account_created | transfer_sent | succeeded | failed | skipped
+  provider: string;       // razorpay | stripe | stub
+  reference: string | null;
+  amount_cents: number;
+  status: string;         // success | failure
+  error: string | null;
   created_at: number;
 }
 

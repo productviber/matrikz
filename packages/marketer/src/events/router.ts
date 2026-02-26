@@ -4,7 +4,7 @@
  * for forward compatibility.
  */
 
-import type { Env, EventEnvelope, AffiliateConversionData, UserConvertedData } from '../types';
+import type { Env, EventEnvelope, AffiliateConversionData, UserConvertedData, UserSignupData } from '../types';
 import {
   TRUSTED_SOURCE,
   EVENT_TYPES,
@@ -16,6 +16,7 @@ import {
 } from '../constants';
 import { handleAffiliateConversion } from './affiliate-conversion';
 import { handleUserConverted } from './user-converted';
+import { handleUserSignup } from './user-signup';
 
 /**
  * Main event handler — called by the worker entry point for POST /events.
@@ -75,9 +76,11 @@ export async function routeEvent(
         );
         break;
 
-      // ── Future events (forward-compatible stubs) ──
+      // ── User signup — welcome sequence + CRM upsert ──
       case EVENT_TYPES.USER_SIGNUP:
-        ctx.waitUntil(handleFutureEvent(env, event, data, timestamp));
+        ctx.waitUntil(
+          handleUserSignup(env, data as UserSignupData, timestamp)
+        );
         break;
 
       case EVENT_TYPES.USER_CHURNED:
