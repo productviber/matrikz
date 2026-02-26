@@ -220,6 +220,6 @@ jobs:
         run: |
           echo "Waiting 10s for worker to propagate..."
           sleep 10
-          HEALTH=$(curl -sf https://visibility-marketing.clodo.workers.dev/health || echo '{"ok":false}')
+          HEALTH=$(curl -sf https://visibility-marketing.wetechfounders.workers.dev/health || echo '{"ok":false}')
           echo "Health response: $HEALTH"
           echo "$HEALTH" | grep -q '"ok":true' || (echo "Health check failed!" && exit 1)
