@@ -59,15 +59,25 @@ describe('constants', () => {
       expect(EVENT_TYPES.AFFILIATE_CLICK).toBe('affiliate.click');
       expect(EVENT_TYPES.INSIGHT_GENERATED).toBe('insight.generated');
       expect(EVENT_TYPES.TRIAL_EXPIRING).toBe('trial.expiring');
+      // Share PLG events
+      expect(EVENT_TYPES.SHARE_CREATED).toBe('share.created');
+      expect(EVENT_TYPES.SHARE_VIEWED).toBe('share.viewed');
+      expect(EVENT_TYPES.SHARE_ENGAGED).toBe('share.engaged');
+      expect(EVENT_TYPES.SHARE_CTA_CLICKED).toBe('share.cta_clicked');
+      expect(EVENT_TYPES.SHARE_CONVERTED).toBe('share.converted');
+      expect(EVENT_TYPES.SHARE_REVOKED).toBe('share.revoked');
+      expect(EVENT_TYPES.OUTBOUND_PROSPECT_DISCOVERED).toBe('outbound.prospect_discovered');
+      expect(EVENT_TYPES.OUTBOUND_PROSPECT_ENRICHED).toBe('outbound.prospect_enriched');
     });
 
-    it('has 8 event types', () => {
-      expect(Object.keys(EVENT_TYPES)).toHaveLength(8);
+    it('has 29 event types', () => {
+      expect(Object.keys(EVENT_TYPES)).toHaveLength(29);
     });
   });
 
   describe('CONTACT_STATUS', () => {
-    it('has lead, trial, customer, churned', () => {
+    it('has prospect, lead, trial, customer, churned', () => {
+      expect(CONTACT_STATUS.PROSPECT).toBe('prospect');
       expect(CONTACT_STATUS.LEAD).toBe('lead');
       expect(CONTACT_STATUS.TRIAL).toBe('trial');
       expect(CONTACT_STATUS.CUSTOMER).toBe('customer');

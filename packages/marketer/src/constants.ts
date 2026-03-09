@@ -25,6 +25,31 @@ export const EVENT_TYPES = {
   AFFILIATE_CLICK: 'affiliate.click',
   INSIGHT_GENERATED: 'insight.generated',
   TRIAL_EXPIRING: 'trial.expiring',
+  // ── Share PLG Events (from visibility-analytics micro-share system) ──
+  SHARE_CREATED: 'share.created',
+  SHARE_VIEWED: 'share.viewed',
+  SHARE_ENGAGED: 'share.engaged',
+  SHARE_CTA_CLICKED: 'share.cta_clicked',
+  SHARE_CONVERTED: 'share.converted',
+  SHARE_REVOKED: 'share.revoked',
+  // ── Shopify App Lifecycle Events (via analytics engine event bus) ──
+  APP_INSTALLED: 'user.app_installed',
+  APP_UNINSTALLED: 'user.app_uninstalled',
+  ANALYSIS_COMPLETED: 'analysis.completed',
+  FIRST_ANALYSIS: 'user.first_analysis',
+  AI_CHAT_USED: 'ai.chat_used',
+  PLAN_UPGRADED: 'plan.upgraded',
+  PLAN_DOWNGRADED: 'plan.downgraded',
+  // ── Outbound Events (from analytics discovery/enrichment pipeline) ──
+  OUTBOUND_PROSPECT_DISCOVERED: 'outbound.prospect_discovered',
+  OUTBOUND_PROSPECT_ENRICHED: 'outbound.prospect_enriched',
+  // ── Outbound Tracking Events (reverse: marketing → analytics) ──
+  OUTBOUND_EMAIL_SENT: 'outbound.email_sent',
+  OUTBOUND_EMAIL_OPENED: 'outbound.email_opened',
+  OUTBOUND_EMAIL_CLICKED: 'outbound.email_clicked',
+  OUTBOUND_EMAIL_BOUNCED: 'outbound.email_bounced',
+  OUTBOUND_EMAIL_COMPLAINED: 'outbound.email_complained',
+  OUTBOUND_UNSUBSCRIBED: 'outbound.unsubscribed',
 } as const;
 
 // ─── Contact Statuses ───────────────────────────────────────────────────────
@@ -34,6 +59,7 @@ export const CONTACT_STATUS = {
   TRIAL: 'trial',
   CUSTOMER: 'customer',
   CHURNED: 'churned',
+  PROSPECT: 'prospect',
 } as const;
 
 // ─── Contact Sources ────────────────────────────────────────────────────────
@@ -42,6 +68,8 @@ export const CONTACT_SOURCE = {
   DIRECT: 'direct',
   ORGANIC: 'organic',
   AFFILIATE: 'affiliate',
+  SHARE: 'share',
+  OUTBOUND: 'outbound',
 } as const;
 
 // ─── Email Send Statuses ────────────────────────────────────────────────────
@@ -69,6 +97,7 @@ export const NOTE_TYPE = {
   CONVERSION: 'conversion',
   TIER_UPGRADE: 'tier_upgrade',
   PAYOUT: 'payout',
+  MILESTONE: 'milestone',
   GENERAL: 'general',
 } as const;
 
@@ -99,6 +128,8 @@ export const TTL = {
   YEAR_1: 365 * SECONDS_PER_DAY,
   /** 7 days in seconds */
   DAYS_7: 7 * SECONDS_PER_DAY,
+  /** 2 days in seconds (throttle counter retention) */
+  DAYS_2: 2 * SECONDS_PER_DAY,
 } as const;
 
 // ─── Pagination Defaults ────────────────────────────────────────────────────
@@ -139,6 +170,26 @@ export const KV_PREFIX = {
   HEALTH_CHECK: '__health_check__',
   /** Stores per-affiliate payout method details (bank/UPI/Stripe account) */
   AFFILIATE_PAYOUT_DETAILS: 'affiliate-payout:',
+  /** Share lead PQL data keyed by token */
+  SHARE_LEAD: 'share-lead:',
+  /** Aggregated share stats per owner email */
+  SHARE_OWNER_STATS: 'share-owner:',
+  /** Daily share view counter */
+  DAILY_SHARE_VIEWS: 'daily-share-views:',
+  /** Daily event counters (churn, milestone, clicks) */
+  DAILY_EVENTS: 'daily-events:',
+  /** Outbound warmup state per campaign */
+  OUTBOUND_WARMUP: 'outbound:warmup:',
+  /** Outbound daily send throttle counter */
+  OUTBOUND_THROTTLE: 'outbound:throttle:',
+  /** Outbound domain gap tracker */
+  OUTBOUND_DOMAIN_GAP: 'outbound:domain-gap:',
+  /** Deliverability daily counters (YYYY-MM-DD suffix) */
+  OUTBOUND_DELIVERABILITY: 'outbound:deliverability:',
+  /** Bounce records per email (soft/hard/complaint) */
+  OUTBOUND_BOUNCE: 'outbound:bounce:',
+  /** Engagement tracking per email (opens, clicks, last activity) */
+  OUTBOUND_ENGAGEMENT: 'outbound:engagement:',
 } as const;
 
 // ─── Payout Providers ──────────────────────────────────────────────────────
@@ -314,6 +365,43 @@ export const CF_SERVICE_HEADER = 'cf-worker';
 
 export const KV_UNSUBSCRIBE_PREFIX = 'unsub:';
 
+// ─── PLG (Product-Led Growth) Stages ────────────────────────────────────────
+
+export const PLG_STAGE = {
+  AWARENESS: 'awareness',
+  ACTIVATION: 'activation',
+  ENGAGEMENT: 'engagement',
+  INTENT: 'intent',
+  CONVERSION: 'conversion',
+  LIFECYCLE: 'lifecycle',
+} as const;
+
+// ─── PQL (Product-Qualified Lead) Thresholds ────────────────────────────────
+
+/**
+ * Cumulative PQL score thresholds for lead status transitions.
+ * The visibility-analytics worker sends pqlScoreHint per event;
+ * this worker accumulates them and promotes lead status accordingly.
+ */
+export const PQL_THRESHOLD = {
+  /** Lead is cold below this */
+  WARM: 20,
+  /** Lead is warm at this level */
+  HOT: 50,
+  /** Lead is product-qualified at this level */
+  PQL: 80,
+} as const;
+
+/** Share lead statuses — maps to PQL thresholds */
+export const SHARE_LEAD_STATUS = {
+  COLD: 'cold',
+  WARM: 'warm',
+  HOT: 'hot',
+  PQL: 'pql',
+  CONVERTED: 'converted',
+  REVOKED: 'revoked',
+} as const;
+
 // ─── Commission Tiers ───────────────────────────────────────────────────────
 
 export interface CommissionTierDef {
@@ -348,8 +436,8 @@ export const EMAIL_STYLES = {
   TABLE_CELL: 'padding: 8px; border-bottom: 1px solid #eee;',
   TABLE_CELL_LAST: 'padding: 8px;',
   SMALL_PRINT: 'font-size: 14px; color: #888;',
-  SIGN_OFF: '— The Clodo SEO Team',
-  SIGN_OFF_AFFILIATE: '— The Clodo SEO Affiliate Program',
+  SIGN_OFF: '— The AXEO Team',
+  SIGN_OFF_AFFILIATE: '— The AXEO Affiliate Program',
 } as const;
 
 // ─── Internationalization (i18n) Message Catalog ────────────────────────────
@@ -403,6 +491,10 @@ export const MESSAGES = {
     missingBankDetails: 'bankAccount (name, ifsc, accountNumber) required for bank payout method',
     missingStripeAccountId: 'stripeAccountId is required for stripe payout method',
     payoutDetailsNotFound: 'No payout details configured for this affiliate',
+    // ── Webhook Errors ──
+    invalidWebhookPayload: 'Invalid webhook payload',
+    missingWebhookFields: 'Missing event or email',
+    webhookProcessingFailed: 'Webhook processing failed',
   },
   // ── GDPR / unsubscribe ──
   // ── Success Messages ──
@@ -413,15 +505,16 @@ export const MESSAGES = {
     unsubscribed: 'You have been unsubscribed from all marketing emails.',
     clickForwarded: 'Click event forwarded to analytics.',
     payoutDetailsSaved: 'Payout details saved successfully.',
+    webhookProcessed: 'Webhook processed successfully.',
   },
   // ── Email Template Copy ──
   email: {
     greeting: 'Hi there,',
-    genericBody: 'Thank you for being part of Visibility.',
-    onboardingWelcomeTitle: 'Welcome to Visibility! 🚀',
+    genericBody: 'Thank you for being part of AXEO.',
+    onboardingWelcomeTitle: 'Welcome to AXEO! 🚀',
     onboardingWelcomeBody: (plan: string) => `You've just unlocked the <strong>${plan}</strong> plan. Here's how to get the most out of Visibility:`,
     onboardingStep1: 'Connect your site',
-    onboardingStep1Detail: 'Add your domain in the Cockpit dashboard',
+    onboardingStep1Detail: 'Add your domain in the Dashboard',
     onboardingStep2: 'Link Google Search Console',
     onboardingStep2Detail: "We'll pull in your real performance data",
     onboardingStep3: 'Check your Pulse',
@@ -439,7 +532,7 @@ export const MESSAGES = {
     day3Item3: '<strong>Action items</strong> — prioritized fixes for maximum impact',
     ctaInsights: 'See Your Insights →',
     day7Title: 'Pro tips from power users 💡',
-    day7Body: "You've been using Visibility for a week! Here are tips from our top users:",
+    day7Body: "You've been using AXEO for a week! Here are tips from our top users:",
     day7Tip1: '<strong>Set up weekly reports</strong> — Track your progress automatically',
     day7Tip2: '<strong>Use the AI assistant</strong> — Ask it about any metric for deeper analysis',
     day7Tip3: '<strong>Share reports</strong> — Send SEO snapshots to your team or clients',
@@ -451,8 +544,8 @@ export const MESSAGES = {
     labelCommission: 'Your Commission',
     labelTotalEarnings: 'Total Earnings',
     ctaAffiliateDashboard: 'View Your Dashboard →',
-    welcomeTitle: 'Welcome to Visibility 👋',
-    welcomeBody: 'Thanks for signing up! Visibility gives you real-time insights into your search engine performance.',
+    welcomeTitle: 'Welcome to AXEO 👋',
+    welcomeBody: 'Thanks for signing up! AXEO gives you real-time insights into your search engine performance.',
     welcomeWhat: "Here's what you can do right now:",
     welcomeStep1: 'Connect your Google Search Console',
     welcomeStep2: 'Check your SEO Pulse',
@@ -470,7 +563,7 @@ export const MESSAGES = {
     welcomeDay3Tip3: '<strong>Share reports with their team</strong> — Alignment drives results',
     ctaPlans: 'See our plans →',
     winbackDay1Title: 'We miss you 👋',
-    winbackDay1Body: "We noticed your Visibility subscription has ended. Here's what's new since you left:",
+    winbackDay1Body: "We noticed your AXEO subscription has ended. Here's what's new since you left:",
     winbackDay1Item1: 'New AI-powered content recommendations',
     winbackDay1Item2: 'Improved keyword tracking accuracy',
     winbackDay1Item3: 'Faster dashboard loading',
@@ -500,6 +593,12 @@ export const MESSAGES = {
       `🎯 **Affiliate Milestone!**\nAffiliate: ${code}\nTotal Earnings: ${amount}`,
     payoutCompleted: (batchId: number, total: string, count: number) =>
       `💸 **Payout Batch Completed!**\nBatch #${batchId}\nTotal: ${total}\nAffiliates: ${count}`,
+    shareConversion: (ownerEmail: string, token: string, newUserId: string) =>
+      `🔗 **Share Conversion!**\nOwner: ${ownerEmail}\nShare: ${token}\nNew User: ${newUserId}`,
+    shareHighEngagement: (token: string, dwellSeconds: number, pqlScore: number) =>
+      `🔥 **High-Engagement Share Lead!**\nShare: ${token}\nDwell: ${dwellSeconds}s\nPQL Score: ${pqlScore}`,
+    sharePQLReached: (token: string, pqlScore: number) =>
+      `🎯 **Share Lead Reached PQL!**\nShare: ${token}\nPQL Score: ${pqlScore}`,
   },
   // ── Affiliate Notes ──
   notes: {
@@ -517,6 +616,12 @@ export const MESSAGES = {
       `Payout details updated — method: ${method}`,
     userSignupEnrolled: (email: string, steps: number) =>
       `User ${email} enrolled in ${steps} welcome email step(s)`,
+    shareCreated: (owner: string, token: string, scopes: string) =>
+      `Share created by ${owner}: ${token} (scopes: ${scopes})`,
+    shareConversion: (owner: string, token: string, newUser: string) =>
+      `Share ${token} by ${owner} converted — new user: ${newUser}`,
+    shareRevoked: (owner: string, token: string) =>
+      `Share ${token} revoked by ${owner}`,
   },
 } as const;
 
@@ -528,3 +633,45 @@ export const CURRENCY = {
   DECIMALS: 2,
   LOCALE: 'en-US',
 } as const;
+
+// ─── Outbound Compliance Thresholds ─────────────────────────────────────────
+
+export const COMPLIANCE = {
+  /** Max cold emails per sequence (CAN-SPAM best practice). */
+  MAX_SEQUENCE_STEPS: 3,
+  /** Auto-pause campaign if bounce rate exceeds 5%. */
+  MAX_BOUNCE_RATE: 0.05,
+  /** Auto-pause campaign if complaint rate exceeds 0.1%. */
+  MAX_COMPLAINT_RATE: 0.001,
+  /** Soft bounce strikes before permanent suppress. */
+  SOFT_BOUNCE_THRESHOLD: 3,
+  /** Soft bounce window in seconds (7 days). */
+  SOFT_BOUNCE_WINDOW: 7 * SECONDS_PER_DAY,
+  /** Deliverability counter retention in seconds (30 days). */
+  DELIVERABILITY_RETENTION: 30 * SECONDS_PER_DAY,
+  /** Permanent suppress TTL — effectively forever. */
+  PERMANENT_SUPPRESS_TTL: TTL.YEAR_1 * 10,
+} as const;
+
+// ─── White-Label / Branding Defaults ────────────────────────────────────────
+
+/**
+ * Default brand strings. Override via env vars for white-labelling:
+ *   BRAND_NAME, BRAND_PRODUCT, BRAND_TAGLINE, BRAND_DOMAIN
+ */
+export const BRAND = {
+  NAME: 'AXEO',
+  PRODUCT: 'Visibility',
+  TAGLINE: 'Free SEO intelligence for modern teams',
+  DOMAIN: 'visibility.clodo.dev',
+  SUPPORT_EMAIL: 'support@visibility.clodo.dev',
+} as const;
+
+/**
+ * Resolve a brand value with env override.
+ * Pattern: env.BRAND_NAME ?? BRAND.NAME
+ */
+export function resolveBrand(env: Record<string, unknown>, key: keyof typeof BRAND): string {
+  const envKey = `BRAND_${key}`;
+  return (env as Record<string, string>)[envKey] ?? BRAND[key];
+}
