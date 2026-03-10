@@ -35,6 +35,20 @@
  *   POST /api/admin/emails/process      — Admin: trigger email processing
  *   GET  /api/admin/contacts            — Admin: list CRM contacts
  *   GET  /api/admin/notifications       — Admin: notification log
+ *   GET  /api/admin/shares              — Admin: list share leads
+ *   GET  /api/admin/share-owners        — Admin: list share owner stats
+ *   GET  /api/admin/pql-leads           — Admin: list PQL-qualified leads
+ *   GET  /api/admin/outbound/health     — Admin: outbound delivery health
+ *   GET  /api/admin/campaigns/outbound  — Admin: list outbound campaigns
+ *   POST /api/admin/campaigns/outbound  — Admin: create outbound campaign
+ *   GET  /api/admin/campaigns/outbound/:id         — Admin: get campaign
+ *   POST /api/admin/campaigns/outbound/:id/start   — Admin: activate campaign
+ *   POST /api/admin/campaigns/outbound/:id/pause   — Admin: pause campaign
+ *   GET  /api/admin/outbound/channels               — Admin: aggregate channel stats
+ *   GET  /api/admin/outbound/channels/:domain        — Admin: per-prospect channels & attempts
+ *   POST /api/admin/outbound/channels/:domain/attempt — Admin: record manual outreach attempt
+ *
+ *   POST /webhooks/brevo                — Brevo deliverability webhooks
  */
 
 import type { Env } from './types';
@@ -61,10 +75,23 @@ import {
   handleProcessEmails,
   handleListContacts,
   handleListNotifications,
+  handleListShareLeads,
+  handleListShareOwners,
+  handleListPQLLeads,
+  handleOutboundHealth,
+  handleListOutboundCampaigns,
+  handleGetOutboundCampaign,
+  handleCreateOutboundCampaign,
+  handleStartOutboundCampaign,
+  handlePauseOutboundCampaign,
+  handleOutboundChannels,
+  handleOutboundChannelsByDomain,
+  handleRecordManualAttempt,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
+import { handleBrevoWebhook } from './routes/webhooks';
 import { handleSetAffiliatePayoutDetails, handleGetAffiliatePayoutDetails } from './routes/affiliate-payout-setup';
-import { corsPreflightResponse, notFound, tooManyRequests } from './lib/response';
+import { corsPreflightResponse, notFound, tooManyRequests, badRequest } from './lib/response';
 import { processDueEmails } from './lib/email';
 import { checkRateLimit } from './lib/rate-limit';
 
@@ -206,6 +233,73 @@ export default {
       }
       if (method === 'GET' && path === '/api/admin/notifications') {
         return handleListNotifications(request, env);
+      }
+
+      // ── Share Admin Routes ──
+      if (method === 'GET' && path === '/api/admin/shares') {
+        return handleListShareLeads(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/share-owners') {
+        return handleListShareOwners(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/pql-leads') {
+        return handleListPQLLeads(request, env);
+      }
+
+      // ── Outbound Admin Routes ──
+      if (method === 'GET' && path === '/api/admin/outbound/health') {
+        return handleOutboundHealth(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/campaigns/outbound') {
+        return handleListOutboundCampaigns(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/campaigns/outbound') {
+        return handleCreateOutboundCampaign(request, env);
+      }
+      // Parameterised outbound campaign routes
+      if (path.startsWith('/api/admin/campaigns/outbound/')) {
+        const segments = path.split('/');
+        // /api/admin/campaigns/outbound/:id → 5 segments
+        // /api/admin/campaigns/outbound/:id/start → 6 segments
+        // /api/admin/campaigns/outbound/:id/pause → 6 segments
+        const idStr = segments[5];
+        const campaignId = idStr ? parseInt(idStr, 10) : NaN;
+        if (isNaN(campaignId)) return badRequest('Invalid campaign ID');
+
+        const action = segments[6]; // start | pause | undefined
+        if (method === 'GET' && !action) {
+          return handleGetOutboundCampaign(request, env, campaignId);
+        }
+        if (method === 'POST' && action === 'start') {
+          return handleStartOutboundCampaign(request, env, campaignId);
+        }
+        if (method === 'POST' && action === 'pause') {
+          return handlePauseOutboundCampaign(request, env, campaignId);
+        }
+      }
+
+      // ── Outbound Channel Routes ──
+      if (method === 'GET' && path === '/api/admin/outbound/channels') {
+        return handleOutboundChannels(request, env);
+      }
+      if (path.startsWith('/api/admin/outbound/channels/')) {
+        const remainder = path.replace('/api/admin/outbound/channels/', '');
+        // POST /api/admin/outbound/channels/:domain/attempt
+        if (method === 'POST' && remainder.endsWith('/attempt')) {
+          const domain = remainder.replace(/\/attempt$/, '');
+          if (!domain) return badRequest('Missing domain');
+          return handleRecordManualAttempt(request, env, decodeURIComponent(domain));
+        }
+        // GET /api/admin/outbound/channels/:domain
+        if (method === 'GET') {
+          if (!remainder) return badRequest('Missing domain');
+          return handleOutboundChannelsByDomain(request, env, decodeURIComponent(remainder));
+        }
+      }
+
+      // ── Webhooks ──
+      if (method === 'POST' && path === '/webhooks/brevo') {
+        return handleBrevoWebhook(request, env);
       }
 
       // ── Root — worker identifier ──

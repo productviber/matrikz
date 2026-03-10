@@ -23,14 +23,17 @@ import {
 } from '../constants';
 import { query, queryOne, execute, now } from './db';
 import { isUnsubscribed } from '../routes/gdpr';
+import { executeSecondaryChannels } from './channel-orchestrator';
 import {
   checkThrottle,
   checkDomainGap,
   incrementSendCounter,
   recordDomainSend,
   todayDateKey,
+  parseCampaignSchedule,
   COMPLIANCE,
 } from './warmup';
+import type { WarmupStep } from './warmup';
 
 // ─── Sequence Enrollment ────────────────────────────────────────────────────
 
@@ -112,7 +115,11 @@ export async function enrollInSequences(
  *
  * Returns the number of emails sent.
  */
-export async function processDueEmails(env: Env, batchSize: number = PAGINATION.DEFAULT_PAGE_SIZE): Promise<number> {
+export async function processDueEmails(
+  env: Env,
+  batchSize: number = PAGINATION.DEFAULT_PAGE_SIZE,
+  options: { force?: boolean } = {}
+): Promise<number> {
   const currentTime = now();
 
   // Fetch due sends — include trigger_event to identify cold outreach
@@ -139,13 +146,26 @@ export async function processDueEmails(env: Env, batchSize: number = PAGINATION.
   const dateKey = todayDateKey();
   let coldBudgetExhausted = false;
   let coldThrottleChecked = false;
-  const DEFAULT_CAMPAIGN_SLUG = 'cold-outreach-v1';
+
+  // Load the active outbound campaign from D1 (schedule + slug live here)
+  let activeCampaignSlug = 'cold-outreach-v1'; // fallback
+  let activeCampaignSchedule: ReadonlyArray<WarmupStep> | undefined;
+  {
+    const campaign = await queryOne<{ slug: string; warmup_schedule: string | null }>(
+      env.DB,
+      `SELECT slug, warmup_schedule FROM outbound_campaigns WHERE status = 'active' ORDER BY started_at DESC LIMIT 1`
+    );
+    if (campaign) {
+      activeCampaignSlug = campaign.slug;
+      activeCampaignSchedule = parseCampaignSchedule(campaign.warmup_schedule);
+    }
+  }
 
   // ── Business hours gate for cold outreach (8–18 UTC, weekdays) ───
   const nowDate = new Date(currentTime * 1000);
   const utcHour = nowDate.getUTCHours();
   const utcDay = nowDate.getUTCDay(); // 0=Sun, 6=Sat
-  const isBusinessHours = utcDay >= 1 && utcDay <= 5 && utcHour >= 8 && utcHour < 18;
+  const isBusinessHours = options.force || (utcDay >= 1 && utcDay <= 5 && utcHour >= 8 && utcHour < 18);
 
   // ── Auto-pause: check yesterday's deliverability metrics ───────────
   let coldAutoPaused = false;
@@ -204,9 +224,10 @@ export async function processDueEmails(env: Env, batchSize: number = PAGINATION.
       if (!coldThrottleChecked) {
         const throttle = await checkThrottle(
           env.KV_MARKETING,
-          DEFAULT_CAMPAIGN_SLUG,
+          activeCampaignSlug,
           dateKey,
-          currentTime
+          currentTime,
+          activeCampaignSchedule
         );
         coldBudgetExhausted = !throttle.allowed;
         coldThrottleChecked = true;
@@ -281,12 +302,32 @@ export async function processDueEmails(env: Env, batchSize: number = PAGINATION.
           await recordDomainSend(env.KV_MARKETING, domain, now());
         }
 
+        // ── Multi-channel orchestration (step1 only) ──
+        // After sending the primary email, cascade to secondary channels
+        // (contact form) if detected during enrichment.
+        const prospectDomain = String(context.domain ?? domain ?? '');
+        if (prospectDomain) {
+          try {
+            const secondaryChannels = await executeSecondaryChannels(
+              env, prospectDomain, send.contact_email, context,
+              send.template_key, activeCampaignSlug
+            );
+            if (secondaryChannels.length > 0) {
+              console.log(`[Email] Secondary channels used for ${send.contact_email}: ${secondaryChannels.join(', ')}`);
+            }
+          } catch (chErr) {
+            // Non-critical — channel orchestration failure shouldn't affect email flow
+            console.log(`[Email] Channel orchestration error for ${send.contact_email}: ${chErr instanceof Error ? chErr.message : chErr}`);
+          }
+        }
+
         // Re-check budget after each cold send
         const updated = await checkThrottle(
           env.KV_MARKETING,
-          DEFAULT_CAMPAIGN_SLUG,
+          activeCampaignSlug,
           dateKey,
-          now()
+          now(),
+          activeCampaignSchedule
         );
         coldBudgetExhausted = !updated.allowed;
         coldSendIndex++;
@@ -362,32 +403,40 @@ async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
   }
 
   const provider = env.EMAIL_PROVIDER ?? EMAIL_CONFIG.DEFAULT_PROVIDER;
+  const isCold = templateKey.startsWith('cold-outreach-');
 
   if (provider === 'brevo') {
-    await sendViaBrevo(env, to, subject, htmlBody);
+    await sendViaBrevo(env, to, subject, htmlBody, { skipBulkHeaders: isCold });
   } else if (provider === 'sendgrid') {
     await sendViaSendGrid(env, to, subject, htmlBody);
   }
 }
 
-async function sendViaBrevo(env: Env, to: string, subject: string, html: string) {
+async function sendViaBrevo(env: Env, to: string, subject: string, html: string, options?: { skipBulkHeaders?: boolean }) {
   const unsubUrl = APP_URLS.UNSUBSCRIBE(to);
+
+  // Cold outreach: skip List-Unsubscribe and params to avoid bulk/promo signals
+  const payload: Record<string, unknown> = {
+    sender: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+    to: [{ email: to }],
+    subject,
+    htmlContent: html,
+  };
+
+  if (!options?.skipBulkHeaders) {
+    payload.headers = {
+      'List-Unsubscribe': `<${unsubUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    };
+  }
+
   const res = await fetch(EMAIL_CONFIG.BREVO_API_URL, {
     method: 'POST',
     headers: {
       [EMAIL_CONFIG.BREVO_AUTH_HEADER]: env.EMAIL_API_KEY!,
       'Content-Type': CONTENT_TYPE_JSON,
     },
-    body: JSON.stringify({
-      sender: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-      to: [{ email: to }],
-      subject,
-      htmlContent: html,
-      headers: {
-        'List-Unsubscribe': `<${unsubUrl}>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
@@ -464,7 +513,7 @@ function interpolate(template: string, vars: Record<string, unknown>): string {
  * Greeting name variations — adds non-deterministic human feel.
  * Prevents spam-filter pattern detection across 150 daily sends.
  */
-const GREETING_PREFIXES = ['Hi', 'Hey', 'Hello', 'Hi there'];
+const GREETING_PREFIXES = ['Hi', 'Hey', 'Hello', 'Hi there', 'Good morning'];
 
 /**
  * Closing line variations — prevents identical footprints across sends.
@@ -477,6 +526,8 @@ const CLOSING_LINES = [
   'Talk soon,',
   'All the best,',
   'Looking forward to hearing from you,',
+  'Warmly,',
+  'Until next time,',
 ];
 
 /**
@@ -485,21 +536,45 @@ const CLOSING_LINES = [
  */
 const SUBJECT_VARIANTS: Record<string, string[]> = {
   'cold-outreach-step1': [
-    '{{companyName}} — your site scored {{auditScore}}/100 on visibility',
-    '{{companyName}}: free visibility audit results inside',
-    'We audited {{domain}} — {{issueCount}} things to improve',
-    '{{domain}} visibility report: {{auditScore}}/100 (Grade {{auditGrade}})',
+    '{{companyName}} — {{passCount}} strengths and {{issueCount}} weaknesses we noticed',
+    '{{domain}}: {{passCount}} things going well, {{issueCount}} holding you back',
+    'Looked at {{domain}} — {{issueCount}} things stood out',
+    'Quick question about {{companyName}}\'s search presence',
+    '{{companyName}} — {{auditScore}}/100 on a visibility check',
   ],
   'cold-outreach-step2': [
-    'Quick SEO fix for {{companyName}} (3 min read)',
-    'One change that could boost {{domain}}\'s visibility',
-    '{{companyName}} — a specific fix we found for your site',
-    'We found a quick win for {{domain}}',
+    'One thing about {{domain}} I wanted to flag',
+    '{{companyName}} — spotted something worth 3 minutes of your time',
+    'Re: {{domain}} — found a specific improvement',
+    'Following up on {{companyName}}',
   ],
   'cold-outreach-step3': [
-    'Last note about {{companyName}}\'s visibility',
-    'Final follow-up: {{domain}} audit results',
-    '{{companyName}} — closing the loop on your audit',
+    'Last note about {{domain}}',
+    '{{companyName}} — closing the loop',
+    'Wrapping up on {{domain}}',
+    'One last thing re: {{companyName}}',
+  ],
+};
+
+/**
+ * Body copy variants for non-deterministic email content.
+ * Each step has multiple opening paragraph options to avoid identical fingerprints.
+ */
+const BODY_VARIANTS: Record<string, string[]> = {
+  'cold-outreach-step1': [
+    'I was looking at {{domain}} and ran it through our visibility tool. Thought you might want to see what came up.',
+    'I came across {{domain}} and was curious how it stacked up on search visibility. Here\'s what I found.',
+    'I took a look at {{domain}} — a few things stood out that I thought were worth sharing.',
+  ],
+  'cold-outreach-step2': [
+    'I sent over some notes on {{domain}} a few days ago — wanted to flag one specific thing that stood out.',
+    'Following up on my last email — I pulled out the single biggest improvement I\'d focus on for {{domain}}.',
+    'Not sure if you saw my last note. There was one finding for {{domain}} I thought was worth highlighting.',
+  ],
+  'cold-outreach-step3': [
+    'This is my last note about {{domain}} — I promise.',
+    'Just wanted to close the loop on {{domain}} and make sure you had the full picture.',
+    'Last follow-up from me on this — after this, no more emails on this topic.',
   ],
 };
 
@@ -579,6 +654,24 @@ export function prepareTemplateContext(
   // ── Send-time display variation (humanises "sent at" feel) ──
   const timeVariants = ['this morning', 'earlier today', 'just now', 'a moment ago'];
   processed.sendTimePhrase = timeVariants[Math.floor(Math.random() * timeVariants.length)];
+
+  // ── Body copy variation (non-deterministic) ──
+  const bodyPool = BODY_VARIANTS[templateKey];
+  if (bodyPool && bodyPool.length > 0) {
+    const selectedBody = bodyPool[Math.floor(Math.random() * bodyPool.length)];
+    processed.bodyVariant = selectedBody.replace(/\{\{(\w+)\}\}/g, (_, key) => {
+      const val = processed[key];
+      return val !== undefined ? String(val) : '';
+    });
+  }
+
+  // ── Audit page URL (always use /audit?url= for best conversion) ──
+  processed.auditPageUrl = `${APP_URLS.HOME}/audit?url=${processed.domainEncoded}`;
+
+  // Social proof removed from cold outreach — triggers Gmail Promotions tab
+
+  // ── Personal sign-off (builds trust over generic team name) ──
+  processed.personalSignOff = EMAIL_STYLES.SIGN_OFF_PERSONAL;
 
   return processed;
 }
@@ -838,58 +931,48 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
   // See: docs/OUTBOUND_SYSTEM_ARCHITECTURE.md §8.4
 
   'cold-outreach-step1': `
-    <div style="${EMAIL_STYLES.CONTAINER}">
-      <h2 style="${EMAIL_STYLES.HEADING}">{{companyName}} \u2014 your site scored {{auditScore}}/100 on visibility</h2>
+    <div style="font-family: sans-serif;">
       <p>{{greetingPrefix}}{{contactNameGreeting}},</p>
-      <p>We ran a free visibility audit on <strong>{{domain}}</strong> and wanted to share the results \u2014 no strings attached.</p>
-      <div style="background:#f8fafc;border-radius:8px;padding:20px;margin:20px 0;border-left:4px solid #3b82f6">
-        <div style="font-size:28px;font-weight:bold;color:#3b82f6">{{auditScore}}/100 <span style="font-size:16px;color:#64748b">Grade {{auditGrade}}</span></div>
-        <div style="margin-top:8px;color:#334155">
-          <span style="color:#22c55e">\u2713 {{passCount}} passed</span> \u00A0\u00B7\u00A0
-          <span style="color:#ef4444">\u2717 {{issueCount}} issues</span>
-        </div>
-      </div>
-      <p><a href="{{reportUrl}}?utm_source=outbound&utm_medium=email&utm_campaign=cold_outreach&utm_content=step1" style="${EMAIL_STYLES.CTA_PRIMARY}">View Your Full Report \u2192</a></p>
-      <p style="color:#64748b;font-size:14px">This audit is completely free \u2014 we built Visibility to help sites improve their search performance.</p>
-      <p style="font-size:12px;color:#94a3b8">You received this because we found {{domain}} on a public directory and thought our free audit might be useful. We will never send more than 3 emails.</p>
-      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      <p>{{bodyVariant}}</p>
+      <p>The short version:</p>
+      <p>\u2022 Score: {{auditScore}}/100 (Grade {{auditGrade}})<br>
+      \u2022 {{passCount}} things working well<br>
+      \u2022 {{issueCount}} things that could be improved</p>
+      <p>Full breakdown is here if you want to take a look: {{auditPageUrl}}</p>
+      <p>No obligation — I just thought it might be useful.</p>
+      <p style="font-size:12px;color:#999">I found {{domain}} on a public directory. I won't send more than 3 emails about this.</p>
+      <p>{{personalSignOff}}</p>
       {{unsubscribe}}
     </div>
   `,
 
   'cold-outreach-step2': `
-    <div style="${EMAIL_STYLES.CONTAINER}">
-      <h2 style="${EMAIL_STYLES.HEADING}">Quick SEO fix for {{companyName}} (3 min read)</h2>
+    <div style="font-family: sans-serif;">
       <p>{{greetingPrefix}}{{contactNameGreeting}},</p>
-      <p>I shared your visibility audit a few days ago \u2014 wanted to follow up with <strong>one specific fix</strong> that could make a real difference for {{domain}}.</p>
-      <div style="background:#f0fdf4;border-radius:8px;padding:20px;margin:20px 0;border-left:4px solid #22c55e">
-        <div style="font-weight:bold;color:#166534;margin-bottom:8px">{{quickWinTitle}}</div>
-        <div style="color:#334155;margin-bottom:4px">\u2192 {{quickWinAction}}</div>
-        <div style="color:#64748b;font-size:14px">Expected impact: {{quickWinImpact}}</div>
-      </div>
-      <p>For context, sites in <strong>{{primaryTopic}}</strong> that address this typically see a <strong>15-25% improvement</strong> in search impressions within 4-6 weeks.</p>
-      <p><a href="{{reportUrl}}?utm_source=outbound&utm_medium=email&utm_campaign=cold_outreach&utm_content=step2" style="${EMAIL_STYLES.CTA_PRIMARY}">Track Your Progress \u2192</a></p>
-      <p style="font-size:12px;color:#94a3b8">Not interested? {{unsubscribeLink}}</p>
-      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      <p>{{bodyVariant}}</p>
+      <p>The issue: {{quickWinTitle}}<br>
+      What to do: {{quickWinAction}}<br>
+      Why it matters: {{quickWinImpact}}</p>
+      <p>Sites in {{primaryTopic}} that fix this tend to see a noticeable bump in search impressions within a few weeks.</p>
+      <p>Here's the full breakdown if you want it: {{auditPageUrl}}</p>
+      <p style="font-size:12px;color:#999">Not interested? {{unsubscribeLink}}</p>
+      <p>{{personalSignOff}}</p>
       {{unsubscribe}}
     </div>
   `,
 
   'cold-outreach-step3': `
-    <div style="${EMAIL_STYLES.CONTAINER}">
-      <h2 style="${EMAIL_STYLES.HEADING}">Last note about {{companyName}}'s visibility</h2>
+    <div style="font-family: sans-serif;">
       <p>{{greetingPrefix}}{{contactNameGreeting}},</p>
-      <p>This is my last email about your site's visibility audit \u2014 I promise.</p>
-      <p>Quick recap of what we found for <strong>{{domain}}</strong>:</p>
-      <ul style="color:#334155;line-height:1.8">
-        <li>Visibility score: <strong>{{auditScore}}/100</strong> (Grade {{auditGrade}})</li>
-        <li>{{issueCount}} improvement opportunities identified</li>
-        <li>Tech detected: {{techStackDisplay}}</li>
-      </ul>
-      <p><a href="{{reportUrl}}?utm_source=outbound&utm_medium=email&utm_campaign=cold_outreach&utm_content=step3" style="${EMAIL_STYLES.CTA_PRIMARY}">View Your Full Report \u2192</a></p>
-      <p style="color:#64748b;font-size:14px">If you ever want to track how your visibility changes over time, you can <a href="${APP_URLS.HOME}/audit?url={{domainEncoded}}&connect=gsc" style="color:#3b82f6">connect Google Search Console for free</a>.</p>
-      <p>Either way, I hope the audit was useful. <strong>No more emails from us on this.</strong></p>
-      <p style="${EMAIL_STYLES.FOOTER}">${EMAIL_STYLES.SIGN_OFF}</p>
+      <p>{{bodyVariant}}</p>
+      <p>Quick recap for {{domain}}:</p>
+      <p>\u2022 Visibility score: {{auditScore}}/100 (Grade {{auditGrade}})<br>
+      \u2022 {{issueCount}} improvement opportunities<br>
+      \u2022 Tech detected: {{techStackDisplay}}</p>
+      <p>Your competitors in {{primaryTopic}} may already be working on theirs.</p>
+      <p>Full details: {{auditPageUrl}}</p>
+      <p>Either way, I hope this was useful. No more emails from me on this.</p>
+      <p>{{personalSignOff}}</p>
       {{unsubscribe}}
     </div>
   `,

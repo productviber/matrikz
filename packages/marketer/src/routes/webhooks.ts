@@ -14,7 +14,7 @@
 
 import type { Env } from '../types';
 import { ok, badRequest, serverError } from '../lib/response';
-import { execute } from '../lib/db';
+import { execute, query } from '../lib/db';
 import {
   KV_UNSUBSCRIBE_PREFIX,
   TTL,
@@ -131,6 +131,11 @@ export async function handleBrevoWebhook(
 
     // Update daily deliverability counters for auto-pause checks
     await incrementDeliverabilityCounter(env, event);
+
+    // Sync channel_attempts table with Brevo delivery outcome
+    await syncChannelAttemptStatus(env, emailLower, event).catch((err) => {
+      console.error(`[Webhook:Brevo] channel_attempts sync error for ${emailLower}:`, err);
+    });
 
     // Emit reverse tracking event to analytics (non-blocking)
     emitTrackingEvent(env, event, emailLower, payload).catch(() => {
@@ -407,4 +412,47 @@ async function emitTrackingEvent(
   } catch (err) {
     console.warn(`[Webhook:Brevo] Failed to emit tracking event ${eventType}:`, err);
   }
+}
+
+// ─── Channel Attempt Sync ───────────────────────────────────────────────────
+
+/**
+ * Map Brevo webhook events to channel_attempts status updates.
+ *
+ * When the orchestrator records an email attempt, it marks it as 'attempted'.
+ * This function upgrades that status based on Brevo's actual outcome:
+ *   - delivered / opened / click → 'delivered'
+ *   - hard_bounce / soft_bounce / invalid_email / blocked → 'failed'
+ *   - spam / unsubscribed → 'failed'
+ */
+async function syncChannelAttemptStatus(
+  env: Env,
+  email: string,
+  brevoEvent: string
+): Promise<void> {
+  const statusMap: Record<string, string> = {
+    delivered:     'delivered',
+    opened:        'delivered',
+    click:         'delivered',
+    hard_bounce:   'failed',
+    soft_bounce:   'failed',
+    invalid_email: 'failed',
+    blocked:       'failed',
+    spam:          'failed',
+    unsubscribed:  'failed',
+  };
+
+  const newStatus = statusMap[brevoEvent];
+  if (!newStatus) return;
+
+  // Update the most recent 'attempted' email channel_attempt for this contact.
+  // Only upgrade 'attempted' → delivered/failed (never downgrade 'delivered' → 'failed').
+  await execute(
+    env.DB,
+    `UPDATE channel_attempts
+     SET status = ?, response_code = NULL, error = ?
+     WHERE contact_email = ? AND channel_type = 'email' AND status = 'attempted'
+     ORDER BY attempted_at DESC LIMIT 1`,
+    [newStatus, brevoEvent === 'delivered' || brevoEvent === 'opened' || brevoEvent === 'click' ? null : brevoEvent, email]
+  );
 }
