@@ -26,6 +26,8 @@ export interface Env {
   FROM_EMAIL: string;
   FROM_NAME: string;
   ADMIN_TOKEN: string;
+  /** Optional rollover admin token (accept during rotation window) */
+  ADMIN_TOKEN_ROLLOVER?: string;
   EMAIL_API_KEY?: string;           // Brevo / SendGrid API key
   EMAIL_PROVIDER?: 'brevo' | 'sendgrid';
   SLACK_WEBHOOK_URL?: string;
@@ -40,6 +42,22 @@ export interface Env {
   RAZORPAY_KEY_SECRET?: string;
   /** Stripe secret key for transfer disbursement */
   STRIPE_SECRET_KEY?: string;
+  /** Optional token for non-service-binding system-to-system calls */
+  SYSTEM_TOKEN?: string;
+  /** Optional rollover token for system calls */
+  SYSTEM_TOKEN_ROLLOVER?: string;
+  /** Optional token for agentic automation access lane */
+  AGENT_TOKEN?: string;
+  /** Optional rollover token for agentic automation */
+  AGENT_TOKEN_ROLLOVER?: string;
+  /** Optional token for webhook ingestion hardening */
+  WEBHOOK_TOKEN?: string;
+  /** Optional rollover token for webhook ingress */
+  WEBHOOK_TOKEN_ROLLOVER?: string;
+  /** Secret used to issue/verify signed affiliate user sessions */
+  AFFILIATE_AUTH_SECRET?: string;
+  /** Optional webhook body signing secret for HMAC verification */
+  WEBHOOK_SIGNING_SECRET?: string;
 }
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────
@@ -64,8 +82,8 @@ export interface AffiliateConversionData {
 
 export interface UserConvertedData {
   userId: string;
-  purchaseType: string;  // 'base' | 'pro' | 'enterprise' | 'credits'
-  plan: string;           // 'monthly' | 'yearly' | 'pro' | 'credits'
+  purchaseType: string;  // 'starter' | 'growth' | 'pro'
+  plan: string;           // 'starter' | 'growth' | 'pro'
   amountCents: number;
   gateway: string;        // 'stripe' | 'razorpay'
 }
@@ -100,8 +118,83 @@ export interface AffiliateClickData {
 
 export interface InsightGeneratedData {
   userId: string;
-  headlineType: string;
-  insightCategory: string;
+  insightCount: number;
+  topInsightType: string;
+  severity: string;
+  /** @deprecated kept for backward compat — use topInsightType */
+  headlineType?: string;
+  /** @deprecated kept for backward compat — use topInsightType */
+  insightCategory?: string;
+}
+
+export interface PlanUpgradedData {
+  userId: string;
+  previousPlan: string;
+  newPlan: string;
+  amountCents: number;
+  gateway: string;
+  period: string;       // 'monthly' | 'yearly'
+}
+
+export interface PlanDowngradedData {
+  userId: string;
+  previousPlan: string;
+  newPlan: string;
+  amountCents: number;
+  gateway: string;
+  period: string;       // 'monthly' | 'yearly'
+}
+
+export interface TrialExpiringData {
+  userId: string;
+  plan: string;
+  daysRemaining: number;
+  expiresAt: string;    // ISO 8601
+}
+
+// ─── Share Event Payloads (from visibility-analytics micro-share system) ────
+
+/** All share events include these PLG/PQL fields */
+interface ShareEventBase {
+  category: 'share';
+  plgStage: string;     // awareness | activation | engagement | intent | conversion | lifecycle
+  pqlScoreHint: number; // 0-100, additive hint for PQL scoring
+}
+
+export interface ShareCreatedData extends ShareEventBase {
+  owner: string;        // owner's email
+  token: string;        // vs_xxx share token
+  scopes: string[];     // e.g. ['pulse', 'action']
+  role: string;         // viewer | analyst | collaborator
+  tier: string;         // owner's billing tier
+}
+
+export interface ShareViewedData extends ShareEventBase {
+  token: string;
+  owner?: string;       // share owner email (sent by analytics)
+  accessCount: number;  // cumulative view count
+  scopes: string[];
+  ip?: string;          // viewer IP (sent by analytics)
+}
+
+export interface ShareEngagedData extends ShareEventBase {
+  token: string;
+  dwellSeconds: number; // 30, 60, 120, or 300
+}
+
+export interface ShareCTAClickedData extends ShareEventBase {
+  token: string;
+  dwellSeconds: number; // time spent before clicking
+}
+
+export interface ShareConvertedData extends ShareEventBase {
+  shareToken: string;   // attributed share link token
+  newUserId: string;    // email of newly signed-up user
+}
+
+export interface ShareRevokedData extends ShareEventBase {
+  owner: string;
+  token: string;
 }
 
 // ─── Known Event Types ──────────────────────────────────────────────────────
@@ -113,14 +206,108 @@ export type KnownEventType =
   | 'user.churned'
   | 'user.milestone'
   | 'affiliate.click'
-  | 'insight.generated';
+  | 'insight.generated'
+  | 'trial.expiring'
+  | 'plan.upgraded'
+  | 'plan.downgraded'
+  | 'share.created'
+  | 'share.viewed'
+  | 'share.engaged'
+  | 'share.cta_clicked'
+  | 'share.converted'
+  | 'share.revoked'
+  | 'outbound.prospect_discovered'
+  | 'outbound.prospect_enriched'
+  | 'audit.completed'
+  | 'lead.captured';
+
+// ─── Audit Funnel Event Payloads (from analytics free-audit flow) ───────────
+
+/** Payload for audit.completed events — anonymous domain-level signal */
+export interface AuditCompletedData {
+  domain: string;
+  score: number;
+  grade: string;
+  url: string;
+  issueCount?: number;
+  passCount?: number;
+}
+
+/** Payload for lead.captured events — identified user from audit confirmation */
+export interface LeadCapturedData {
+  email: string;
+  domain: string;
+  source: string;    // 'free-audit'
+  score: number;
+  grade: string;
+  url: string;
+}
+
+// ─── Outbound Event Payloads (from analytics discovery/enrichment) ──────────
+
+/** Payload for outbound.prospect_discovered events */
+export interface OutboundProspectDiscoveredData {
+  prospectId: number;
+  domain: string;
+  companyName: string | null;
+  contactEmail: string | null;
+  contactName: string | null;
+  contactTitle: string | null;
+  source: string;          // 'apollo' | 'producthunt' | 'hackernews' | 'reddit' | 'manual'
+  sourceUrl: string | null;
+  industry: string | null;
+  employeeRange: string | null;
+  score: number;           // 0-100 prospect quality score
+  description: string | null;
+}
+
+/** Contact form detected on prospect's website */
+export interface ContactForm {
+  action: string;      // Form action URL (absolute)
+  method: string;      // HTTP method (POST/GET)
+  fields: string[];    // Named input/textarea fields found
+  pageUrl: string;     // Page where the form was found
+  type: string;        // 'contact'
+}
+
+/** Social media profiles detected on prospect's website */
+export interface SocialHandles {
+  twitter: string | null;
+  linkedin: string | null;
+  facebook: string | null;
+  github: string | null;
+  instagram: string | null;
+}
+
+/** Payload for outbound.prospect_enriched events */
+export interface OutboundProspectEnrichedData {
+  prospectId: number;
+  domain: string;
+  companyName: string | null;
+  contactEmail: string | null;
+  contactName: string | null;
+  source?: string;          // 'apollo' | 'producthunt' | 'hackernews' | 'reddit' | 'manual'
+  score: number;
+  auditScore: number | null;
+  auditGrade: string | null;
+  issueCount: number | null;
+  passCount: number | null;
+  techStack: string[];
+  trafficEstimate?: string | null;
+  primaryTopic: string | null;
+  angles: Array<{ type: string; hook: string; detail: string }>;
+  wordCount: number | null;
+  reportUrl?: string | null;
+  contactForms?: ContactForm[];
+  socialHandles?: SocialHandles;
+}
 
 // ─── D1 Row Types — Marketing DB ────────────────────────────────────────────
 
 export interface MarketingContactRow {
   id: number;
   email: string;
-  status: 'lead' | 'trial' | 'customer' | 'churned';
+  status: 'prospect' | 'lead' | 'trial' | 'customer' | 'churned' | 'engaged';
   source: string | null;
   affiliate_code: string | null;
   first_seen_at: number;
@@ -129,6 +316,37 @@ export interface MarketingContactRow {
   gateway: string | null;
   total_spent_cents: number;
   metadata: string | null;  // JSON string
+  updated_at: number;
+}
+
+export interface ShareLeadRow {
+  id: number;
+  token: string;
+  owner_email: string | null;
+  status: string;       // cold | warm | hot | pql | converted | revoked
+  plg_stage: string;    // PLG funnel stage
+  pql_score: number;
+  total_views: number;
+  total_dwell_seconds: number;
+  scopes_viewed: string | null;  // JSON array
+  first_seen_at: number;
+  last_seen_at: number;
+  converted_user_id: string | null;
+  converted_at: number | null;
+  metadata: string | null;
+  updated_at: number;
+}
+
+export interface ShareOwnerStatsRow {
+  id: number;
+  owner_email: string;
+  total_shares: number;
+  total_views: number;
+  total_engagements: number;
+  total_cta_clicks: number;
+  total_conversions: number;
+  last_share_at: number | null;
+  last_conversion_at: number | null;
   updated_at: number;
 }
 
@@ -333,6 +551,28 @@ export const DEFAULT_SEQUENCES: SequenceDefinition[] = [
       { subject: 'Final reminder — your data expires soon', templateKey: 'winback-day14', delaySeconds: 1_209_600 },
     ],
   },
+  // ── Share PLG Sequences ──
+  {
+    name: 'Share Lead Warm Followup',
+    triggerEvent: 'share.engaged',
+    steps: [
+      { subject: 'Someone is exploring your shared insights', templateKey: 'share-engaged-owner', delaySeconds: 0 },
+    ],
+  },
+  {
+    name: 'Share CTA Dropout',
+    triggerEvent: 'share.cta_clicked',
+    steps: [
+      { subject: 'Still interested? Pick up where you left off', templateKey: 'share-cta-dropout', delaySeconds: 86_400 },
+    ],
+  },
+  {
+    name: 'Share Conversion Celebration',
+    triggerEvent: 'share.converted',
+    steps: [
+      { subject: 'Someone you shared with just signed up!', templateKey: 'share-conversion-owner', delaySeconds: 0 },
+    ],
+  },
 ];
 
 // ─── API Response Types ─────────────────────────────────────────────────────
@@ -387,4 +627,8 @@ export interface DashboardMetrics {
   pendingPayoutsCents: number;
   activeSequences: number;
   emailsSentToday: number;
+  // Share PLG metrics
+  dailyShareViews: number;
+  totalPQLs: number;
+  shareConversionsToday: number;
 }

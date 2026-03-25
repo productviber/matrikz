@@ -7,12 +7,24 @@
 
 // ─── Mock KV Namespace ─────────────────────────────────────────────────────
 
-export function createMockKV(): Record<string, any> & { _store: Map<string, string> } {
+export interface MockKVNamespace {
+  _store: Map<string, string>;
+  get(key: string, format?: 'json'): Promise<any>;
+  put(key: string, value: string, opts?: unknown): Promise<void>;
+  delete(key: string): Promise<void>;
+  list(opts?: unknown): Promise<{ keys: { name: string }[] }>;
+}
+
+export function createMockKV(): MockKVNamespace {
   const store = new Map<string, string>();
   return {
     _store: store,
-    async get(key: string): Promise<string | null> {
-      return store.get(key) ?? null;
+    async get(key: string, format?: 'json'): Promise<unknown | null> {
+      const raw = store.get(key) ?? null;
+      if (raw !== null && format === 'json') {
+        return JSON.parse(raw);
+      }
+      return raw;
     },
     async put(key: string, value: string, _opts?: unknown): Promise<void> {
       store.set(key, value);
@@ -173,6 +185,15 @@ export interface MockEnv {
   SLACK_WEBHOOK_URL: string;
   DISCORD_WEBHOOK_URL: string;
   ENVIRONMENT: 'development' | 'production';
+  ADMIN_TOKEN_ROLLOVER?: string;
+  SYSTEM_TOKEN?: string;
+  SYSTEM_TOKEN_ROLLOVER?: string;
+  AGENT_TOKEN?: string;
+  AGENT_TOKEN_ROLLOVER?: string;
+  WEBHOOK_TOKEN?: string;
+  WEBHOOK_TOKEN_ROLLOVER?: string;
+  AFFILIATE_AUTH_SECRET?: string;
+  WEBHOOK_SIGNING_SECRET?: string;
 }
 
 export function createMockEnv(overrides: Partial<MockEnv> = {}): MockEnv {

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { upsertContact, getContact, markAsCustomer, markAsChurned } from '../../src/lib/crm';
+import { upsertContact, getContact, markAsCustomer, markAsChurned, getContactByShareToken } from '../../src/lib/crm';
 import { createMockEnv, type MockEnv } from '../helpers';
 
 describe('crm', () => {
@@ -96,6 +96,31 @@ describe('crm', () => {
     it('returns null when not found', async () => {
       const contact = await getContact(env as any, 'missing@test.com');
       expect(contact).toBeNull();
+    });
+  });
+
+  describe('getContactByShareToken()', () => {
+    it('returns the contact associated with a share token', async () => {
+      env.DB.onQuery(/SELECT mc\.\* FROM marketing_contacts mc[\s\S]*INNER JOIN share_leads/, () => [
+        { id: 42, email: 'owner@test.com', status: 'customer', plan: 'pro' },
+      ]);
+
+      const contact = await getContactByShareToken(env as any, 'tok_abc123');
+      expect(contact).not.toBeNull();
+      expect(contact!.email).toBe('owner@test.com');
+      expect(contact!.status).toBe('customer');
+    });
+
+    it('returns null when token has no matching contact', async () => {
+      const contact = await getContactByShareToken(env as any, 'tok_nonexistent');
+      expect(contact).toBeNull();
+    });
+
+    it('passes the token as a query parameter', async () => {
+      await getContactByShareToken(env as any, 'tok_check_param');
+      const q = env.DB._queries.find((q) => q.sql.includes('share_leads'));
+      expect(q).toBeDefined();
+      expect(q!.params).toContain('tok_check_param');
     });
   });
 });

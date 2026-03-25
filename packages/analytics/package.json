@@ -7,7 +7,9 @@
     "dev": "wrangler dev",
     "build": "vite build",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:unit": "vitest run"
   },
   "dependencies": {
     "@visibility/design-system": "file:../design-system",
@@ -22,6 +24,7 @@
     "@vitejs/plugin-react": "^4.0.0",
     "typescript": "^5.3.0",
     "@types/react": "^18.2.0",
-    "wrangler": "^3.0.0"
+    "wrangler": "^3.0.0",
+    "vitest": "^2.1.9"
   }
 }

@@ -1,4 +1,4 @@
-# Dependencies
+﻿# Dependencies
 node_modules
 *.pnp
 pnpm-lock.yaml
@@ -34,3 +34,6 @@ worker_imports
 # Environment
 .env
 .env.production
+.dev.vars
+**/.dev.vars
+

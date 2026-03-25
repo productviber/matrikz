@@ -30,33 +30,7 @@ describe('payouts routes', () => {
     });
   }
 
-  // ─── Auth ─────────────────────────────────────────────────────────────
-
-  describe('auth requirements', () => {
-    it('create batch requires admin auth', async () => {
-      const req = makeRequest('POST', '/api/payouts/batch');
-      const res = await handleCreatePayoutBatch(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('process batch requires admin auth', async () => {
-      const req = makeRequest('POST', '/api/payouts/batch/1/process');
-      const res = await handleProcessPayoutBatch(req, env as any, 1);
-      expect(res.status).toBe(401);
-    });
-
-    it('list batches requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/payouts');
-      const res = await handleListPayoutBatches(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('get batch detail requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/payouts/1');
-      const res = await handleGetPayoutBatch(req, env as any, 1);
-      expect(res.status).toBe(401);
-    });
-  });
+  // Auth is enforced centrally by resolveRouteLane() in index.ts
 
   // ─── Create Payout Batch ──────────────────────────────────────────────
 

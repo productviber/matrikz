@@ -12,6 +12,7 @@
  *
  *   GET  /api/affiliate/portal          — Affiliate self-service dashboard
  *   GET  /api/affiliate/stats           — Quick affiliate stats
+ *   POST /api/affiliate/session         — Exchange affiliate credentials for signed session token
  *   POST /api/affiliate/apply           — Affiliate recruitment form
  *   POST /api/affiliate/approve         — Admin: approve affiliate application
  *   GET  /api/affiliate/applications    — Admin: list pending applications
@@ -61,9 +62,10 @@ import {
   ROUTE,
   MESSAGES,
   RATE_LIMIT,
-} from './constants';import { routeEvent } from './events/router';
+} from './constants'; import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
 import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
+import { handleCreateAffiliateSession } from './routes/affiliate-session';
 import { handleAffiliateApply, handleAffiliateApprove, handleListApplications } from './routes/affiliate-recruitment';
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleReferralRedirect, handleUpdateCampaign } from './routes/campaigns';
 import { handleCreatePayoutBatch, handleProcessPayoutBatch, handleListPayoutBatches, handleGetPayoutBatch } from './routes/payouts';
@@ -87,19 +89,53 @@ import {
   handleOutboundChannels,
   handleOutboundChannelsByDomain,
   handleRecordManualAttempt,
+  handleAbStats,
+  handleLinkedinQueue,
+  handleOutboundFunnel,
+  handleCrossSystemHealth,
+  handleOutboundSLO,
+  handleReputationTrend,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
-import { handleBrevoWebhook } from './routes/webhooks';
+import { handleBrevoWebhook, handleBrevoInbound } from './routes/webhooks';
 import { handleSetAffiliatePayoutDetails, handleGetAffiliatePayoutDetails } from './routes/affiliate-payout-setup';
 import { corsPreflightResponse, notFound, tooManyRequests, badRequest } from './lib/response';
+import {
+  accessDenied,
+  ensureAdminAccess,
+  ensureAgenticAccess,
+  ensureSystemAccess,
+  ensureWebhookAccess,
+  ensureUserAccess,
+  auditDeniedAdminAttempt,
+} from './lib/access';
+import { resolveRouteLane } from './lib/route-lanes';
 import { processDueEmails } from './lib/email';
 import { checkRateLimit } from './lib/rate-limit';
+import { validateConfig } from './lib/config';
+import { toErrorResponse } from './lib/errors';
+import { logEvent } from './lib/observability';
+import { correlationIdFromRequest, setCorrelationId, clearCorrelationId } from './lib/correlation';
+import { captureReputationSnapshot } from './lib/reputation';
 
 export default {
   /**
    * Main fetch handler — routes requests to the appropriate handler.
    */
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // ── Set correlation ID from incoming request (or generate new) ──
+    correlationIdFromRequest(request);
+
+    // ── Validate required bindings at first request ──
+    const configErrors = validateConfig(env);
+    if (configErrors.length > 0) {
+      console.error(`[Worker] Missing required config: ${configErrors.join(', ')}`);
+      return new Response(
+        JSON.stringify({ ok: false, error: 'Worker misconfigured' }),
+        { status: 503, headers: { 'Content-Type': CONTENT_TYPE_JSON } }
+      );
+    }
+
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
       return corsPreflightResponse();
@@ -111,6 +147,22 @@ export default {
 
     try {
       // ── Service binding events from visibility-analytics ──
+      const lane = resolveRouteLane(method, path);
+      if (lane) {
+        const source = request.headers.get('x-source') ?? undefined;
+        const decision =
+          lane === 'admin' ? ensureAdminAccess(request, env)
+            : lane === 'agentic' ? ensureAgenticAccess(request, env)
+              : lane === 'system' ? ensureSystemAccess(request, env, source)
+                : lane === 'webhook' ? ensureWebhookAccess(request, env)
+                  : await ensureUserAccess(request, env);
+
+        if (!decision.ok) {
+          await auditDeniedAdminAttempt(env, request, decision);
+          return accessDenied(decision);
+        }
+      }
+
       if (method === 'POST' && path === '/events') {
         return routeEvent(request, env, ctx);
       }
@@ -135,6 +187,9 @@ export default {
       }
       if (method === 'GET' && path === '/api/affiliate/stats') {
         return handleAffiliateStats(request, env);
+      }
+      if (method === 'POST' && path === '/api/affiliate/session') {
+        return handleCreateAffiliateSession(request, env);
       }
       if (method === 'POST' && path === '/api/affiliate/apply') {
         // Rate limit: 5 applications per hour per IP
@@ -250,6 +305,24 @@ export default {
       if (method === 'GET' && path === '/api/admin/outbound/health') {
         return handleOutboundHealth(request, env);
       }
+      if (method === 'GET' && path === '/api/admin/outbound/funnel') {
+        return handleOutboundFunnel(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/system-health') {
+        return handleCrossSystemHealth(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/slo') {
+        return handleOutboundSLO(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/reputation') {
+        return handleReputationTrend(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/ab-stats') {
+        return handleAbStats(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/linkedin-queue') {
+        return handleLinkedinQueue(request, env);
+      }
       if (method === 'GET' && path === '/api/admin/campaigns/outbound') {
         return handleListOutboundCampaigns(request, env);
       }
@@ -301,6 +374,9 @@ export default {
       if (method === 'POST' && path === '/webhooks/brevo') {
         return handleBrevoWebhook(request, env);
       }
+      if (method === 'POST' && path === '/webhooks/brevo/inbound') {
+        return handleBrevoInbound(request, env);
+      }
 
       // ── Root — worker identifier ──
       if (method === 'GET' && path === '/') {
@@ -319,10 +395,7 @@ export default {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[Worker] Unhandled error on ${method} ${path}:`, msg);
-      return new Response(
-        JSON.stringify({ ok: false, error: MESSAGES.errors.internalError }),
-        { status: 500, headers: { 'Content-Type': CONTENT_TYPE_JSON } }
-      );
+      return toErrorResponse(err);
     }
   },
 
@@ -331,13 +404,26 @@ export default {
    * Configure crons in wrangler.toml triggers section.
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    setCorrelationId(`cron-${Date.now().toString(36)}`);
     console.log(`[Cron] Triggered at ${new Date(event.scheduledTime).toISOString()}`);
+    ctx.waitUntil(logEvent(env, 'cron.triggered', { scheduledTime: event.scheduledTime }));
 
     ctx.waitUntil(
       processDueEmails(env, PAGINATION.CRON_BATCH_SIZE).then((count) => {
         console.log(`[Cron] Processed ${count} due emails`);
+        return logEvent(env, 'cron.processDueEmails.completed', { processed: count });
       }).catch((err) => {
         console.error('[Cron] Email processing error:', err);
+        return logEvent(env, 'cron.processDueEmails.failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }, 'error');
+      })
+    );
+
+    // Daily reputation snapshot — idempotent, runs once per UTC day
+    ctx.waitUntil(
+      captureReputationSnapshot(env).catch((err) => {
+        console.warn('[Cron] Reputation snapshot failed:', err instanceof Error ? err.message : err);
       })
     );
   },

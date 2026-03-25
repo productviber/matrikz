@@ -80,6 +80,22 @@ export async function getContact(env: Env, email: string): Promise<MarketingCont
 }
 
 /**
+ * Reverse lookup: find the marketing contact who owns a share link token.
+ * Joins share_leads → marketing_contacts on owner_email.
+ * Returns null if the token doesn't exist, has no owner, or the owner has no contact record.
+ */
+export async function getContactByShareToken(env: Env, token: string): Promise<MarketingContactRow | null> {
+  return queryOne<MarketingContactRow>(
+    env.DB,
+    `SELECT mc.* FROM marketing_contacts mc
+     INNER JOIN share_leads sl ON sl.owner_email = mc.email
+     WHERE sl.token = ?
+     LIMIT 1`,
+    [token]
+  );
+}
+
+/**
  * Move a contact to customer status after purchase.
  */
 export async function markAsCustomer(

@@ -14,6 +14,9 @@ import {
   handleProcessEmails,
   handleListContacts,
   handleListNotifications,
+  handleListShareLeads,
+  handleListShareOwners,
+  handleListPQLLeads,
 } from '../../src/routes/admin';
 import { createMockEnv, makeRequest, type MockEnv } from '../helpers';
 
@@ -46,51 +49,8 @@ describe('admin routes', () => {
     });
   }
 
-  // ─── Auth Gates ────────────────────────────────────────────────────────
-
-  describe('auth requirements', () => {
-    it('dashboard requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/dashboard');
-      const res = await handleAdminDashboard(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('MRR history requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/mrr');
-      const res = await handleMrrHistory(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('list sequences requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/emails/sequences');
-      const res = await handleListSequences(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('list email sends requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/emails/sends');
-      const res = await handleListEmailSends(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('process emails requires admin auth', async () => {
-      const req = makeRequest('POST', '/api/admin/emails/process');
-      const res = await handleProcessEmails(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('list contacts requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/contacts');
-      const res = await handleListContacts(req, env as any);
-      expect(res.status).toBe(401);
-    });
-
-    it('list notifications requires admin auth', async () => {
-      const req = makeRequest('GET', '/api/admin/notifications');
-      const res = await handleListNotifications(req, env as any);
-      expect(res.status).toBe(401);
-    });
-  });
+  // Auth is enforced centrally at router level via resolveRouteLane() in index.ts.
+  // Handler-level auth tests removed — see route-lanes.test.ts and access.test.ts.
 
   // ─── Dashboard ─────────────────────────────────────────────────────────
 
@@ -266,6 +226,148 @@ describe('admin routes', () => {
       const res = await handleListNotifications(req, env as any);
       const body = await res.json() as any;
       expect(body.data.limit).toBe(10);
+    });
+  });
+
+  // ─── Share Admin Endpoints ────────────────────────────────────────────
+
+  describe('handleListShareLeads()', () => {
+    beforeEach(() => {
+      env.DB.onQuery(/SELECT \* FROM share_leads/, () => [
+        { id: 1, token: 'vs_abc', status: 'warm', pql_score: 25, owner_email: 'o@test.com' },
+      ]);
+      env.DB.onQuery(/SELECT COUNT.*share_leads/, () => [{ count: 1 }]);
+    });
+
+    it('returns share leads with pagination', async () => {
+      const req = adminRequest('GET', '/api/admin/shares');
+      const res = await handleListShareLeads(req, env as any);
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.ok).toBe(true);
+      expect(body.data.leads).toBeDefined();
+      expect(body.data.total).toBe(1);
+      expect(body.data.page).toBe(1);
+    });
+
+    it('filters by status', async () => {
+      const req = adminRequest('GET', '/api/admin/shares?status=warm');
+      const res = await handleListShareLeads(req, env as any);
+      expect(res.status).toBe(200);
+      const statusQuery = env.DB._queries.find(q => q.params.includes('warm'));
+      expect(statusQuery).toBeDefined();
+    });
+
+    it('filters by owner', async () => {
+      const req = adminRequest('GET', '/api/admin/shares?owner=o@test.com');
+      const res = await handleListShareLeads(req, env as any);
+      expect(res.status).toBe(200);
+      const ownerQuery = env.DB._queries.find(q => q.params.includes('o@test.com'));
+      expect(ownerQuery).toBeDefined();
+    });
+
+    it('supports pagination params', async () => {
+      const req = adminRequest('GET', '/api/admin/shares?page=2&limit=10');
+      const res = await handleListShareLeads(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.page).toBe(2);
+      expect(body.data.limit).toBe(10);
+    });
+  });
+
+  describe('handleListShareOwners()', () => {
+    beforeEach(() => {
+      env.DB.onQuery(/SELECT \* FROM share_owner_stats/, () => [
+        { id: 1, owner_email: 'o@test.com', total_shares: 5, total_views: 100, total_conversions: 3 },
+      ]);
+      env.DB.onQuery(/SELECT COUNT.*share_owner_stats/, () => [{ count: 1 }]);
+    });
+
+    it('returns share owners sorted by conversions', async () => {
+      const req = adminRequest('GET', '/api/admin/share-owners');
+      const res = await handleListShareOwners(req, env as any);
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.ok).toBe(true);
+      expect(body.data.owners).toBeDefined();
+      expect(body.data.total).toBe(1);
+    });
+
+    it('supports pagination', async () => {
+      const req = adminRequest('GET', '/api/admin/share-owners?page=3&limit=5');
+      const res = await handleListShareOwners(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.page).toBe(3);
+      expect(body.data.limit).toBe(5);
+    });
+  });
+
+  describe('handleListPQLLeads()', () => {
+    beforeEach(() => {
+      env.DB.onQuery(/SELECT \* FROM share_leads WHERE pql_score/, () => [
+        { id: 1, token: 'vs_pql', status: 'pql', pql_score: 85, owner_email: 'o@test.com' },
+      ]);
+      env.DB.onQuery(/SELECT COUNT.*share_leads WHERE pql_score/, () => [{ count: 1 }]);
+    });
+
+    it('returns PQL leads with default minScore=50', async () => {
+      const req = adminRequest('GET', '/api/admin/pql-leads');
+      const res = await handleListPQLLeads(req, env as any);
+      expect(res.status).toBe(200);
+      const body = await res.json() as any;
+      expect(body.ok).toBe(true);
+      expect(body.data.leads).toBeDefined();
+      expect(body.data.minScore).toBe(50);
+    });
+
+    it('supports custom minScore', async () => {
+      const req = adminRequest('GET', '/api/admin/pql-leads?minScore=80');
+      const res = await handleListPQLLeads(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.minScore).toBe(80);
+      const scoreQuery = env.DB._queries.find(q => q.params.includes(80));
+      expect(scoreQuery).toBeDefined();
+    });
+
+    it('supports pagination', async () => {
+      const req = adminRequest('GET', '/api/admin/pql-leads?page=2&limit=15');
+      const res = await handleListPQLLeads(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.page).toBe(2);
+      expect(body.data.limit).toBe(15);
+    });
+  });
+
+  // ─── Dashboard Share Metrics ──────────────────────────────────────────
+
+  describe('dashboard share PLG metrics', () => {
+    beforeEach(() => {
+      env.DB.onQuery(/share_leads WHERE status = 'pql'/, () => [{ count: 7 }]);
+      env.DB.onQuery(/share_leads[\s\S]*WHERE status = 'converted'/, () => [{ count: 2 }]);
+    });
+
+    it('includes dailyShareViews from KV', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      await env.KV_MARKETING.put(`daily-share-views:${today}`, '42');
+
+      const req = adminRequest('GET', '/api/admin/dashboard');
+      const res = await handleAdminDashboard(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.metrics.dailyShareViews).toBe(42);
+    });
+
+    it('includes totalPQLs from D1', async () => {
+      const req = adminRequest('GET', '/api/admin/dashboard');
+      const res = await handleAdminDashboard(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.metrics.totalPQLs).toBe(7);
+    });
+
+    it('includes shareConversionsToday from D1', async () => {
+      const req = adminRequest('GET', '/api/admin/dashboard');
+      const res = await handleAdminDashboard(req, env as any);
+      const body = await res.json() as any;
+      expect(body.data.metrics.shareConversionsToday).toBe(2);
     });
   });
 });

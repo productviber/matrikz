@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { enrollInSequences, cancelPendingEmails } from '../../src/lib/email';
+import { enrollInSequences, cancelPendingEmails, prepareTemplateContext } from '../../src/lib/email';
 import { createMockEnv, type MockEnv } from '../helpers';
 
 describe('email', () => {
@@ -78,6 +78,125 @@ describe('email', () => {
       // Should have at least one update query
       const updateQuery = env.DB._queries.find((q) => q.sql.includes('UPDATE'));
       expect(updateQuery).toBeTruthy();
+    });
+  });
+
+  // ─── prepareTemplateContext() ─────────────────────────────────────────
+
+  describe('prepareTemplateContext()', () => {
+    const baseContext = {
+      domain: 'acme.com',
+      companyName: 'Acme Inc',
+      contactEmail: 'john@acme.com',
+      contactName: 'John Doe',
+      auditScore: 72,
+      auditGrade: 'C',
+      issueCount: 5,
+      passCount: 10,
+      techStack: ['Next.js', 'Vercel', 'React'],
+      primaryTopic: 'SaaS',
+      angles: [{ type: 'critical-seo', hook: 'Missing meta descriptions', detail: 'Add meta descriptions to key pages' }],
+    };
+
+    it('produces auditPageUrl pointing to /audit?url=', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.auditPageUrl).toBe('https://visibility.clodo.dev/audit?url=acme.com');
+    });
+
+    it('encodes domain for URL usage', () => {
+      const result = prepareTemplateContext({ ...baseContext, domain: 'my site.com' }, 'cold-outreach-step1');
+      expect(result.domainEncoded).toBe('my%20site.com');
+      expect(result.auditPageUrl).toContain('my%20site.com');
+    });
+
+    it('does not generate socialProof (removed to avoid Promotions tab)', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.socialProof).toBeUndefined();
+    });
+
+    it('generates personalSignOff', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.personalSignOff).toBe('— Alex from AXEO');
+    });
+
+    it('generates bodyVariant for step1', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.bodyVariant).toBeTruthy();
+      expect(String(result.bodyVariant)).toContain('acme.com');
+    });
+
+    it('generates bodyVariant for step2', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step2');
+      expect(result.bodyVariant).toBeTruthy();
+      expect(String(result.bodyVariant)).toContain('acme.com');
+    });
+
+    it('generates bodyVariant for step3', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step3');
+      expect(result.bodyVariant).toBeTruthy();
+    });
+
+    it('generates variantSubject with interpolated variables', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.variantSubject).toBeTruthy();
+      const subject = String(result.variantSubject);
+      // Should have interpolated company name or domain
+      expect(subject.includes('Acme Inc') || subject.includes('acme.com')).toBe(true);
+    });
+
+    it('extracts quick win from angles', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step2');
+      expect(result.quickWinTitle).toBe('Missing meta descriptions');
+      expect(result.quickWinAction).toBe('Add meta descriptions to key pages');
+    });
+
+    it('provides default quick win when no angles', () => {
+      const result = prepareTemplateContext({ ...baseContext, angles: [] }, 'cold-outreach-step2');
+      expect(result.quickWinTitle).toBe('Optimise your meta descriptions');
+    });
+
+    it('generates greetingPrefix from variation pool', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(['Hi', 'Hey', 'Hello', 'Hi there', 'Good morning']).toContain(result.greetingPrefix);
+    });
+
+    it('generates closingLine from variation pool', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(['Best,', 'Cheers,', 'Thanks,', 'Talk soon,', 'All the best,', 'Looking forward to hearing from you,', 'Warmly,', 'Until next time,']).toContain(result.closingLine);
+    });
+
+    it('uses first name only for contactNameGreeting', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(result.contactNameGreeting).toBe(' John');
+    });
+
+    it('handles missing contactName gracefully', () => {
+      const result = prepareTemplateContext({ ...baseContext, contactName: null }, 'cold-outreach-step1');
+      expect(result.contactNameGreeting).toBe('');
+    });
+
+    it('truncates techStack to 5 items', () => {
+      const result = prepareTemplateContext({
+        ...baseContext,
+        techStack: ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
+      }, 'cold-outreach-step1');
+      expect(String(result.techStackDisplay).split(', ').length).toBe(5);
+    });
+
+    it('generates unsubscribeLink HTML', () => {
+      const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+      expect(String(result.unsubscribeLink)).toContain('unsubscribe');
+      expect(String(result.unsubscribeLink)).toContain('john%40acme.com');
+    });
+
+    it('non-deterministic: bodyVariant varies across calls', () => {
+      const results = new Set<string>();
+      for (let i = 0; i < 50; i++) {
+        const r = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1');
+        results.add(String(r.bodyVariant));
+      }
+      // With 3 variants and 50 iterations, we should see more than 1
+      expect(results.size).toBeGreaterThan(1);
     });
   });
 });

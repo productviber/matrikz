@@ -173,7 +173,7 @@ describe('handleUserSignup()', () => {
         q.sql.includes('INSERT INTO affiliate_notes')
       );
       expect(noteInsert).toBeDefined();
-      expect(noteInsert.params).toContain('aff-xyz');
+      expect(noteInsert!.params).toContain('aff-xyz');
     });
 
     it('does NOT write affiliate_notes when no affiliateCode', async () => {

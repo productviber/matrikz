@@ -1,0 +1,58 @@
+name: CI - monorepo
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'packages/marketer/**'
+      - 'packages/analytics/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'packages/marketer/**'
+      - 'packages/analytics/**'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  package-checks:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [packages/marketer, packages/analytics]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Type-check
+        run: pnpm run typecheck
+        working-directory: ${{ matrix.package }}
+
+      - name: Test
+        run: pnpm run test
+        working-directory: ${{ matrix.package }}
+
+      - name: Build
+        run: pnpm run build
+        working-directory: ${{ matrix.package }}

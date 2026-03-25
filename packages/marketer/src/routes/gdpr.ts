@@ -12,7 +12,16 @@
 import type { Env } from '../types';
 import { ok, badRequest, unauthorized, serverError } from '../lib/response';
 import { query, execute, hashEmail } from '../lib/db';
-import { KV_PREFIX, PATTERNS, MESSAGES, TTL, KV_UNSUBSCRIBE_PREFIX } from '../constants';
+import { verifyAffiliateCredentials } from '../lib/affiliate-auth';
+import { resolveAffiliateIdentity } from '../lib/affiliate-session';
+import {
+  KV_PREFIX,
+  PATTERNS,
+  MESSAGES,
+  TTL,
+  KV_UNSUBSCRIBE_PREFIX,
+  EVENT_SECURITY,
+} from '../constants';
 
 // ─── Export ──────────────────────────────────────────────────────────────────
 
@@ -25,19 +34,33 @@ export async function handleGdprExport(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const { code, email } = extractParams(request);
+  const identity = await resolveAffiliateIdentity(request, env);
+  const code = identity?.code ?? null;
+  const email = identity?.email ?? null;
   if (!code || !email) return badRequest(MESSAGES.errors.missingCodeEmail);
 
-  if (!(await verifyAffiliate(env, code, email))) {
-    return unauthorized(MESSAGES.errors.invalidCredentials);
+  if (!env.AFFILIATE_AUTH_SECRET) {
+    if (!(await verifyAffiliateCredentials(env, code, email))) {
+      return unauthorized(MESSAGES.errors.invalidCredentials);
+    }
+  }
+
+  const replayDenied = await enforceReplayProtection(request, env, 'gdpr-export', code);
+  if (replayDenied) {
+    return replayDenied;
   }
 
   try {
-    const [notes, payouts, applications] = await Promise.all([
+    const [notes, payouts, shareLeads, shareOwnerStats] = await Promise.all([
       query(env.DB, `SELECT * FROM affiliate_notes WHERE affiliate_code = ? ORDER BY created_at DESC`, [code]),
       query(env.DB, `SELECT * FROM payout_items WHERE affiliate_code = ? ORDER BY created_at DESC`, [code]),
-      query(env.DB, `SELECT * FROM affiliate_applications WHERE affiliate_code = ? ORDER BY created_at DESC`, [code]),
+      query(env.DB, `SELECT * FROM share_leads WHERE owner_email = ? ORDER BY updated_at DESC`, [email]),
+      query(env.DB, `SELECT * FROM share_owner_stats WHERE owner_email = ?`, [email]),
     ]);
+
+    // Application data lives in KV, not D1
+    const appJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_APPLICATION}${code}`);
+    const application = appJson ? JSON.parse(appJson) : null;
 
     const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
     const stats = statsJson ? JSON.parse(statsJson) : null;
@@ -48,7 +71,9 @@ export async function handleGdprExport(
       stats,
       notes,
       payouts,
-      applications,
+      application,
+      shareLeads,
+      shareOwnerStats,
       exportedAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -70,11 +95,20 @@ export async function handleGdprDelete(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const { code, email } = extractParams(request);
+  const identity = await resolveAffiliateIdentity(request, env);
+  const code = identity?.code ?? null;
+  const email = identity?.email ?? null;
   if (!code || !email) return badRequest(MESSAGES.errors.missingCodeEmail);
 
-  if (!(await verifyAffiliate(env, code, email))) {
-    return unauthorized(MESSAGES.errors.invalidCredentials);
+  if (!env.AFFILIATE_AUTH_SECRET) {
+    if (!(await verifyAffiliateCredentials(env, code, email))) {
+      return unauthorized(MESSAGES.errors.invalidCredentials);
+    }
+  }
+
+  const replayDenied = await enforceReplayProtection(request, env, 'gdpr-delete', code);
+  if (replayDenied) {
+    return replayDenied;
   }
 
   try {
@@ -85,15 +119,19 @@ export async function handleGdprDelete(
       [code]
     );
 
-    // Delete notes and applications
+    // Delete notes
     await execute(env.DB, `DELETE FROM affiliate_notes WHERE affiliate_code = ?`, [code]);
-    await execute(env.DB, `DELETE FROM affiliate_applications WHERE affiliate_code = ?`, [code]);
 
-    // Wipe KV entries
+    // Delete share data for this user
+    await execute(env.DB, `DELETE FROM share_leads WHERE owner_email = ?`, [email]);
+    await execute(env.DB, `DELETE FROM share_owner_stats WHERE owner_email = ?`, [email]);
+
+    // Wipe KV entries (affiliate + share owner)
     await Promise.all([
       env.KV_MARKETING.delete(`${KV_PREFIX.AFFILIATE_STATS}${code}`),
       env.KV_MARKETING.delete(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`),
       env.KV_MARKETING.delete(`${KV_PREFIX.AFFILIATE_APPLICATION}${code}`),
+      env.KV_MARKETING.delete(`${KV_PREFIX.SHARE_OWNER_STATS}${email}`),
     ]);
 
     // Mark as unsubscribed to block any future emails
@@ -144,7 +182,7 @@ export async function handleUnsubscribe(
     // We mark scheduled sends as cancelled by updating email_sends table
     await execute(
       env.DB,
-      `UPDATE email_sends SET status = 'cancelled' WHERE to_email = ? AND status = 'scheduled'`,
+      `UPDATE email_sends SET status = 'cancelled' WHERE contact_email = ? AND status = 'scheduled'`,
       [email]
     );
 
@@ -174,7 +212,40 @@ function extractParams(request: Request): { code: string | null; email: string |
   };
 }
 
-async function verifyAffiliate(env: Env, code: string, email: string): Promise<boolean> {
-  const cachedEmail = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`);
-  return !!(cachedEmail && cachedEmail.toLowerCase() === email.toLowerCase());
+async function enforceReplayProtection(
+  request: Request,
+  env: Env,
+  scope: string,
+  code: string,
+): Promise<Response | null> {
+  // Backward compatible mode: only enforce nonce window when strong auth secret is configured.
+  if (!env.AFFILIATE_AUTH_SECRET) return null;
+
+  const tsRaw = request.headers.get('x-request-timestamp');
+  const nonce = request.headers.get('x-request-nonce')?.trim();
+  const ts = tsRaw ? parseInt(tsRaw, 10) : NaN;
+  if (!Number.isFinite(ts)) {
+    return badRequest('x-request-timestamp header is required');
+  }
+  if (!nonce || nonce.length < 8 || nonce.length > 128) {
+    return badRequest('x-request-nonce header is required');
+  }
+
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const skew = Math.abs(nowSecs - ts);
+  if (skew > EVENT_SECURITY.MAX_SKEW_SECS) {
+    return unauthorized('Request timestamp outside replay window');
+  }
+
+  const dedupeKey = `${KV_PREFIX.AUTH_NONCE}${scope}:${code}:${nonce}`;
+  const seen = await env.KV_MARKETING.get(dedupeKey);
+  if (seen) {
+    return unauthorized('Replay request detected');
+  }
+
+  await env.KV_MARKETING.put(dedupeKey, String(ts), {
+    expirationTtl: EVENT_SECURITY.REPLAY_TTL_SECS,
+  });
+  return null;
 }
+

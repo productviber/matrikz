@@ -27,14 +27,113 @@ describe('webhooks — Brevo handler', () => {
     // Default: UPDATE queries succeed silently
     env.DB.onQuery(/UPDATE email_sends/, () => []);
     // Spy on console
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => { });
+    vi.spyOn(console, 'error').mockImplementation(() => { });
+    vi.spyOn(console, 'warn').mockImplementation(() => { });
   });
 
   // ── Payload Validation ──────────────────────────────────────────────────
 
   describe('payload validation', () => {
+    it('rejects when signing secret is set but signature headers are missing', async () => {
+      env.WEBHOOK_SIGNING_SECRET = 'test-secret';
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'delivered',
+        email: 'user@example.com',
+      });
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(401);
+    });
+
+    it('accepts valid signed payload when signing secret is set', async () => {
+      env.WEBHOOK_SIGNING_SECRET = 'test-secret';
+      const timestamp = Math.floor(Date.now() / 1000);
+      const payload = {
+        event: 'delivered',
+        email: 'signed@example.com',
+        ts_event: timestamp,
+      };
+      const raw = JSON.stringify(payload);
+      const sig = await signForTest(env.WEBHOOK_SIGNING_SECRET, `${timestamp}.${raw}`);
+
+      const req = new Request('https://test.workers.dev/webhooks/brevo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-webhook-timestamp': String(timestamp),
+          'x-webhook-signature': sig,
+        },
+        body: raw,
+      });
+
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(200);
+    });
+
+    it('accepts valid signed payload with sha256= prefix', async () => {
+      env.WEBHOOK_SIGNING_SECRET = 'test-secret';
+      const timestamp = Math.floor(Date.now() / 1000);
+      const payload = {
+        event: 'delivered',
+        email: 'prefixed@example.com',
+        ts_event: timestamp,
+      };
+      const raw = JSON.stringify(payload);
+      const sig = await signForTest(env.WEBHOOK_SIGNING_SECRET, `${timestamp}.${raw}`);
+
+      const req = new Request('https://test.workers.dev/webhooks/brevo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-webhook-timestamp': String(timestamp),
+          'x-webhook-signature': `sha256=${sig}`,
+        },
+        body: raw,
+      });
+
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(200);
+    });
+
+    it('rejects signed payload with invalid signature', async () => {
+      env.WEBHOOK_SIGNING_SECRET = 'test-secret';
+      const timestamp = Math.floor(Date.now() / 1000);
+      const raw = JSON.stringify({ event: 'delivered', email: 'bad-sig@example.com' });
+
+      const req = new Request('https://test.workers.dev/webhooks/brevo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-webhook-timestamp': String(timestamp),
+          'x-webhook-signature': 'sha256=deadbeef',
+        },
+        body: raw,
+      });
+
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects signed payload with stale timestamp', async () => {
+      env.WEBHOOK_SIGNING_SECRET = 'test-secret';
+      const timestamp = Math.floor(Date.now() / 1000) - 1200;
+      const raw = JSON.stringify({ event: 'delivered', email: 'stale@example.com' });
+      const sig = await signForTest(env.WEBHOOK_SIGNING_SECRET, `${timestamp}.${raw}`);
+
+      const req = new Request('https://test.workers.dev/webhooks/brevo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-webhook-timestamp': String(timestamp),
+          'x-webhook-signature': sig,
+        },
+        body: raw,
+      });
+
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(401);
+    });
+
     it('rejects invalid JSON', async () => {
       const req = new Request('https://test.workers.dev/webhooks/brevo', {
         method: 'POST',
@@ -446,4 +545,103 @@ describe('webhooks — Brevo handler', () => {
       expect(res.status).toBe(200); // No crash
     });
   });
+
+  // ── A/B Variant Engagement Tracking ─────────────────────────────────────
+
+  describe('A/B variant tracking on opens/clicks', () => {
+    it('records variant engagement on open when ab:send data exists', async () => {
+      // Set up: a send with variant data was stored  
+      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+        { id: 42, template_key: 'cold-outreach-step1' },
+      ]);
+      await env.KV_MARKETING.put('ab:send:user@example.com:42', JSON.stringify({
+        templateKey: 'cold-outreach-step1',
+        subIdx: 2,
+        bodyIdx: 1,
+      }));
+
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'opened',
+        email: 'user@example.com',
+        ts_event: 1700000100,
+      });
+      await handleBrevoWebhook(req, env as any);
+
+      // Variant weights should be updated
+      const raw = await env.KV_MARKETING.get('ab:variants:cold-outreach-step1');
+      expect(raw).toBeTruthy();
+      const data = JSON.parse(raw as string);
+      // Subject idx 2 should have been bumped (+2 for open)
+      expect(data['subject:cold-outreach-step1']).toBeDefined();
+      expect(data['subject:cold-outreach-step1'][2]).toBeGreaterThanOrEqual(3); // base(1) + open(2)
+    });
+
+    it('records variant engagement on click with +5 weight', async () => {
+      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+        { id: 99, template_key: 'cold-outreach-step2' },
+      ]);
+      await env.KV_MARKETING.put('ab:send:clicker@example.com:99', JSON.stringify({
+        templateKey: 'cold-outreach-step2',
+        subIdx: 0,
+        bodyIdx: 0,
+      }));
+
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'click',
+        email: 'clicker@example.com',
+        ts_event: 1700000200,
+      });
+      await handleBrevoWebhook(req, env as any);
+
+      const raw = await env.KV_MARKETING.get('ab:variants:cold-outreach-step2');
+      expect(raw).toBeTruthy();
+      const data = JSON.parse(raw as string);
+      // Both subject and body index 0 should be bumped (+5 for click)
+      expect(data['subject:cold-outreach-step2'][0]).toBeGreaterThanOrEqual(6); // base(1) + click(5)
+      expect(data['body:cold-outreach-step2'][0]).toBeGreaterThanOrEqual(6);
+    });
+
+    it('does not fail when no ab:send data exists for the email', async () => {
+      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+        { id: 50, template_key: 'step1' },
+      ]);
+      // No ab:send entry → should still succeed
+
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'opened',
+        email: 'noresult@example.com',
+        ts_event: 1700000100,
+      });
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(200);
+    });
+
+    it('does not attempt A/B tracking for delivered events', async () => {
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'delivered',
+        email: 'user@example.com',
+        ts_event: 1700000000,
+      });
+      await handleBrevoWebhook(req, env as any);
+
+      // No ab:variants key should be created
+      const raw = await env.KV_MARKETING.get('ab:variants:cold-outreach-step1');
+      expect(raw).toBeNull();
+    });
+  });
 });
+
+async function signForTest(secret: string, payload: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(payload));
+  return Array.from(new Uint8Array(signature))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}

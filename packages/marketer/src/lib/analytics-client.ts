@@ -9,6 +9,7 @@
 
 import type { Env } from '../types';
 import { INTERNAL_BASE_URL, CONTENT_TYPE_JSON } from '../constants';
+import { getCorrelationId } from './correlation';
 
 // ─── Typed Response ─────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ async function internalFetch<T = unknown>(
     method,
     headers: {
       'Content-Type': CONTENT_TYPE_JSON,
+      'x-correlation-id': getCorrelationId(),
       ...headers,
     },
     body: body ? JSON.stringify(body) : undefined,

@@ -6,7 +6,7 @@
 
 import type { Env } from '../types';
 import { COMMISSION_TIERS } from '../types';
-import { ok, badRequest, serverError, created, unauthorized } from '../lib/response';
+import { ok, badRequest, serverError, created } from '../lib/response';
 import { execute, queryOne, now } from '../lib/db';
 import {
   KV_PREFIX,
@@ -117,12 +117,6 @@ export async function handleAffiliateApprove(
   request: Request,
   env: Env
 ): Promise<Response> {
-  // Admin auth check
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized();
-  }
-
   try {
     const { code, commissionRate } = await request.json() as {
       code: string;
@@ -207,11 +201,6 @@ export async function handleListApplications(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized();
-  }
-
   const pendingListJson = await env.KV_MARKETING.get(KV_PREFIX.AFFILIATE_APPLICATIONS_PENDING) ?? '[]';
   const pendingCodes: string[] = JSON.parse(pendingListJson);
 

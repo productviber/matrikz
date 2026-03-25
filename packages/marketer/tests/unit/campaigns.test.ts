@@ -33,13 +33,9 @@ describe('campaigns routes', () => {
 
   // ─── Create Campaign ─────────────────────────────────────────────────
 
-  describe('handleCreateCampaign()', () => {
-    it('requires authentication', async () => {
-      const req = makeRequest('POST', '/api/campaigns', { name: 'Test' });
-      const res = await handleCreateCampaign(req, env as any);
-      expect(res.status).toBe(401);
-    });
+  // Auth is enforced centrally by resolveRouteLane() in index.ts
 
+  describe('handleCreateCampaign()', () => {
     it('requires name field', async () => {
       const req = adminRequest('POST', '/api/campaigns', {});
       const res = await handleCreateCampaign(req, env as any);
@@ -147,7 +143,7 @@ describe('campaigns routes', () => {
 
   describe('handleGetCampaign()', () => {
     it('returns 404 for non-existent campaign', async () => {
-      const req = makeRequest('GET', '/api/campaigns/nonexistent');
+      const req = adminRequest('GET', '/api/campaigns/nonexistent');
       const res = await handleGetCampaign(req, env as any, 'nonexistent');
       expect(res.status).toBe(404);
     });
@@ -171,7 +167,7 @@ describe('campaigns routes', () => {
         },
       ]);
 
-      const req = makeRequest('GET', '/api/campaigns/test');
+      const req = adminRequest('GET', '/api/campaigns/test');
       const res = await handleGetCampaign(req, env as any, 'test');
       expect(res.status).toBe(200);
       const body = await res.json() as any;
@@ -188,7 +184,7 @@ describe('campaigns routes', () => {
         },
       ]);
 
-      const req = makeRequest('GET', '/api/campaigns/new');
+      const req = adminRequest('GET', '/api/campaigns/new');
       const res = await handleGetCampaign(req, env as any, 'new');
       const body = await res.json() as any;
       expect(body.data.conversionRate).toBe('0.0%');
@@ -247,12 +243,6 @@ describe('campaigns routes', () => {
   // ─── Update Campaign ──────────────────────────────────────────────────
 
   describe('handleUpdateCampaign()', () => {
-    it('requires authentication', async () => {
-      const req = makeRequest('PUT', '/api/campaigns/test', { name: 'Updated' });
-      const res = await handleUpdateCampaign(req, env as any, 'test');
-      expect(res.status).toBe(401);
-    });
-
     it('returns 404 for non-existent campaign', async () => {
       const req = adminRequest('PUT', '/api/campaigns/nonexistent', { name: 'Updated' });
       const res = await handleUpdateCampaign(req, env as any, 'nonexistent');

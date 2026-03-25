@@ -21,20 +21,12 @@
  */
 
 import type { Env, OutboundProspectDiscoveredData, OutboundProspectEnrichedData, ContactForm, SocialHandles } from '../types';
-import { CONTACT_STATUS, CONTACT_SOURCE, EVENT_TYPES, KV_PREFIX, TTL } from '../constants';
+import { CONTACT_STATUS, CONTACT_SOURCE, EVENT_TYPES, KV_PREFIX, TTL, isPersonalEmail } from '../constants';
 import { upsertContact } from '../lib/crm';
 import { enrollInSequences } from '../lib/email';
 import { execute } from '../lib/db';
 import { storeProspectChannels, executeWithoutEmail } from '../lib/channel-orchestrator';
-
-// ── Personal email domains — never enroll these in cold outreach ──
-
-const PERSONAL_DOMAINS = new Set([
-  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
-  'icloud.com', 'mail.com', 'protonmail.com', 'zoho.com', 'yandex.com',
-  'live.com', 'msn.com', 'me.com', 'hey.com', 'fastmail.com',
-  'gmx.com', 'gmx.de', 'web.de', 'mail.ru', 'qq.com',
-]);
+import { isSuppressed } from '../lib/suppression';
 
 /**
  * Handle outbound.prospect_discovered event.
@@ -61,9 +53,14 @@ export async function handleProspectDiscovered(
   }
 
   // Block personal email domains (CAN-SPAM compliance, low quality)
-  const emailDomain = contactEmail.split('@')[1]?.toLowerCase();
-  if (emailDomain && PERSONAL_DOMAINS.has(emailDomain)) {
-    console.log(`[Outbound] Personal email domain ${emailDomain} — skipping ${contactEmail}`);
+  if (isPersonalEmail(contactEmail)) {
+    console.log(`[Outbound] Personal email domain — skipping ${contactEmail}`);
+    return;
+  }
+
+  // Check permanent suppression list (CAN-SPAM — survives KV TTL expiry)
+  if (await isSuppressed(env.DB, contactEmail)) {
+    console.log(`[Outbound] Permanently suppressed: ${contactEmail} — skipping enrollment`);
     return;
   }
 
@@ -138,8 +135,8 @@ export async function handleProspectEnriched(
 ): Promise<void> {
   const {
     prospectId, domain, companyName, contactEmail,
-    contactName, score, auditScore, auditGrade,
-    issueCount, passCount, techStack, trafficEstimate,
+    contactName, source, score, auditScore, auditGrade,
+    issueCount, passCount, techStack,
     primaryTopic, angles, wordCount, reportUrl,
     contactForms, socialHandles,
   } = data;
@@ -189,9 +186,14 @@ export async function handleProspectEnriched(
   }
 
   // Block personal email domains (CAN-SPAM compliance, low quality)
-  const emailDomain = contactEmail.split('@')[1]?.toLowerCase();
-  if (emailDomain && PERSONAL_DOMAINS.has(emailDomain)) {
-    console.log(`[Outbound] Personal email domain ${emailDomain} — skipping ${contactEmail}`);
+  if (isPersonalEmail(contactEmail)) {
+    console.log(`[Outbound] Personal email domain — skipping ${contactEmail}`);
+    return;
+  }
+
+  // Check permanent suppression list (CAN-SPAM — survives KV TTL expiry)
+  if (await isSuppressed(env.DB, contactEmail)) {
+    console.log(`[Outbound] Permanently suppressed: ${contactEmail} — skipping enrichment enrollment`);
     return;
   }
 
@@ -206,13 +208,13 @@ export async function handleProspectEnriched(
       domain,
       companyName: companyName ?? null,
       contactName: contactName ?? null,
+      prospectSource: source ?? null,
       prospectScore: score,
       auditScore: auditScore ?? null,
       auditGrade: auditGrade ?? null,
       issueCount: issueCount ?? null,
       passCount: passCount ?? null,
       techStack: techStack ?? [],
-      trafficEstimate: trafficEstimate ?? null,
       primaryTopic: primaryTopic ?? null,
       anglesCount: angles?.length ?? 0,
       enrichedAt: timestamp,
@@ -243,7 +245,6 @@ export async function handleProspectEnriched(
     issueCount: issueCount ?? null,
     passCount: passCount ?? null,
     techStack: techStack ?? [],
-    trafficEstimate: trafficEstimate ?? null,
     primaryTopic: primaryTopic ?? null,
     angles: angles ?? [],
     wordCount: wordCount ?? null,

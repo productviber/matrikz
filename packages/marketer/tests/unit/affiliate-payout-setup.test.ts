@@ -30,21 +30,7 @@ describe('affiliate-payout-setup routes', () => {
     await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`, email);
   }
 
-  // ─── Auth hardening ─────────────────────────────────────────────────
-
-  describe('auth requirements', () => {
-    it('PUT requires admin token', async () => {
-      const req = makeRequest('PUT', '/api/affiliate/aff-1/payout-details', { method: 'upi', upiId: 'x@upi', accountHolderName: 'X' });
-      const res = await handleSetAffiliatePayoutDetails(req, env as any, 'aff-1');
-      expect(res.status).toBe(401);
-    });
-
-    it('GET requires admin token', async () => {
-      const req = makeRequest('GET', '/api/affiliate/aff-1/payout-details');
-      const res = await handleGetAffiliatePayoutDetails(req, env as any, 'aff-1');
-      expect(res.status).toBe(401);
-    });
-  });
+  // Auth is enforced centrally by resolveRouteLane() in index.ts
 
   // ─── 404 when affiliate not found ───────────────────────────────────
 

@@ -46,6 +46,27 @@ describe('affiliate-portal', () => {
       expect(res.status).toBe(401);
     });
 
+    it('verifies affiliate via analytics fallback and caches email', async () => {
+      const code = 'aff-analytics';
+      const email = 'owner@test.com';
+
+      env.ANALYTICS = createMockFetcher({
+        '/admin/affiliates': {
+          body: {
+            ok: true,
+            data: { owner_email: email },
+          },
+        },
+      }) as any;
+
+      const req = makeRequest('GET', `/api/affiliate/portal?code=${code}&email=${email}`);
+      const res = await handleAffiliatePortal(req, env as any);
+
+      expect(res.status).toBe(200);
+      const cached = await env.KV_MARKETING.get(`affiliate-email:${code}`);
+      expect(cached).toBe(email);
+    });
+
     it('returns portal data for verified affiliate', async () => {
       const code = 'aff-verified';
       const email = 'verified@test.com';

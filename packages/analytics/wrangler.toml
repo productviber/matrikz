@@ -22,6 +22,11 @@ vars = { ENVIRONMENT = "development" }
 name = "visibility-analytics-prod"
 vars = { ENVIRONMENT = "production" }
 
+# Secrets (set via `wrangler secret put`):
+#   SYSTEM_TOKEN
+#   ADMIN_TOKEN
+#   ANALYTICS_USER_AUTH_SECRET  (HMAC secret for signed x-user-id headers)
+
 # Build configuration
 [build]
 command = "npm run build"

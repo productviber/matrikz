@@ -5,7 +5,7 @@
  */
 
 import type { Env, CampaignRow } from '../types';
-import { ok, badRequest, notFound, created, serverError, unauthorized, isAdmin } from '../lib/response';
+import { ok, badRequest, notFound, created, serverError } from '../lib/response';
 import { query, queryOne, execute, now } from '../lib/db';
 import {
   UTM_DEFAULTS,
@@ -31,12 +31,6 @@ export async function handleCreateCampaign(
   request: Request,
   env: Env
 ): Promise<Response> {
-  // Admin/affiliate auth check
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized(MESSAGES.errors.authRequired);
-  }
-
   try {
     const body = await request.json() as {
       name: string;
@@ -104,9 +98,6 @@ export async function handleListCampaigns(
   request: Request,
   env: Env
 ): Promise<Response> {
-  if (!isAdmin(request, env)) {
-    return unauthorized(MESSAGES.errors.authRequired);
-  }
   const url = new URL(request.url);
   const affiliateCode = url.searchParams.get('affiliate');
   const page = parseInt(url.searchParams.get('page') ?? '1', 10);
@@ -235,12 +226,6 @@ export async function handleUpdateCampaign(
   env: Env,
   slug: string
 ): Promise<Response> {
-  // Admin auth check
-  const authHeader = request.headers.get('Authorization');
-  if (!authHeader || authHeader !== `Bearer ${env.ADMIN_TOKEN}`) {
-    return unauthorized(MESSAGES.errors.authRequiredUpdate);
-  }
-
   const campaign = await queryOne<CampaignRow>(
     env.DB,
     `SELECT * FROM campaigns WHERE slug = ?`,

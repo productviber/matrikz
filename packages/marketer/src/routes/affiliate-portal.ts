@@ -9,8 +9,10 @@ import type { Env, AffiliatePortalData } from '../types';
 import { ok, badRequest, notFound, unauthorized } from '../lib/response';
 import { query, queryOne, hashEmail, formatCents } from '../lib/db';
 import { getTierForConversions, tierLabel } from '../lib/commission-tiers';
+import { verifyAffiliateCredentials } from '../lib/affiliate-auth';
+import { resolveAffiliateIdentity } from '../lib/affiliate-session';
 import { COMMISSION_TIERS } from '../types';
-import { KV_PREFIX, TTL, PAGINATION, PAYOUT_STATUS, NOTE_TYPE, DEFAULTS, PATTERNS, MESSAGES } from '../constants';
+import { KV_PREFIX, PAGINATION, PAYOUT_STATUS, NOTE_TYPE, DEFAULTS, PATTERNS, MESSAGES } from '../constants';
 
 /**
  * GET /api/affiliate/portal?code=<code>&email=<email>
@@ -21,18 +23,20 @@ export async function handleAffiliatePortal(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const code = url.searchParams.get('code');
-  const email = url.searchParams.get('email');
+  const identity = await resolveAffiliateIdentity(request, env);
+  const code = identity?.code ?? null;
+  const email = identity?.email ?? null;
 
   if (!code || !email) {
     return badRequest(MESSAGES.errors.missingCodeEmail);
   }
 
-  // Verify affiliate identity via KV cache or analytics service
-  const isVerified = await verifyAffiliate(env, code, email);
-  if (!isVerified) {
-    return unauthorized(MESSAGES.errors.invalidCredentials);
+  // Signed-session mode bypasses repeated credential lookups.
+  if (!env.AFFILIATE_AUTH_SECRET) {
+    const isVerified = await verifyAffiliateCredentials(env, code, email);
+    if (!isVerified) {
+      return unauthorized(MESSAGES.errors.invalidCredentials);
+    }
   }
 
   // Load stats from KV
@@ -122,18 +126,20 @@ export async function handleAffiliateStats(
   request: Request,
   env: Env
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const code = url.searchParams.get('code');
-  const email = url.searchParams.get('email');
+  const identity = await resolveAffiliateIdentity(request, env);
+  const code = identity?.code ?? null;
+  const email = identity?.email ?? null;
 
   if (!code || !email) {
     return badRequest(MESSAGES.errors.missingCodeEmail);
   }
 
-  // Require the same code+email verification used by the portal
-  const isVerified = await verifyAffiliate(env, code, email);
-  if (!isVerified) {
-    return unauthorized(MESSAGES.errors.invalidCredentials);
+  if (!env.AFFILIATE_AUTH_SECRET) {
+    // Require the same code+email verification used by the portal in legacy mode.
+    const isVerified = await verifyAffiliateCredentials(env, code, email);
+    if (!isVerified) {
+      return unauthorized(MESSAGES.errors.invalidCredentials);
+    }
   }
 
   const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
@@ -161,31 +167,6 @@ export async function handleAffiliateStats(
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
-
-async function verifyAffiliate(env: Env, code: string, email: string): Promise<boolean> {
-  // Check KV cache first
-  const cachedEmail = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`);
-  if (cachedEmail && cachedEmail.toLowerCase() === email.toLowerCase()) {
-    return true;
-  }
-
-  // Try analytics service binding
-  try {
-    const { getAffiliateByCode } = await import('../lib/analytics-client');
-    const data = await getAffiliateByCode(env, code);
-    if (data && (data as any).owner_email?.toLowerCase() === email.toLowerCase()) {
-      // Cache for future lookups
-      await env.KV_MARKETING.put(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`, email, {
-        expirationTtl: TTL.DAYS_30,
-      });
-      return true;
-    }
-  } catch {
-    // Fall through
-  }
-
-  return false;
-}
 
 function extractPlanFromNote(content: string): string {
   const match = content.match(PATTERNS.NOTE_PLAN);

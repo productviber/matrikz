@@ -16,6 +16,8 @@
     "test:all": "vitest run && node tests/smoke.mjs",
     "db:migrate": "wrangler d1 migrations apply visibility-marketing-db --local",
     "db:migrate:prod": "wrangler d1 migrations apply visibility-marketing-db",
+    "activate": "node scripts/activate.mjs",
+    "activate:check": "node scripts/activate.mjs --check",
     "lint": "tsc --noEmit",
     "ci": "pnpm run typecheck && pnpm run test && pnpm run build"
   },

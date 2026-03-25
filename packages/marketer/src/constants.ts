@@ -49,7 +49,11 @@ export const EVENT_TYPES = {
   OUTBOUND_EMAIL_CLICKED: 'outbound.email_clicked',
   OUTBOUND_EMAIL_BOUNCED: 'outbound.email_bounced',
   OUTBOUND_EMAIL_COMPLAINED: 'outbound.email_complained',
+  OUTBOUND_EMAIL_REPLIED: 'outbound.email_replied',
   OUTBOUND_UNSUBSCRIBED: 'outbound.unsubscribed',
+  // ── Audit Funnel Events (from analytics free-audit flow) ──
+  AUDIT_COMPLETED: 'audit.completed',
+  LEAD_CAPTURED: 'lead.captured',
 } as const;
 
 // ─── Contact Statuses ───────────────────────────────────────────────────────
@@ -60,6 +64,7 @@ export const CONTACT_STATUS = {
   CUSTOMER: 'customer',
   CHURNED: 'churned',
   PROSPECT: 'prospect',
+  ENGAGED: 'engaged',
 } as const;
 
 // ─── Contact Sources ────────────────────────────────────────────────────────
@@ -120,6 +125,8 @@ export const SQLITE_BOOL = {
 export const SECONDS_PER_DAY = 86_400;
 
 export const TTL = {
+  /** 1 day in seconds */
+  DAYS_1: 1 * SECONDS_PER_DAY,
   /** 30 days in seconds */
   DAYS_30: 30 * SECONDS_PER_DAY,
   /** 90 days in seconds */
@@ -190,6 +197,10 @@ export const KV_PREFIX = {
   OUTBOUND_BOUNCE: 'outbound:bounce:',
   /** Engagement tracking per email (opens, clicks, last activity) */
   OUTBOUND_ENGAGEMENT: 'outbound:engagement:',
+  /** Contact form submission dedup tracker (per domain) */
+  OUTBOUND_FORM: 'outbound:form:',
+  /** Nonce dedupe keys for replay-protected sensitive user actions */
+  AUTH_NONCE: 'auth:nonce:',
 } as const;
 
 // ─── Payout Providers ──────────────────────────────────────────────────────
@@ -339,7 +350,7 @@ export const CORS = {
   /** Fallback allowed origin — override via env.ALLOWED_ORIGIN in wrangler.toml */
   ALLOWED_ORIGIN: 'https://visibility.clodo.dev',
   ALLOWED_METHODS: 'GET, POST, PUT, DELETE, OPTIONS',
-  ALLOWED_HEADERS: 'Content-Type, Authorization',
+  ALLOWED_HEADERS: 'Content-Type, Authorization, x-agent-token, x-system-token, x-webhook-token, x-request-timestamp, x-request-nonce',
 } as const;
 
 // ─── Rate Limiting ──────────────────────────────────────────────────────────
@@ -354,6 +365,15 @@ export const RATE_LIMIT = {
   /** GDPR export/delete — 3 per day per code */
   GDPR_MAX: 3,
   GDPR_WINDOW_SECS: 86_400,
+} as const;
+
+// ─── Event Security ────────────────────────────────────────────────────────
+
+export const EVENT_SECURITY = {
+  /** Maximum accepted event timestamp skew in seconds. */
+  MAX_SKEW_SECS: 300,
+  /** TTL for dedupe keys used for replay protection. */
+  REPLAY_TTL_SECS: 900,
 } as const;
 
 // ─── Service Binding Header ─────────────────────────────────────────────────
@@ -411,10 +431,10 @@ export interface CommissionTierDef {
 }
 
 export const COMMISSION_TIERS: CommissionTierDef[] = [
-  { name: 'Starter',   minConversions: 0,   rate: 0.20 },
-  { name: 'Silver',    minConversions: 10,  rate: 0.25 },
-  { name: 'Gold',      minConversions: 50,  rate: 0.30 },
-  { name: 'Platinum',  minConversions: 200, rate: 0.35 },
+  { name: 'Starter', minConversions: 0, rate: 0.20 },
+  { name: 'Silver', minConversions: 10, rate: 0.25 },
+  { name: 'Gold', minConversions: 50, rate: 0.30 },
+  { name: 'Platinum', minConversions: 200, rate: 0.35 },
 ];
 
 // ─── Earnings Milestones (cents) ────────────────────────────────────────────
@@ -437,6 +457,7 @@ export const EMAIL_STYLES = {
   TABLE_CELL_LAST: 'padding: 8px;',
   SMALL_PRINT: 'font-size: 14px; color: #888;',
   SIGN_OFF: '— The AXEO Team',
+  SIGN_OFF_PERSONAL: '— Alex from AXEO',
   SIGN_OFF_AFFILIATE: '— The AXEO Affiliate Program',
 } as const;
 
@@ -635,6 +656,52 @@ export const CURRENCY = {
 } as const;
 
 // ─── Outbound Compliance Thresholds ─────────────────────────────────────────
+
+/**
+ * TLD → estimated UTC offset for send-window optimization.
+ * Covers the most common TLDs seen in outbound prospects.
+ * Falls back to 0 (UTC/London) for unknown TLDs.
+ */
+export const TLD_UTC_OFFSET: Record<string, number> = {
+  'com': -5, 'net': -5, 'org': -5, 'io': 0, 'dev': -5,
+  'co.uk': 0, 'uk': 0, 'eu': 1,
+  'de': 1, 'fr': 1, 'nl': 1, 'it': 1, 'es': 1, 'at': 1, 'ch': 1, 'be': 1,
+  'au': 10, 'nz': 12, 'jp': 9, 'kr': 9, 'sg': 8, 'in': 5,
+  'ca': -5, 'us': -5, 'br': -3,
+  'se': 1, 'no': 1, 'dk': 1, 'fi': 2, 'pl': 1, 'cz': 1,
+  'il': 2, 'ae': 4, 'za': 2,
+};
+
+/** Ideal local send window: 9am–11am and 1pm–3pm recipient time. */
+export const SEND_WINDOW = {
+  IDEAL_START: 9,
+  IDEAL_END: 16,
+} as const;
+
+/**
+ * Personal / freemail domains — never enroll in cold outreach.
+ * Canonical list shared with visibility-analytics COMPLIANCE.BLOCKED_DOMAINS.
+ */
+export const PERSONAL_EMAIL_DOMAINS: ReadonlySet<string> = new Set([
+  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com',
+  'icloud.com', 'mail.com', 'protonmail.com', 'zoho.com', 'yandex.com',
+  'gmx.com', 'gmx.de', 'live.com', 'msn.com', 'me.com',
+  'hey.com', 'fastmail.com', 'inbox.com',
+  'web.de', 'mail.ru', 'qq.com',
+  'yahoo.co.uk', 'yahoo.co.jp', 'outlook.de', 'outlook.fr',
+  'pm.me', 'tutanota.com', 'cock.li', 'riseup.net',
+]);
+
+/**
+ * Check if an email address uses a personal / freemail domain.
+ * Mirrors analytics-side isPersonalEmail() for consistency.
+ */
+export function isPersonalEmail(email: string): boolean {
+  if (!email) return true;
+  const domain = email.split('@')[1]?.toLowerCase();
+  if (!domain) return true;
+  return PERSONAL_EMAIL_DOMAINS.has(domain);
+}
 
 export const COMPLIANCE = {
   /** Max cold emails per sequence (CAN-SPAM best practice). */

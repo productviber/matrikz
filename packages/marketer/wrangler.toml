@@ -30,8 +30,9 @@ crons = ["*/5 * * * *"]
 
 # ─── Environment Variables ───────────────────────────────────────────────────
 [vars]
+EMAIL_PROVIDER = "brevo"
 FROM_EMAIL = "product@clodo.dev"
-FROM_NAME = "Clodo SEO"
+FROM_NAME = "Alex from AXEO"
 ENVIRONMENT = "production"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
@@ -40,8 +41,16 @@ PAYOUT_PROVIDER = "stub"
 
 # Secrets (set via `wrangler secret put`):
 #   ADMIN_TOKEN
+#   ADMIN_TOKEN_ROLLOVER
+#   SYSTEM_TOKEN
+#   SYSTEM_TOKEN_ROLLOVER
+#   AGENT_TOKEN
+#   AGENT_TOKEN_ROLLOVER
+#   WEBHOOK_TOKEN
+#   WEBHOOK_TOKEN_ROLLOVER
+#   AFFILIATE_AUTH_SECRET
+#   WEBHOOK_SIGNING_SECRET
 #   EMAIL_API_KEY
-#   EMAIL_PROVIDER                (brevo | sendgrid)
 #   SLACK_WEBHOOK_URL
 #   DISCORD_WEBHOOK_URL
 #
@@ -53,11 +62,11 @@ PAYOUT_PROVIDER = "stub"
 # ─── Dev Environment ────────────────────────────────────────────────────────
 [env.development]
 name = "visibility-marketing-dev"
-vars = { ENVIRONMENT = "development", FROM_EMAIL = "dev@clodo.dev", FROM_NAME = "Clodo SEO (Dev)" }
+vars = { ENVIRONMENT = "development", FROM_EMAIL = "product@clodo.dev", FROM_NAME = "AXEO (Dev)" }
 
 # ─── Build Configuration ────────────────────────────────────────────────────
 [build]
-command = "pnpm run build"
+command = "npx vite build"
 cwd = "."
 
 # ─── Observability ──────────────────────────────────────────────────────────

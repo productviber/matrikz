@@ -2,6 +2,9 @@
 
 Complete walkthrough for deploying Visibility Cockpit to production.
 
+For security/auth hardening progression, capability deltas, and external secret ownership/flow, see `CAPABILITY_PROGRESSION.md`.
+For copy/paste secret provisioning commands per worker and environment, see `SECRETS_RUNBOOK.md`.
+
 ## Prerequisites
 
 1. Cloudflare account with Workers enabled

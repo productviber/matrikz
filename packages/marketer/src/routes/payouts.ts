@@ -10,10 +10,12 @@
  */
 
 import type { Env, PayoutBatchRow, PayoutItemRow } from '../types';
-import { ok, badRequest, notFound, serverError, unauthorized, isAdmin } from '../lib/response';
+import { ok, badRequest, notFound, serverError } from '../lib/response';
 import { query, queryOne, execute, now, formatCents } from '../lib/db';
 import { notifyPayoutCompleted } from '../lib/notifications';
 import { processPayoutItem } from '../lib/payout-provider';
+import { runWithConcurrency } from '../lib/concurrency';
+import { logEvent } from '../lib/observability';
 import {
   KV_PREFIX,
   PAYOUT_STATUS,
@@ -22,6 +24,9 @@ import {
   NOTE_TYPE,
   MESSAGES,
 } from '../constants';
+
+const PAYOUT_INSERT_CONCURRENCY = 6;
+const PAYOUT_PROCESS_CONCURRENCY = 4;
 
 /**
  * POST /api/payouts/batch (Admin only)
@@ -32,8 +37,6 @@ export async function handleCreatePayoutBatch(
   request: Request,
   env: Env
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   try {
     // Get all affiliates with stats from KV
     // We'll list affiliate codes from notes table
@@ -46,41 +49,76 @@ export async function handleCreatePayoutBatch(
       return ok({ message: MESSAGES.errors.noAffiliatesFound, batch: null });
     }
 
-    const items: { code: string; email: string; amountCents: number }[] = [];
+    const affiliateCodes = affiliates
+      .map((a) => a.affiliate_code)
+      .filter((code) => Boolean(code));
 
-    for (const aff of affiliates) {
-      const code = aff.affiliate_code;
-
-      // Get total earned from KV
-      const statsJson = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`);
-      if (!statsJson) continue;
-      const stats = JSON.parse(statsJson);
-
-      // Get total already paid
-      const paidResult = await queryOne<{ total_paid: number }>(
+    // Load already-paid totals for all affiliates in one query.
+    const paidByAffiliate = new Map<string, number>();
+    if (affiliateCodes.length > 0) {
+      const placeholders = affiliateCodes.map(() => '?').join(',');
+      const paidRows = await query<{ affiliate_code: string; total_paid: number }>(
         env.DB,
-        `SELECT COALESCE(SUM(amount_cents), 0) as total_paid
+        `SELECT affiliate_code, COALESCE(SUM(amount_cents), 0) as total_paid
          FROM payout_items
-         WHERE affiliate_code = ? AND status = '${PAYOUT_STATUS.SENT}'`,
-        [code]
+         WHERE status = '${PAYOUT_STATUS.SENT}' AND affiliate_code IN (${placeholders})
+         GROUP BY affiliate_code`,
+        affiliateCodes
       );
-      const totalPaid = paidResult?.total_paid ?? 0;
-
-      const unpaid = stats.totalEarnedCents - totalPaid;
-      if (unpaid <= 0) continue;
-
-      // Get affiliate email
-      const email = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`);
-      if (!email) continue;
-
-      items.push({ code, email, amountCents: unpaid });
+      for (const row of paidRows) {
+        const code = row.affiliate_code ?? (affiliateCodes.length === 1 ? affiliateCodes[0] : undefined);
+        if (code) {
+          paidByAffiliate.set(code, row.total_paid ?? 0);
+        }
+      }
     }
+
+    // Fetch KV-backed earnings/email metadata concurrently.
+    const affiliateSnapshots = await Promise.all(
+      affiliateCodes.map(async (code) => {
+        const [statsJson, email] = await Promise.all([
+          env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_STATS}${code}`),
+          env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${code}`),
+        ]);
+
+        let totalEarnedCents = 0;
+        if (statsJson) {
+          try {
+            const stats = JSON.parse(statsJson) as { totalEarnedCents?: number };
+            totalEarnedCents = stats.totalEarnedCents ?? 0;
+          } catch {
+            totalEarnedCents = 0;
+          }
+        }
+
+        return {
+          code,
+          email,
+          totalEarnedCents,
+          totalPaid: paidByAffiliate.get(code) ?? 0,
+        };
+      })
+    );
+
+    const items = affiliateSnapshots
+      .map((snapshot) => ({
+        code: snapshot.code,
+        email: snapshot.email,
+        amountCents: snapshot.totalEarnedCents - snapshot.totalPaid,
+      }))
+      .filter((item): item is { code: string; email: string; amountCents: number } =>
+        Boolean(item.email) && item.amountCents > 0
+      );
 
     if (items.length === 0) {
       return ok({ message: MESSAGES.errors.noUnpaidEarnings, batch: null });
     }
 
     const totalAmount = items.reduce((sum, i) => sum + i.amountCents, 0);
+    await logEvent(env, 'payout.batch.create.started', {
+      affiliateCount: items.length,
+      totalAmount,
+    });
 
     // Create batch
     await execute(
@@ -99,15 +137,15 @@ export async function handleCreatePayoutBatch(
       return serverError(MESSAGES.errors.failedCreateBatch);
     }
 
-    // Create payout items
-    for (const item of items) {
+    // Create payout items with bounded fan-out to avoid serial N+1 writes.
+    await runWithConcurrency(items, PAYOUT_INSERT_CONCURRENCY, async (item) => {
       await execute(
         env.DB,
         `INSERT INTO payout_items (batch_id, affiliate_code, affiliate_email, amount_cents)
          VALUES (?, ?, ?, ?)`,
         [batch.id, item.code, item.email, item.amountCents]
       );
-    }
+    });
 
     return ok({
       batch: {
@@ -126,6 +164,9 @@ export async function handleCreatePayoutBatch(
     });
   } catch (err) {
     console.error('[Payouts:Create] Error:', err);
+    await logEvent(env, 'payout.batch.create.failed', {
+      error: err instanceof Error ? err.message : String(err),
+    }, 'error');
     return serverError(MESSAGES.errors.failedCreateBatch);
   }
 }
@@ -141,8 +182,6 @@ export async function handleProcessPayoutBatch(
   env: Env,
   batchId: number
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   const batch = await queryOne<PayoutBatchRow>(
     env.DB,
     `SELECT * FROM payout_batches WHERE id = ?`,
@@ -155,6 +194,7 @@ export async function handleProcessPayoutBatch(
   }
 
   try {
+    await logEvent(env, 'payout.batch.process.started', { batchId });
     // Mark batch as processing
     await execute(
       env.DB,
@@ -180,7 +220,7 @@ export async function handleProcessPayoutBatch(
     const defaultMethod = bodyData.method ?? DEFAULTS.PAYOUT_METHOD;
 
     let successCount = 0;
-    for (const item of items) {
+    await runWithConcurrency(items, PAYOUT_PROCESS_CONCURRENCY, async (item) => {
       try {
         // Resolve affiliate email from item record or KV cache
         const affiliateEmail =
@@ -236,7 +276,7 @@ export async function handleProcessPayoutBatch(
           [item.id]
         );
       }
-    }
+    });
 
     // Update batch status
     const finalStatus = successCount === items.length ? PAYOUT_STATUS.COMPLETED : PAYOUT_STATUS.FAILED;
@@ -260,6 +300,10 @@ export async function handleProcessPayoutBatch(
     });
   } catch (err) {
     console.error('[Payouts:Process] Error:', err);
+    await logEvent(env, 'payout.batch.process.failed', {
+      batchId,
+      error: err instanceof Error ? err.message : String(err),
+    }, 'error');
     await execute(
       env.DB,
       `UPDATE payout_batches SET status = '${PAYOUT_STATUS.FAILED}' WHERE id = ?`,
@@ -278,8 +322,6 @@ export async function handleListPayoutBatches(
   request: Request,
   env: Env
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   const batches = await query<PayoutBatchRow>(
     env.DB,
     `SELECT * FROM payout_batches ORDER BY initiated_at DESC LIMIT ${PAGINATION.DEFAULT_PAGE_SIZE}`
@@ -303,8 +345,6 @@ export async function handleGetPayoutBatch(
   env: Env,
   batchId: number
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   const batch = await queryOne<PayoutBatchRow>(
     env.DB,
     `SELECT * FROM payout_batches WHERE id = ?`,

@@ -240,6 +240,60 @@ describe('worker fetch handler', () => {
     });
   });
 
+  // ── New Admin Outbound Routes ─────────────────────────────────────────
+
+  describe('GET /api/admin/outbound/ab-stats', () => {
+    it('requires admin auth', async () => {
+      const req = makeRequest('GET', '/api/admin/outbound/ab-stats');
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 200 with valid auth', async () => {
+      const req = makeRequest('GET', '/api/admin/outbound/ab-stats', undefined, {
+        Authorization: `Bearer ${env.ADMIN_TOKEN}`,
+      });
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  describe('GET /api/admin/outbound/linkedin-queue', () => {
+    it('requires admin auth', async () => {
+      const req = makeRequest('GET', '/api/admin/outbound/linkedin-queue');
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 200 with valid auth', async () => {
+      env.DB.onQuery(/SELECT.*marketing_contacts/, () => []);
+      const req = makeRequest('GET', '/api/admin/outbound/linkedin-queue', undefined, {
+        Authorization: `Bearer ${env.ADMIN_TOKEN}`,
+      });
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(200);
+    });
+  });
+
+  // ── Webhook Route Wiring ──────────────────────────────────────────────
+
+  describe('POST /webhooks/brevo/inbound (route wiring)', () => {
+    it('routes to inbound handler (not 404)', async () => {
+      const req = makeRequest('POST', '/webhooks/brevo/inbound', {
+        From: { Address: 'test@test.com' },
+        Subject: 'Re: Hello',
+      });
+
+      env.DB.onQuery(/UPDATE email_sends/, () => []);
+      env.DB.onQuery(/UPDATE marketing_contacts/, () => []);
+      env.DB.onQuery(/SELECT.*email_sends/, () => []);
+
+      const res = await worker.fetch(req, env as any, ctx);
+      // Should be 200 (processed) or 400 (validation) — NOT 404
+      expect(res.status).not.toBe(404);
+    });
+  });
+
   // ── Events endpoint ──────────────────────────────────────────────────────
 
   describe('POST /events', () => {

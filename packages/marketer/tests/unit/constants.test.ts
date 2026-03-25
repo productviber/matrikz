@@ -68,10 +68,13 @@ describe('constants', () => {
       expect(EVENT_TYPES.SHARE_REVOKED).toBe('share.revoked');
       expect(EVENT_TYPES.OUTBOUND_PROSPECT_DISCOVERED).toBe('outbound.prospect_discovered');
       expect(EVENT_TYPES.OUTBOUND_PROSPECT_ENRICHED).toBe('outbound.prospect_enriched');
+      // Audit funnel events
+      expect(EVENT_TYPES.AUDIT_COMPLETED).toBe('audit.completed');
+      expect(EVENT_TYPES.LEAD_CAPTURED).toBe('lead.captured');
     });
 
-    it('has 29 event types', () => {
-      expect(Object.keys(EVENT_TYPES)).toHaveLength(29);
+    it('has 32 event types', () => {
+      expect(Object.keys(EVENT_TYPES)).toHaveLength(32);
     });
   });
 

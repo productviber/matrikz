@@ -14,7 +14,7 @@
  */
 
 import type { Env, PayoutDetails } from '../types';
-import { ok, badRequest, notFound, serverError, unauthorized, isAdmin } from '../lib/response';
+import { ok, badRequest, notFound, serverError } from '../lib/response';
 import { execute, now } from '../lib/db';
 import { getAffiliatePayoutDetails, saveAffiliatePayoutDetails } from '../lib/payout-provider';
 import { KV_PREFIX, PAYOUT_METHOD, MESSAGES, NOTE_TYPE } from '../constants';
@@ -38,8 +38,6 @@ export async function handleSetAffiliatePayoutDetails(
   env: Env,
   affiliateCode: string
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   // ── Verify affiliate exists ──
   const affiliateEmail = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${affiliateCode}`);
   if (!affiliateEmail) {
@@ -134,8 +132,6 @@ export async function handleGetAffiliatePayoutDetails(
   env: Env,
   affiliateCode: string
 ): Promise<Response> {
-  if (!isAdmin(request, env)) return unauthorized();
-
   const affiliateEmail = await env.KV_MARKETING.get(`${KV_PREFIX.AFFILIATE_EMAIL}${affiliateCode}`);
   if (!affiliateEmail) {
     return notFound(MESSAGES.errors.affiliateNotFound);

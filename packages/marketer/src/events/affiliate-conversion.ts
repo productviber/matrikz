@@ -164,7 +164,19 @@ export async function handleAffiliateConversion(
     });
   }
 
-  // ── 7. Send real-time notifications to team ──
+  // ── 7. Increment campaign conversions if affiliate is linked to a campaign ──
+  if (affiliateCode) {
+    await execute(
+      env.DB,
+      `UPDATE campaigns SET conversions = conversions + 1, updated_at = ?
+       WHERE affiliate_code = ? AND is_active = 1`,
+      [now(), affiliateCode]
+    ).catch((err: unknown) => {
+      console.warn(`[AffiliateConversion] Non-critical: campaign conversion update failed`, err);
+    });
+  }
+
+  // ── 8. Send real-time notifications to team ──
   await notifyAffiliateConversion(env, {
     affiliateCode,
     plan,

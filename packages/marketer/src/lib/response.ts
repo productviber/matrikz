@@ -16,17 +16,6 @@ function corsHeaders(env?: Env): Record<string, string> {
   };
 }
 
-// ─── Auth Middleware (shared) ───────────────────────────────────────────────
-
-/**
- * Check if the request has a valid admin Bearer token.
- * Shared across admin.ts, payouts.ts, recruitment.ts, campaigns.ts.
- */
-export function isAdmin(request: Request, env: Env): boolean {
-  const auth = request.headers.get('Authorization');
-  return auth === `Bearer ${env.ADMIN_TOKEN}`;
-}
-
 export function json<T>(data: T, status = 200, extra?: Record<string, string>, env?: Env): Response {
   return new Response(JSON.stringify(data), {
     status,

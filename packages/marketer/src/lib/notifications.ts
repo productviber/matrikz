@@ -149,6 +149,49 @@ export async function notifyPayoutCompleted(
   ]);
 }
 
+// ─── Share Notifications ────────────────────────────────────────────────────
+
+export async function notifyShareConversion(
+  env: Env,
+  ownerEmail: string,
+  token: string,
+  newUserId: string
+): Promise<void> {
+  const msg = MESSAGES.notifications.shareConversion(ownerEmail, token, newUserId);
+
+  await Promise.allSettled([
+    sendSlackNotification(env, msg),
+    sendDiscordNotification(env, msg),
+  ]);
+}
+
+export async function notifyShareHighEngagement(
+  env: Env,
+  token: string,
+  dwellSeconds: number,
+  pqlScore: number
+): Promise<void> {
+  const msg = MESSAGES.notifications.shareHighEngagement(token, dwellSeconds, pqlScore);
+
+  await Promise.allSettled([
+    sendSlackNotification(env, msg),
+    sendDiscordNotification(env, msg),
+  ]);
+}
+
+export async function notifySharePQL(
+  env: Env,
+  token: string,
+  pqlScore: number
+): Promise<void> {
+  const msg = MESSAGES.notifications.sharePQLReached(token, pqlScore);
+
+  await Promise.allSettled([
+    sendSlackNotification(env, msg),
+    sendDiscordNotification(env, msg),
+  ]);
+}
+
 // ─── Logging ────────────────────────────────────────────────────────────────
 
 async function logNotification(

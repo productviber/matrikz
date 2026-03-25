@@ -1,0 +1,234 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050912"/>
+      <stop offset="100%" stop-color="#0C1B38"/>
+    </linearGradient>
+    <linearGradient id="titleGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00D4FF"/>
+      <stop offset="60%" stop-color="#818CF8"/>
+      <stop offset="100%" stop-color="#A855F7"/>
+    </linearGradient>
+    <linearGradient id="accentLine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00D4FF" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#00D4FF"/>
+      <stop offset="80%" stop-color="#A855F7"/>
+      <stop offset="100%" stop-color="#A855F7" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowSoft" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#1E293B" stroke-width="0.5"/>
+    </pattern>
+    <!-- Radial glow behind headline -->
+    <radialGradient id="heroGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#00D4FF" stop-opacity="0.07"/>
+      <stop offset="100%" stop-color="#00D4FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- ═══════════════════════════════════════════════════════
+       BACKGROUND
+  ═══════════════════════════════════════════════════════ -->
+  <rect width="1200" height="1200" fill="url(#bgGrad)"/>
+  <rect width="1200" height="1200" fill="url(#grid)" opacity="0.35"/>
+
+  <!-- Hero radial glow centered on headline -->
+  <ellipse cx="600" cy="300" rx="550" ry="220" fill="url(#heroGlow)"/>
+
+  <!-- Top + bottom accent bars -->
+  <rect x="0" y="0" width="1200" height="4" fill="url(#titleGrad)"/>
+  <rect x="0" y="1196" width="1200" height="4" fill="url(#titleGrad)"/>
+
+  <!-- ═══════════════════════════════════════════════════════
+       TOP WHITE SPACE  (0 – 120px)
+       Content zone:   120 – 1080px
+       Bottom white:   1080 – 1200px
+  ═══════════════════════════════════════════════════════ -->
+
+  <!-- ── BADGE ─────────────────────────────────────────── -->
+  <rect x="370" y="138" width="460" height="30" rx="15" fill="#0F172A" stroke="#334155" stroke-width="1"/>
+  <text x="600" y="158" font-family="'Helvetica Neue',Arial,sans-serif" font-size="11" font-weight="700"
+        fill="#94A3B8" text-anchor="middle" letter-spacing="3.5">THE COLLAPSE OF THE VC STARTUP PLAYBOOK</text>
+
+  <!-- ── KICKER ─────────────────────────────────────────── -->
+  <text x="600" y="218" font-family="'Helvetica Neue',Arial,sans-serif" font-size="22" font-weight="300"
+        fill="#94A3B8" text-anchor="middle" letter-spacing="10">WELCOME TO THE ERA OF</text>
+
+  <!-- ── HERO HEADLINE ──────────────────────────────────── -->
+  <text x="600" y="310" font-family="'Helvetica Neue',Arial,sans-serif" font-size="96" font-weight="900"
+        fill="url(#titleGrad)" text-anchor="middle" letter-spacing="4"
+        filter="url(#glow)">INSTANT GIANT</text>
+
+  <!-- ── SUB-HEADLINE ───────────────────────────────────── -->
+  <text x="600" y="350" font-family="'Helvetica Neue',Arial,sans-serif" font-size="15" font-weight="400"
+        fill="#64748B" text-anchor="middle">
+    LLMs are birthing startups with the architectural scars of decade-old scaleups — before a single day in market
+  </text>
+
+  <!-- ── DIVIDER ────────────────────────────────────────── -->
+  <rect x="200" y="378" width="800" height="1" fill="url(#accentLine)"/>
+
+  <!-- ═══════════════════════════════════════════════════════
+       COMPARISON BLOCK  (y 398 – 580)
+  ═══════════════════════════════════════════════════════ -->
+
+  <!-- LEFT: Old Playbook -->
+  <rect x="75" y="398" width="488" height="182" rx="12"
+        fill="#120A04" stroke="#F59E0B" stroke-width="1" stroke-opacity="0.45"/>
+  <!-- header fill -->
+  <rect x="75" y="398" width="488" height="42" rx="12" fill="#F59E0B" fill-opacity="0.12"/>
+  <rect x="75" y="426" width="488" height="14" fill="#F59E0B" fill-opacity="0.12"/>
+  <text x="319" y="425" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" font-weight="700"
+        fill="#F59E0B" text-anchor="middle" letter-spacing="3">✕  THE OLD PLAYBOOK</text>
+
+  <text x="106" y="464" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#F59E0B" letter-spacing="1">PRE-SEED</text>
+  <text x="195" y="464" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  Ship a brittle MVP</text>
+
+  <text x="106" y="496" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#F59E0B" letter-spacing="1">SEED</text>
+  <text x="195" y="496" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  Add monitoring (finally)</text>
+
+  <text x="106" y="528" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#F59E0B" letter-spacing="1">SERIES B</text>
+  <text x="195" y="528" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  Build "real" infrastructure</text>
+
+  <text x="319" y="563" font-family="'Helvetica Neue',Arial,sans-serif" font-size="11" fill="#475569"
+        text-anchor="middle" font-style="italic">Overpriced SaaS → Tech Debt → Infra Refactor</text>
+
+  <!-- RIGHT: Day 0 Maturity -->
+  <rect x="637" y="398" width="488" height="182" rx="12"
+        fill="#03110A" stroke="#10B981" stroke-width="1" stroke-opacity="0.45"/>
+  <rect x="637" y="398" width="488" height="42" rx="12" fill="#10B981" fill-opacity="0.12"/>
+  <rect x="637" y="426" width="488" height="14" fill="#10B981" fill-opacity="0.12"/>
+  <text x="881" y="425" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" font-weight="700"
+        fill="#10B981" text-anchor="middle" letter-spacing="3">✓  DAY 0 MATURITY</text>
+
+  <text x="668" y="464" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#10B981" letter-spacing="1">DAY 0</text>
+  <text x="730" y="464" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  SLI/SLO · Circuit Breakers · Event Bus</text>
+
+  <text x="668" y="496" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#10B981" letter-spacing="1">DAY 0</text>
+  <text x="730" y="496" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  p99 Latency Histograms in First Commit</text>
+
+  <text x="668" y="528" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#10B981" letter-spacing="1">DAY 0</text>
+  <text x="730" y="528" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#94A3B8">→  5,485 Tests · Zod · DI · Strong Auth</text>
+
+  <text x="881" y="563" font-family="'Helvetica Neue',Arial,sans-serif" font-size="11" fill="#475569"
+        text-anchor="middle" font-style="italic">Platform Reliability = Product Velocity</text>
+
+  <!-- VS badge (floating between boxes) -->
+  <circle cx="600" cy="489" r="30" fill="#0A0E1A" stroke="#334155" stroke-width="1.5"/>
+  <text x="600" y="496" font-family="'Helvetica Neue',Arial,sans-serif" font-size="15" font-weight="900"
+        fill="#E2E8F0" text-anchor="middle">VS</text>
+
+  <!-- ═══════════════════════════════════════════════════════
+       QUOTE / CALLOUT  (y 600 – 688)
+  ═══════════════════════════════════════════════════════ -->
+  <rect x="75" y="600" width="1050" height="88" rx="10" fill="#0F172A" stroke="#1E293B" stroke-width="1"/>
+  <!-- left-edge gradient bar -->
+  <rect x="75" y="600" width="5" height="88" rx="3" fill="url(#titleGrad)"/>
+
+  <text x="614" y="638" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="400"
+        fill="#CBD5E1" text-anchor="middle" font-style="italic">
+    "The moat is no longer <tspan font-style="normal" font-weight="600" fill="#E2E8F0">'Can you build this?'</tspan>
+  </text>
+  <text x="614" y="668" font-family="Georgia,'Times New Roman',serif" font-size="18" font-weight="400"
+        fill="#CBD5E1" text-anchor="middle" font-style="italic">
+    The moat is <tspan fill="#00D4FF" font-style="normal" font-weight="700" filter="url(#glowSoft)">'Can you survive the complexity you just inherited for free?'</tspan>"
+  </text>
+
+  <!-- ── small label above pillars ─────────────────────── -->
+  <text x="600" y="715" font-family="'Helvetica Neue',Arial,sans-serif" font-size="18" font-weight="700"
+        fill="#F1F5F9" text-anchor="middle">Over-Engineering Is The New Moat</text>
+  <text x="600" y="736" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" fill="#475569"
+        text-anchor="middle">In 2018, "premature optimization" was a sin. In 2026, it's a defensive strategy.</text>
+
+  <!-- ═══════════════════════════════════════════════════════
+       SIX PILLARS GRID  (y 755 – 940)
+       3 cols × 2 rows, col width 340, row height 82, gap 13
+  ═══════════════════════════════════════════════════════ -->
+
+  <!-- ROW 1 ─────────────────────────────────────────────── -->
+  <!-- [1] Platform Engineering -->
+  <rect x="75"  y="755" width="340" height="82" rx="8" fill="#0B1628" stroke="#00D4FF" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="75"  y="755" width="340" height="26" rx="8" fill="#00D4FF" fill-opacity="0.07"/>
+  <rect x="75"  y="769" width="340" height="12" fill="#00D4FF" fill-opacity="0.07"/>
+  <text x="95" y="773" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#00D4FF" letter-spacing="2">PLATFORM ENGINEERING</text>
+  <text x="95" y="796" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">SLI/SLO · Circuit Breakers · Event Bus</text>
+  <text x="95" y="815" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Graceful Degradation · Observability</text>
+
+  <!-- [2] Software Engineering -->
+  <rect x="430" y="755" width="340" height="82" rx="8" fill="#0D0B28" stroke="#818CF8" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="430" y="755" width="340" height="26" rx="8" fill="#818CF8" fill-opacity="0.07"/>
+  <rect x="430" y="769" width="340" height="12" fill="#818CF8" fill-opacity="0.07"/>
+  <text x="450" y="773" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#818CF8" letter-spacing="2">SOFTWARE ENGINEERING</text>
+  <text x="450" y="796" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">5,485 Tests · DI · Zod Validation</text>
+  <text x="450" y="815" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Type Safety · Clean Architecture</text>
+
+  <!-- [3] Data Engineering -->
+  <rect x="785" y="755" width="340" height="82" rx="8" fill="#031108" stroke="#10B981" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="785" y="755" width="340" height="26" rx="8" fill="#10B981" fill-opacity="0.07"/>
+  <rect x="785" y="769" width="340" height="12" fill="#10B981" fill-opacity="0.07"/>
+  <text x="805" y="773" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#10B981" letter-spacing="2">DATA ENGINEERING</text>
+  <text x="805" y="796" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Clean Schemas · Validated Access</text>
+  <text x="805" y="815" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">D1 · Analytics Pipeline · Event Sourcing</text>
+
+  <!-- ROW 2 ─────────────────────────────────────────────── -->
+  <!-- [4] Product Engineering -->
+  <rect x="75"  y="850" width="340" height="82" rx="8" fill="#160D02" stroke="#F59E0B" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="75"  y="850" width="340" height="26" rx="8" fill="#F59E0B" fill-opacity="0.07"/>
+  <rect x="75"  y="864" width="340" height="12" fill="#F59E0B" fill-opacity="0.07"/>
+  <text x="95" y="868" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#F59E0B" letter-spacing="2">PRODUCT ENGINEERING</text>
+  <text x="95" y="891" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">PLG Stack · Feature Flags · Lifecycle</text>
+  <text x="95" y="910" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Onboarding Flows · Billing Events</text>
+
+  <!-- [5] Infrastructure Engineering -->
+  <rect x="430" y="850" width="340" height="82" rx="8" fill="#16020D" stroke="#EC4899" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="430" y="850" width="340" height="26" rx="8" fill="#EC4899" fill-opacity="0.07"/>
+  <rect x="430" y="864" width="340" height="12" fill="#EC4899" fill-opacity="0.07"/>
+  <text x="450" y="868" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#EC4899" letter-spacing="2">INFRASTRUCTURE ENGINEERING</text>
+  <text x="450" y="891" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Staging · Rollback · Shopify CI</text>
+  <text x="450" y="910" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">Type-Check Pipeline · Deploy Scripts</text>
+
+  <!-- [6] Interaction Engineering -->
+  <rect x="785" y="850" width="340" height="82" rx="8" fill="#02101A" stroke="#38BDF8" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="785" y="850" width="340" height="26" rx="8" fill="#38BDF8" fill-opacity="0.07"/>
+  <rect x="785" y="864" width="340" height="12" fill="#38BDF8" fill-opacity="0.07"/>
+  <text x="805" y="868" font-family="'Helvetica Neue',Arial,sans-serif" font-size="10" font-weight="700"
+        fill="#38BDF8" letter-spacing="2">INTERACTION ENGINEERING</text>
+  <text x="805" y="891" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">API Envelope · Actionable Errors</text>
+  <text x="805" y="910" font-family="'Helvetica Neue',Arial,sans-serif" font-size="12" fill="#94A3B8">i18n · Strong Auth · Dev Experience</text>
+
+  <!-- ═══════════════════════════════════════════════════════
+       FOOTER / ATTRIBUTION  (y 955 – 1080)
+  ═══════════════════════════════════════════════════════ -->
+  <rect x="200" y="953" width="800" height="1" fill="url(#accentLine)"/>
+
+  <!-- Product name -->
+  <text x="600" y="997" font-family="'Helvetica Neue',Arial,sans-serif" font-size="32" font-weight="900"
+        fill="#F8FAFC" text-anchor="middle" letter-spacing="10">AXEO</text>
+  <text x="600" y="1028" font-family="'Helvetica Neue',Arial,sans-serif" font-size="13" font-weight="400"
+        fill="#475569" text-anchor="middle" letter-spacing="2">AI POWERED COMMAND CENTER FOR OUTCOME FOCUSED MARKETING LEADERS</text>
+
+</svg>
