@@ -301,8 +301,12 @@ describe('prepareTemplateContext — variant weights', () => {
     });
 
     it('accepts variantWeights as third parameter', () => {
+        // With no auditScore in baseContext, tier resolves to DEFAULT ('standard').
+        // Weights must be keyed `subject:<tpl>:<tier>` to align with the active
+        // tier-partitioned pool; legacy un-tiered keys no longer apply to
+        // tier-scoped pools (they only back the legacy fallback pool).
         const weights = {
-            'subject:cold-outreach-step1': [10, 1, 1, 1, 1],
+            'subject:cold-outreach-step1:standard': [10, 1, 1],
         };
         const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1', weights);
         expect(result.variantSubject).toBeTruthy();
@@ -310,7 +314,7 @@ describe('prepareTemplateContext — variant weights', () => {
 
     it('tracks _subjectVariantIdx when variantWeights provided', () => {
         const weights = {
-            'subject:cold-outreach-step1': [100, 1, 1, 1, 1],
+            'subject:cold-outreach-step1:standard': [100, 1, 1],
         };
         // With heavy weighting on index 0, most calls should return idx 0
         let zeroCount = 0;
@@ -318,7 +322,7 @@ describe('prepareTemplateContext — variant weights', () => {
             const result = prepareTemplateContext({ ...baseContext }, 'cold-outreach-step1', weights);
             if (result._subjectVariantIdx === 0) zeroCount++;
         }
-        // With 100 vs 1,1,1,1 — should be index 0 most of the time
+        // With 100 vs 1,1 — should be index 0 most of the time
         expect(zeroCount).toBeGreaterThan(35);
     });
 

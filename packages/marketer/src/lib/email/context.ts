@@ -1,5 +1,16 @@
 import { APP_URLS, EMAIL_STYLES } from '../../constants';
 import { pickWeightedIndex } from './ab';
+import {
+  resolveFramingTier,
+  selectColdSubjectPool,
+  selectColdCapabilitySubjectPool,
+  selectColdBodyPool,
+  selectWarmSubjectPool,
+  selectWarmBodyPool,
+  variantWeightsKey,
+  legacyVariantWeightsKey,
+  type FramingTier,
+} from './framing';
 
 const GREETING_PREFIXES = ['Hi', 'Hey', 'Hello', 'Hi there', 'Good morning'];
 
@@ -97,12 +108,92 @@ const WARM_BODY_VARIANTS: Record<string, string[]> = {
   ],
 };
 
+/**
+ * Minimal HTML escape for user-adjacent fields placed inside a server-rendered
+ * email block. Keeps the capability-hook surface XSS-safe even though our
+ * current hook copy is hard-coded in the capability catalog.
+ */
+function escapeHookHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Flatten the structured capabilityHook onto the template context as:
+ *   capabilityHookId, capabilityHookHeadline, capabilityHookOneLiner, capabilityHookCta
+ *   capabilityHookBlock  — ready-to-drop HTML snippet (empty string when no hook)
+ *
+ * Our renderer supports dot-notation merges too (`{{capabilityHook.headline}}`),
+ * but flat fields keep older templates + R2-served copy working without edits.
+ * The block field lets templates render the whole section with a single token.
+ */
+function applyCapabilityHook(processed: Record<string, unknown>): void {
+  const hook = processed.capabilityHook as
+    | { id?: string; headline?: string; oneLiner?: string; cta?: string }
+    | null
+    | undefined;
+
+  const headline = hook?.headline ?? '';
+  const oneLiner = hook?.oneLiner ?? '';
+  processed.capabilityHookId = hook?.id ?? '';
+  processed.capabilityHookHeadline = headline;
+  processed.capabilityHookOneLiner = oneLiner;
+  processed.capabilityHookCta = hook?.cta ?? '';
+
+  processed.capabilityHookBlock = headline
+    ? `<p style="background:#f8fafc;border-left:3px solid #3b82f6;padding:10px 14px;margin:14px 0;border-radius:4px;">`
+    + `<strong>${escapeHookHtml(headline)}</strong>`
+    + (oneLiner ? ` &mdash; ${escapeHookHtml(oneLiner)}` : '')
+    + `</p>`
+    : '';
+}
+
+function normalizeAuditedPagePath(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  if (raw.startsWith('/')) return raw;
+  try {
+    const u = new URL(raw);
+    return u.pathname && u.pathname.length > 0 ? u.pathname : '/';
+  } catch {
+    return null;
+  }
+}
+
+function applyAuditedPages(processed: Record<string, unknown>): void {
+  const raw = Array.isArray(processed.auditedPages) ? processed.auditedPages : [];
+  const normalized: string[] = [];
+  for (const candidate of raw) {
+    const path = normalizeAuditedPagePath(candidate);
+    if (!path || normalized.includes(path)) continue;
+    normalized.push(path);
+    if (normalized.length >= 5) break;
+  }
+
+  const effective = normalized.length > 0 ? normalized : ['/'];
+  const top = effective.slice(0, 2);
+  const extra = Math.max(0, effective.length - top.length);
+  const summary = `${top.join(', ')}${extra > 0 ? ` (+${extra} more)` : ''}`;
+
+  processed.auditedPages = effective;
+  processed.auditedPagesCount = effective.length;
+  processed.auditedPagesSummary = summary;
+  processed.auditedPagesHeadline = `We audited ${effective.length} page${effective.length === 1 ? '' : 's'}: ${summary}.`;
+}
+
 export function prepareTemplateContext(
   context: Record<string, unknown>,
   templateKey: string,
   variantWeights?: Record<string, number[]> | null,
 ): Record<string, unknown> {
   const processed = { ...context };
+  applyCapabilityHook(processed);
+  applyAuditedPages(processed);
 
   const domain = String(processed.domain ?? '');
   processed.domainEncoded = encodeURIComponent(domain);
@@ -146,9 +237,40 @@ export function prepareTemplateContext(
   const email = String(processed.contactEmail ?? processed.to ?? '');
   processed.unsubscribeLink = `<a href="${APP_URLS.UNSUBSCRIBE(email)}" style="color: #94a3b8;">Unsubscribe</a>`;
 
-  const variants = SUBJECT_VARIANTS[templateKey];
+  // Resolve framing tier from the audit score (fail-safe → 'standard').
+  // Tier drives both the subject/body pool selection AND the A/B learning
+  // partition — each tier's variants converge independently.
+  const scoreSource = typeof processed.auditScore === 'number'
+    ? processed.auditScore
+    : typeof processed.score === 'number'
+      ? processed.score
+      : null;
+  const tier: FramingTier = resolveFramingTier(scoreSource);
+  processed._framingTier = tier;
+
+  const tierSubjects = selectColdSubjectPool(templateKey, tier);
+  const basePool = tierSubjects ?? SUBJECT_VARIANTS[templateKey];
+  // Capability-hook subjects are appended to the trailing slots of the
+  // effective pool ONLY when the hook is resolvable at send time. Index
+  // stability: base[0..N-1] keeps meaning, cap[N..N+M-1] keeps meaning.
+  // Sends without a hook simply see a shorter effective pool (base only).
+  const hasCapabilityHook =
+    typeof processed.capabilityHookHeadline === 'string' &&
+    processed.capabilityHookHeadline.length > 0;
+  const capSubjects = hasCapabilityHook && tierSubjects
+    ? (selectColdCapabilitySubjectPool(templateKey, tier) ?? [])
+    : [];
+  const variants = basePool ? [...basePool, ...capSubjects] : undefined;
   if (variants && variants.length > 0) {
-    const subjectWeights = variantWeights?.[`subject:${templateKey}`];
+    // Keep weight array aligned with the pool it describes: when the tier pool
+    // is active, only consult tier-keyed weights; fall back to legacy weights
+    // only when the legacy pool is active. Slice to the effective pool length
+    // so stored weights for currently-unavailable capability slots are
+    // correctly excluded from this pick.
+    const rawWeights = tierSubjects
+      ? variantWeights?.[variantWeightsKey('subject', templateKey, tier)]
+      : variantWeights?.[legacyVariantWeightsKey('subject', templateKey)];
+    const subjectWeights = rawWeights ? rawWeights.slice(0, variants.length) : undefined;
     const selectedIdx = pickWeightedIndex(variants.length, subjectWeights);
     const selectedSubject = variants[selectedIdx];
     processed.variantSubject = selectedSubject.replace(/\{\{(\w+)\}\}/g, (_, key) => {
@@ -167,13 +289,21 @@ export function prepareTemplateContext(
   const timeVariants = ['this morning', 'earlier today', 'just now', 'a moment ago'];
   processed.sendTimePhrase = timeVariants[Math.floor(Math.random() * timeVariants.length)];
 
-  const bodyPool = BODY_VARIANTS[templateKey];
+  const tierBodies = selectColdBodyPool(templateKey, tier);
+  const bodyPool = tierBodies ?? BODY_VARIANTS[templateKey];
   if (bodyPool && bodyPool.length > 0) {
     let effectivePool = bodyPool;
     if (templateKey === 'cold-outreach-step3' && processed._hasOpened) {
       effectivePool = RETARGET_BODY_STEP3;
     }
-    const bodyWeights = variantWeights?.[`body:${templateKey}`];
+    // Weights only apply when the same pool produced them. Retarget pool has
+    // no learned weights yet; tier pool uses tier-keyed weights; legacy pool
+    // uses legacy-keyed weights.
+    const bodyWeights = effectivePool === RETARGET_BODY_STEP3
+      ? undefined
+      : tierBodies
+        ? variantWeights?.[variantWeightsKey('body', templateKey, tier)]
+        : variantWeights?.[legacyVariantWeightsKey('body', templateKey)];
     const bodyIdx = pickWeightedIndex(effectivePool.length, bodyWeights);
     const selectedBody = effectivePool[bodyIdx];
     processed.bodyVariant = selectedBody.replace(/\{\{(\w+)\}\}/g, (_, key) => {
@@ -195,6 +325,8 @@ export function prepareWarmTemplateContext(
   variantWeights?: Record<string, number[]> | null,
 ): Record<string, unknown> {
   const processed = { ...context };
+  applyCapabilityHook(processed);
+  applyAuditedPages(processed);
 
   const domain = String(processed.domain ?? '');
   processed.domainEncoded = encodeURIComponent(domain);
@@ -234,9 +366,23 @@ export function prepareWarmTemplateContext(
   processed.auditPageUrl = `${APP_URLS.HOME}/audit?url=${processed.domainEncoded}`;
   processed.personalSignOff = EMAIL_STYLES.SIGN_OFF_PERSONAL;
 
-  const subjects = WARM_SUBJECT_VARIANTS[templateKey];
+  // Warm sends already include the score in the context (the user ran an
+  // audit). Tier drives subject/body framing for step1 (score-sensitive)
+  // and A/B learning partitioning across all warm steps.
+  const warmScoreSource = typeof processed.auditScore === 'number'
+    ? processed.auditScore
+    : typeof processed.score === 'number'
+      ? processed.score
+      : null;
+  const warmTier: FramingTier = resolveFramingTier(warmScoreSource);
+  processed._framingTier = warmTier;
+
+  const tierWarmSubjects = selectWarmSubjectPool(templateKey, warmTier);
+  const subjects = tierWarmSubjects ?? WARM_SUBJECT_VARIANTS[templateKey];
   if (subjects && subjects.length > 0) {
-    const subjectWeights = variantWeights?.[`subject:${templateKey}`];
+    const subjectWeights = tierWarmSubjects
+      ? variantWeights?.[variantWeightsKey('subject', templateKey, warmTier)]
+      : variantWeights?.[legacyVariantWeightsKey('subject', templateKey)];
     const idx = pickWeightedIndex(subjects.length, subjectWeights);
     processed.variantSubject = subjects[idx].replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];
@@ -245,9 +391,12 @@ export function prepareWarmTemplateContext(
     processed._subjectVariantIdx = idx;
   }
 
-  const bodies = WARM_BODY_VARIANTS[templateKey];
+  const tierWarmBodies = selectWarmBodyPool(templateKey, warmTier);
+  const bodies = tierWarmBodies ?? WARM_BODY_VARIANTS[templateKey];
   if (bodies && bodies.length > 0) {
-    const bodyWeights = variantWeights?.[`body:${templateKey}`];
+    const bodyWeights = tierWarmBodies
+      ? variantWeights?.[variantWeightsKey('body', templateKey, warmTier)]
+      : variantWeights?.[legacyVariantWeightsKey('body', templateKey)];
     const idx = pickWeightedIndex(bodies.length, bodyWeights);
     processed.bodyVariant = bodies[idx].replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];

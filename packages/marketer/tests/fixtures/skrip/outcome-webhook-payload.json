@@ -1,0 +1,22 @@
+{
+  "version": "1",
+  "eventId": "evt_outcome_abc123",
+  "eventType": "message.delivered",
+  "tenantId": "default",
+  "contactId": "lead@acme.com",
+  "canonicalId": "skrip_can_acme_push_1",
+  "campaignId": "cmp_1",
+  "journeyId": null,
+  "stepId": "step_push_1",
+  "channel": "push",
+  "messageId": "msg_acme_push_1",
+  "skripOutboundId": "skrip_ob_xyz789",
+  "providerRef": "fcm_ref_111",
+  "occurredAt": "2024-05-02T10:05:00.000Z",
+  "sourceSystem": "skrip",
+  "correlationId": "cron-abc123",
+  "reason": null,
+  "metadata": {
+    "deviceType": "android"
+  }
+}

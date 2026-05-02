@@ -6,15 +6,50 @@ interface RouteLaneRule {
   lane: AccessLane;
 }
 
+/**
+ * Explicit allowlist of operations permitted in the agentic lane.
+ * Any request presenting agent credentials MUST match one of these.
+ * Used both for RULES wiring and as a named constant for audits/docs.
+ */
+export const AGENTIC_ALLOWED_OPERATIONS: ReadonlyArray<{ method: string; description: string }> = [
+  { method: 'GET /api/agentic/growth-signals', description: 'List eligible growth signals' },
+  { method: 'GET /api/agentic/subjects/:id/context', description: 'Read growth subject context' },
+  { method: 'POST /api/agentic/actions/propose', description: 'Create a ledgered agent action proposal' },
+  { method: 'POST /api/agentic/actions/dry-run', description: 'Run policy checks without execution' },
+  { method: 'POST /api/agentic/actions/execute', description: 'Execute an approved low-risk agent action' },
+  { method: 'GET /api/agentic/actions/:id', description: 'Read agent action state' },
+  { method: 'GET /api/agentic/actions/:id/audit', description: 'Read agent action audit events' },
+  { method: 'POST /api/admin/emails/process', description: 'Trigger due-email processing batch' },
+  { method: 'POST /api/admin/campaigns/outbound/:id/start', description: 'Start outbound campaign' },
+  { method: 'POST /api/admin/campaigns/outbound/:id/pause', description: 'Pause outbound campaign' },
+] as const;
+
 const RULES: RouteLaneRule[] = [
   // System ingress
   { method: 'POST', match: (path) => path === '/events', lane: 'system' },
+  // Internal service-to-service endpoints (analytics worker → marketing worker)
+  // Auth: CF service-binding header OR x-system-token / SYSTEM_TOKEN.
+  { method: '*', match: (path) => path.startsWith('/api/internal/'), lane: 'system' },
 
   // Webhook ingress
   { method: 'POST', match: (path) => path === '/webhooks/brevo', lane: 'webhook' },
   { method: 'POST', match: (path) => path === '/webhooks/brevo/inbound', lane: 'webhook' },
+  { method: 'POST', match: (path) => path === '/webhooks/skrip/v1/outcomes', lane: 'webhook' },
+
+  // Skrip push subscription (public user-facing — no auth, rate-limited at handler)
+  { method: 'POST', match: (path) => path === '/api/push/subscribe', lane: 'user' },
+  { method: 'DELETE', match: (path) => path === '/api/push/unsubscribe', lane: 'user' },
+
+  // Skrip multi-channel subscriptions (WhatsApp, SMS, Telegram — user lane)
+  { method: 'POST', match: (path) => path === '/api/channels/whatsapp/subscribe', lane: 'user' },
+  { method: 'DELETE', match: (path) => path === '/api/channels/whatsapp/unsubscribe', lane: 'user' },
+  { method: 'POST', match: (path) => path === '/api/channels/sms/subscribe', lane: 'user' },
+  { method: 'DELETE', match: (path) => path === '/api/channels/sms/unsubscribe', lane: 'user' },
+  { method: 'POST', match: (path) => path === '/api/channels/telegram/subscribe', lane: 'user' },
+  { method: 'DELETE', match: (path) => path === '/api/channels/telegram/unsubscribe', lane: 'user' },
 
   // Agentic lane (proposed and explicitly bounded)
+  { method: '*', match: (path) => path.startsWith('/api/agentic/'), lane: 'agentic' },
   { method: 'POST', match: (path) => path === '/api/admin/emails/process', lane: 'agentic' },
   {
     method: 'POST',

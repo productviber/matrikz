@@ -30,10 +30,36 @@ export async function renderTemplate(
   return injectUtmParams(html, templateKey, String(vars.campaignSlug ?? 'outreach'));
 }
 
+/**
+ * Resolve a (possibly dot-separated) path against a context object.
+ *
+ * Examples:
+ *   resolvePath(ctx, 'name')              // ctx.name
+ *   resolvePath(ctx, 'capabilityHook.headline') // ctx.capabilityHook?.headline
+ *
+ * Returns `undefined` when any segment is missing so the caller can fall back
+ * to an empty string (keeps template output safe when nested data is absent).
+ */
+function resolvePath(ctx: Record<string, unknown>, path: string): unknown {
+  if (!path) return undefined;
+  if (path.indexOf('.') === -1) return ctx[path];
+  let cur: unknown = ctx;
+  for (const segment of path.split('.')) {
+    if (cur == null || typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[segment];
+  }
+  return cur;
+}
+
+/**
+ * Merge-field interpolation.
+ * Supports both `{{flatKey}}` and `{{nested.key}}` paths.
+ * Unresolved paths render as empty strings (template-safe default).
+ */
 function interpolate(template: string, vars: Record<string, unknown>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, key) => {
-    const val = vars[key];
-    return val !== undefined ? String(val) : '';
+  return template.replace(/\{\{([\w.]+)\}\}/g, (_, key: string) => {
+    const val = resolvePath(vars, key);
+    return val !== undefined && val !== null ? String(val) : '';
   });
 }
 
@@ -301,7 +327,10 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>The short version:</p>
       <p>• Score: {{auditScore}}/100 (Grade {{auditGrade}})<br>
       • {{passCount}} things working well<br>
-      • {{issueCount}} things that could be improved</p>
+      • {{issueCount}} things that could be improved<br>
+      • Audited pages: {{auditedPagesSummary}}</p>
+      <p>{{auditedPagesHeadline}}</p>
+      {{capabilityHookBlock}}
       <p>Full breakdown is here if you want to take a look: {{auditPageUrl}}</p>
       <p>No obligation — I just thought it might be useful.</p>
       <p style="font-size:12px;color:#999">I found {{domain}} on a public directory. I won't send more than 3 emails about this.</p>
@@ -317,7 +346,9 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>The issue: {{quickWinTitle}}<br>
       What to do: {{quickWinAction}}<br>
       Why it matters: {{quickWinImpact}}</p>
+      <p>{{auditedPagesHeadline}}</p>
       <p>Sites in {{primaryTopic}} that fix this tend to see a noticeable bump in search impressions within a few weeks.</p>
+      {{capabilityHookBlock}}
       <p>Here's the full breakdown if you want it: {{auditPageUrl}}</p>
       <p style="font-size:12px;color:#999">Not interested? {{unsubscribeLink}}</p>
       <p>{{personalSignOff}}</p>
@@ -332,8 +363,11 @@ const BUILT_IN_TEMPLATES: Record<string, string> = {
       <p>Quick recap for {{domain}}:</p>
       <p>• Visibility score: {{auditScore}}/100 (Grade {{auditGrade}})<br>
       • {{issueCount}} improvement opportunities<br>
-      • Tech detected: {{techStackDisplay}}</p>
+      • Tech detected: {{techStackDisplay}}<br>
+      • Audited pages: {{auditedPagesSummary}}</p>
+      <p>{{auditedPagesHeadline}}</p>
       <p>Your competitors in {{primaryTopic}} may already be working on theirs.</p>
+      {{capabilityHookBlock}}
       <p>Full details: {{auditPageUrl}}</p>
       <p>Either way, I hope this was useful. No more emails from me on this.</p>
       <p>{{personalSignOff}}</p>

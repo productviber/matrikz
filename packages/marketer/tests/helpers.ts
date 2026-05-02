@@ -177,6 +177,7 @@ export interface MockEnv {
   KV_MARKETING: ReturnType<typeof createMockKV>;
   R2_ASSETS: ReturnType<typeof createMockR2>;
   ANALYTICS: ReturnType<typeof createMockFetcher>;
+  AI_ENGINE?: ReturnType<typeof createMockFetcher>;
   FROM_EMAIL: string;
   FROM_NAME: string;
   ADMIN_TOKEN: string;
@@ -190,10 +191,20 @@ export interface MockEnv {
   SYSTEM_TOKEN_ROLLOVER?: string;
   AGENT_TOKEN?: string;
   AGENT_TOKEN_ROLLOVER?: string;
+  AGENT_TOKEN_SCOPES?: string;
+  AGENT_TOKEN_ROLLOVER_SCOPES?: string;
+  AGENT_EXECUTION_DISABLED?: string;
   WEBHOOK_TOKEN?: string;
   WEBHOOK_TOKEN_ROLLOVER?: string;
   AFFILIATE_AUTH_SECRET?: string;
   WEBHOOK_SIGNING_SECRET?: string;
+  SKRIP_BASE_URL?: string;
+  SKRIP_SERVICE_TOKEN?: string;
+  SKRIP_SIGNING_SECRET?: string;
+  SKRIP_WEBHOOK_SIGNING_SECRET?: string;
+  SKRIP_DEFAULT_ENABLEMENT?: string;
+  SKRIP_TIMEOUT_MS?: string;
+  AI_ENGINE_TIMEOUT_MS?: string;
 }
 
 export function createMockEnv(overrides: Partial<MockEnv> = {}): MockEnv {

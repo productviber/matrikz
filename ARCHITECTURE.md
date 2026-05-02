@@ -2,6 +2,8 @@
 
 Detailed architecture and design decisions for Visibility Cockpit.
 
+For the current cross-system north star across Visibility Marketing, Visibility Analytics, and Skrip, see [docs/AGENT_LED_GROWTH_TOUCHSTONE.md](docs/AGENT_LED_GROWTH_TOUCHSTONE.md). That document captures the Four M capability model, identity authority boundaries, agentic growth layer placement, and the plan to extract domain-specific code from Skrip core.
+
 ## The Problem We're Solving
 
 Traditional approach (Microservices Nightmare):

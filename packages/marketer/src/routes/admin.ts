@@ -10,3 +10,6 @@ export * from './admin/emails';
 export * from './admin/contacts';
 export * from './admin/share';
 export * from './admin/outbound';
+export * from './admin/metrics';
+export * from './admin/skrip';
+export * from './admin/agentic';

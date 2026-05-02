@@ -24,6 +24,12 @@ id = "8fae6d27403d4ca5be5f901097464901"
 binding = "ANALYTICS"
 service = "visibility-analytics"
 
+# Optional advisory binding. Enable after deploying ai-engine with matching
+# internal growth capabilities; code falls back safely when absent.
+# [[services]]
+# binding = "AI_ENGINE"
+# service = "ai-engine"
+
 # ─── Cron Triggers (process due email sends every 5 minutes) ─────────────────
 [triggers]
 crons = ["*/5 * * * *"]

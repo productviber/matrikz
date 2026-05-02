@@ -22,6 +22,9 @@ export interface Env {
   // Service binding back to visibility-analytics
   ANALYTICS: Fetcher;
 
+  // Optional service binding to ai-engine for structured growth advice
+  AI_ENGINE?: Fetcher;
+
   // Vars
   FROM_EMAIL: string;
   FROM_NAME: string;
@@ -58,6 +61,34 @@ export interface Env {
   AFFILIATE_AUTH_SECRET?: string;
   /** Optional webhook body signing secret for HMAC verification */
   WEBHOOK_SIGNING_SECRET?: string;
+  /** Skrip base API URL, e.g. https://api.skrip.example */
+  SKRIP_BASE_URL?: string;
+  /** Service-to-service bearer token for Skrip */
+  SKRIP_SERVICE_TOKEN?: string;
+  /** Shared HMAC secret for Visibility-Marketing -> Skrip requests */
+  SKRIP_SIGNING_SECRET?: string;
+  /** Shared HMAC secret for Skrip -> Visibility-Marketing webhooks */
+  SKRIP_WEBHOOK_SIGNING_SECRET?: string;
+  /** Default global enablement for Skrip integration when flags are absent */
+  SKRIP_DEFAULT_ENABLEMENT?: string;
+  /** Optional override for upstream timeout in milliseconds */
+  SKRIP_TIMEOUT_MS?: string;
+  /** Optional override for ai-engine advisory timeout in milliseconds */
+  AI_ENGINE_TIMEOUT_MS?: string;
+  /** Emergency kill switch for agent executions. Accepts 'true' to block. */
+  AGENT_EXECUTION_DISABLED?: string;
+  /**
+   * Isolated email channel authority flag.
+   * When 'true', enroll_sequence actions are evaluated against the Skrip
+   * channel_authorities table for the 'email' channel.
+   * Must NOT be activated until the parity gate in docs/email-convergence-parity-checklist.md
+   * is fully signed off. Default: unset (uses existing email engine).
+   */
+  SKRIP_EMAIL_AUTHORITY_ENABLED?: string;
+  /** Comma-separated scopes for AGENT_TOKEN. Defaults to read/propose/dry-run. */
+  AGENT_TOKEN_SCOPES?: string;
+  /** Comma-separated scopes for AGENT_TOKEN_ROLLOVER. */
+  AGENT_TOKEN_ROLLOVER_SCOPES?: string;
 }
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────
@@ -286,6 +317,7 @@ export interface OutboundProspectEnrichedData {
   companyName: string | null;
   contactEmail: string | null;
   contactName: string | null;
+  contactTitle?: string | null;
   source?: string;          // 'apollo' | 'producthunt' | 'hackernews' | 'reddit' | 'manual'
   score: number;
   auditScore: number | null;
@@ -293,13 +325,31 @@ export interface OutboundProspectEnrichedData {
   issueCount: number | null;
   passCount: number | null;
   techStack: string[];
+  prevTechStack?: string[];
   trafficEstimate?: string | null;
   primaryTopic: string | null;
+  industry?: string | null;
   angles: Array<{ type: string; hook: string; detail: string }>;
+  /** Top audited page paths from analytics multi-page sweep (e.g. ['/', '/pricing']). */
+  auditedPages?: string[];
   wordCount: number | null;
   reportUrl?: string | null;
   contactForms?: ContactForm[];
   socialHandles?: SocialHandles;
+  /**
+   * One relevant tool capability picked by the analytics worker's
+   * capability-catalog. Becomes the `{{capabilityHook.*}}` merge
+   * fields in cold-outreach email templates. `id` is stable for
+   * attribution analytics; `headline` is 5-10 words; `oneLiner` is
+   * a single sentence. Optional for backward compatibility.
+   */
+  capabilityHook?: {
+    id: string;
+    headline: string;
+    oneLiner: string;
+    cta?: string;
+  };
+  batchId?: string;
 }
 
 // ─── D1 Row Types — Marketing DB ────────────────────────────────────────────
@@ -491,6 +541,213 @@ export interface MrrSnapshotRow {
   created_at: number;
 }
 
+// ─── Skrip Integration Rows ────────────────────────────────────────────────
+
+export interface ChannelAuthorityRow {
+  id: number;
+  tenant_id: string;
+  campaign_id: string | null;
+  channel: string;
+  authority: string;
+  rollout_state: string;
+  feature_flag_key: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ContactChannelIdentityRow {
+  id: number;
+  tenant_id: string;
+  external_contact_id: string;
+  canonical_id: string | null;
+  channel: string;
+  consent_state: string;
+  suppression_state: string;
+  availability_state: string;
+  identity_confidence: number;
+  registration_state: string;
+  last_reconciled_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChannelExecutionOutboxRow {
+  id: number;
+  tenant_id: string;
+  campaign_id: string;
+  journey_id: string | null;
+  step_id: string;
+  contact_id: string;
+  channel: string;
+  schedule_slot: string;
+  idempotency_key: string;
+  payload_json: string;
+  status: string;
+  attempt_count: number;
+  next_attempt_at: number | null;
+  last_error_code: string | null;
+  last_error_message: string | null;
+  correlation_id: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChannelMessageLineageRow {
+  id: number;
+  tenant_id: string;
+  campaign_id: string;
+  journey_id: string | null;
+  step_id: string;
+  contact_id: string;
+  channel: string;
+  message_id: string;
+  skrip_outbound_id: string | null;
+  provider_ref: string | null;
+  idempotency_key: string;
+  latest_status: string;
+  first_sent_at: number | null;
+  last_outcome_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ChannelOutcomeDeadLetterRow {
+  id: number;
+  tenant_id: string | null;
+  event_id: string;
+  event_type: string;
+  payload_json: string;
+  error_code: string | null;
+  error_message: string | null;
+  retryable: number;
+  first_failed_at: number;
+  last_failed_at: number;
+  replayed_at: number | null;
+}
+
+export interface PushOptInEventRow {
+  id: number;
+  tenant_id: string;
+  contact_id: string | null;
+  browser_session_id: string | null;
+  event_type: string;
+  correlation_id: string;
+  metadata_json: string | null;
+  occurred_at: number;
+}
+
+// ─── Agent-Led Growth Rows ─────────────────────────────────────────────────
+
+export type GrowthSignalStatus = 'active' | 'dismissed' | 'converted' | 'expired';
+export type GrowthSignalSeverity = 'low' | 'medium' | 'high' | 'critical';
+export type GrowthSubjectType = 'contact' | 'domain' | 'shop' | 'affiliate' | 'share';
+
+export interface GrowthSignalRow {
+  id: number;
+  signal_id: string;
+  tenant_id: string;
+  subject_type: GrowthSubjectType | string;
+  subject_id: string;
+  signal_type: string;
+  severity: GrowthSignalSeverity | string;
+  confidence: number;
+  detected_at: number;
+  expires_at: number;
+  source_event_id: string | null;
+  evidence_json: string;
+  status: GrowthSignalStatus | string;
+  created_at: number;
+  updated_at: number;
+}
+
+export type AgentActionStatus =
+  | 'proposed'
+  | 'policy_checked'
+  | 'approved'
+  | 'executed'
+  | 'rejected'
+  | 'failed'
+  | 'rolled_back'
+  | 'outcome_observed'
+  | 'no_outcome_observed';
+
+export type AgentActionType =
+  | 'wait'
+  | 'manual_review'
+  | 'enroll_sequence'
+  | 'send_via_skrip'
+  | 'pause_campaign'
+  | 'start_campaign'
+  | 'pause_contact'
+  | 'escalate_to_human';
+
+export type AgentRiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export interface ProposedAgentAction {
+  type: AgentActionType | string;
+  params?: Record<string, unknown>;
+  reason?: string;
+}
+
+export interface GrowthPolicyResult {
+  allowed: boolean;
+  blockedReasons: string[];
+  warnings: string[];
+  requiredApproval: boolean;
+  effectiveChannels: string[];
+  cooldownUntil: number | null;
+  evidence: Record<string, unknown>;
+}
+
+export interface AgentActionRow {
+  id: number;
+  action_id: string;
+  idempotency_key: string;
+  correlation_id: string;
+  agent_id: string;
+  tenant_id: string;
+  subject_id: string;
+  signal_id: string | null;
+  proposed_action: string;
+  proposed_action_json: string;
+  status: AgentActionStatus | string;
+  risk_level: AgentRiskLevel | string;
+  confidence: number;
+  evidence_json: string;
+  input_hash: string;
+  output_hash: string;
+  policy_result_json: string;
+  ai_metadata_json: string | null;
+  created_at: number;
+  updated_at: number;
+  approved_at: number | null;
+  executed_at: number | null;
+  outcome_due_at: number | null;
+  outcome_json: string | null;
+}
+
+export interface AgentActionEventRow {
+  id: number;
+  action_id: string;
+  event_type: string;
+  actor: string;
+  correlation_id: string;
+  payload_json: string;
+  created_at: number;
+}
+
+export interface AgentActionOutcomeRow {
+  id: number;
+  action_id: string;
+  outcome_type: string;
+  observed_at: number;
+  window_seconds: number;
+  attribution_strength: string;
+  revenue_or_value: number | null;
+  evidence_json: string;
+  created_at: number;
+}
+
 // ─── Commission Tiers ───────────────────────────────────────────────────────
 
 export interface CommissionTier {
@@ -581,6 +838,10 @@ export interface ApiResponse<T = unknown> {
   ok: boolean;
   data?: T;
   error?: string;
+  /** Machine-readable error code, present on all error responses. */
+  code?: string;
+  /** Correlation ID for distributed tracing, present on all error responses. */
+  correlationId?: string;
   meta?: Record<string, unknown>;
 }
 

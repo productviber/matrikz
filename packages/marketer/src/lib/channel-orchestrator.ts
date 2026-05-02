@@ -25,6 +25,7 @@
 import type { Env, ContactForm, SocialHandles } from '../types';
 import { execute, query, queryOne } from './db';
 import { submitContactForm } from './contact-form';
+import { enqueueEligibleSkripChannels } from './skrip/outbox';
 
 // ── Channel Priority Map ────────────────────────────────────────────────
 
@@ -196,6 +197,24 @@ export async function executeSecondaryChannels(
   campaignSlug: string
 ): Promise<string[]> {
   const usedChannels: string[] = [];
+
+  try {
+    const skripEnqueues = await enqueueEligibleSkripChannels(env, {
+      campaignId: campaignSlug,
+      stepId: stepKey,
+      contactId: email,
+      domain,
+      context,
+    });
+
+    if (skripEnqueues.length > 0) {
+      console.log(
+        `[Orchestrator] Staged ${skripEnqueues.length} Skrip channel(s) for ${email}: ${skripEnqueues.map((entry) => `${entry.channel}:${entry.status}`).join(', ')}`,
+      );
+    }
+  } catch (err) {
+    console.log(`[Orchestrator] Skrip staging error for ${email}: ${err instanceof Error ? err.message : err}`);
+  }
 
   // ── Track the email send (marked 'attempted' until Brevo webhook confirms delivery) ──
   await recordChannelAttempt(env, {

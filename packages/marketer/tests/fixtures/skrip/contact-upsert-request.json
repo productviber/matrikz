@@ -1,0 +1,12 @@
+{
+  "externalContactId": "lead@acme.com",
+  "channel": "push",
+  "address": "{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/abc123\",\"keys\":{\"p256dh\":\"BNcRdreALRFXTkOOUHK\",\"auth\":\"tBHItJI5svbpez7KI4CCXg\"}}",
+  "consentState": "opted_in",
+  "suppressionState": "clear",
+  "profile": {
+    "domain": "acme.com",
+    "source": "push_prompt"
+  },
+  "tags": ["outbound", "free_audit"]
+}

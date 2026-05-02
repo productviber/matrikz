@@ -162,15 +162,15 @@ describe('prepareWarmTemplateContext()', () => {
         expect(result.contactNameGreeting).toBe('');
     });
 
-    // ── Does not set A/B tracking indices (low volume — no A/B for warm) ─
+    // ── Warm flow tracks selected variant indices for engagement attribution ─
 
-    it('does not set _subjectVariantIdx', () => {
+    it('sets _subjectVariantIdx', () => {
         const result = prepareWarmTemplateContext(baseContext, 'audit-followup-step1');
-        expect(result._subjectVariantIdx).toBeUndefined();
+        expect(typeof result._subjectVariantIdx).toBe('number');
     });
 
-    it('does not set _bodyVariantIdx', () => {
+    it('sets _bodyVariantIdx', () => {
         const result = prepareWarmTemplateContext(baseContext, 'audit-followup-step1');
-        expect(result._bodyVariantIdx).toBeUndefined();
+        expect(typeof result._bodyVariantIdx).toBe('number');
     });
 });

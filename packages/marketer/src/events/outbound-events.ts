@@ -109,7 +109,8 @@ export async function handleProspectDiscovered(
         companyName: companyName ?? domain,
         contactName: contactName ?? null,
         score,
-      }
+      },
+      null, // no capability hook at discovery time — enrichment will backfill attribution
     );
     console.log(`[Outbound] Enrolled ${contactEmail} in ${enrolledSteps} cold outreach step(s)`);
   } else {
@@ -137,12 +138,12 @@ export async function handleProspectEnriched(
     prospectId, domain, companyName, contactEmail,
     contactName, source, score, auditScore, auditGrade,
     issueCount, passCount, techStack,
-    primaryTopic, angles, wordCount, reportUrl,
-    contactForms, socialHandles,
+    primaryTopic, angles, auditedPages, wordCount, reportUrl,
+    contactForms, socialHandles, capabilityHook,
   } = data;
 
   console.log(
-    `[Outbound] Prospect enriched: ${domain} (auditScore=${auditScore}, grade=${auditGrade}, angles=${angles?.length ?? 0})`
+    `[Outbound] Prospect enriched: ${domain} (auditScore=${auditScore}, grade=${auditGrade}, angles=${angles?.length ?? 0}, capability=${capabilityHook?.id ?? 'none'})`
   );
 
   if (!contactEmail) {
@@ -217,6 +218,8 @@ export async function handleProspectEnriched(
       techStack: techStack ?? [],
       primaryTopic: primaryTopic ?? null,
       anglesCount: angles?.length ?? 0,
+      auditedPagesCount: Array.isArray(auditedPages) ? auditedPages.length : 0,
+      capabilityHookId: capabilityHook?.id ?? null,
       enrichedAt: timestamp,
     }),
   };
@@ -247,10 +250,12 @@ export async function handleProspectEnriched(
     techStack: techStack ?? [],
     primaryTopic: primaryTopic ?? null,
     angles: angles ?? [],
+    auditedPages: Array.isArray(auditedPages) ? auditedPages : existing.auditedPages ?? [],
     wordCount: wordCount ?? null,
     reportUrl: reportUrl ?? existing.reportUrl ?? null,
     contactForms: contactForms ?? existing.contactForms ?? [],
     socialHandles: socialHandles ?? existing.socialHandles ?? {},
+    capabilityHook: capabilityHook ?? existing.capabilityHook ?? null,
     enrichedAt: timestamp,
   };
 
@@ -275,7 +280,9 @@ export async function handleProspectEnriched(
         score,
         auditScore: auditScore ?? null,
         auditGrade: auditGrade ?? null,
-      }
+        capabilityHook: capabilityHook ?? null,
+      },
+      capabilityHook?.id ?? null,
     );
     console.log(`[Outbound] Enrolled enriched prospect ${contactEmail} in ${enrolledSteps} cold outreach step(s)`);
   }
@@ -296,4 +303,86 @@ export async function handleProspectEnriched(
   }
 
   console.log(`[Outbound] Updated enrichment context for ${contactEmail}`);
+}
+
+/**
+ * Handle outbound.prospect_converted event.
+ *
+ * Fired from the analytics worker's OAuth callback ONLY when the OAuth state
+ * payload carries a valid `outboundRef` (or_xxx token) — i.e. the user arrived
+ * via a cold outreach email CTA.
+ *
+ * Responsibilities:
+ *   1. Update marketing_contacts status → 'converted' (was 'prospect/engaged')
+ *   2. Cancel all pending cold-drip email steps so the user doesn't keep
+ *      receiving cold outreach after they've signed up.
+ *   3. Log conversion attribution data for ROI analysis.
+ */
+export async function handleProspectConverted(
+  env: Env,
+  data: {
+    email: string | null;
+    outboundRef: string;
+    visitorId: string | null;
+    provider: string;
+    siteId: string;
+  },
+  timestamp: string
+): Promise<void> {
+  const { email, outboundRef, visitorId, provider, siteId } = data;
+
+  if (!email) {
+    console.log(`[Outbound] prospect_converted without email — outboundRef=${outboundRef}, skipping`);
+    return;
+  }
+
+  console.log(
+    `[Outbound] Prospect converted via OAuth: email=${email}, outboundRef=${outboundRef}, provider=${provider}`
+  );
+
+  // ── 1. Update CRM contact status → trial (they connected via OAuth) ──
+  try {
+    await upsertContact(env, email, {
+      status: CONTACT_STATUS.TRIAL,
+      metadata: JSON.stringify({
+        convertedViaOutbound: true,
+        outboundRef,
+        visitorId: visitorId ?? null,
+        oauthProvider: provider,
+        siteId,
+        convertedAt: timestamp,
+      }),
+    });
+  } catch (err) {
+    console.error(`[Outbound] Failed to update contact status for ${email}: ${err instanceof Error ? err.message : err}`);
+    // Non-critical — continue and attempt email cancellation
+  }
+
+  // ── 2. Cancel pending cold-drip email steps ──
+  // Mark all 'pending' sends for this contact as 'cancelled' so the cron
+  // job doesn't deliver cold outreach to someone who has already signed up.
+  try {
+    await execute(env.DB, `
+      UPDATE email_sends
+      SET status = 'cancelled', updated_at = datetime('now')
+      WHERE contact_email = ?
+        AND status = 'pending'
+        AND sequence_id IN (
+          SELECT id FROM email_sequences WHERE trigger_event = 'outbound.prospect_discovered'
+        )
+    `, [email]);
+    console.log(`[Outbound] Cancelled pending cold-drip steps for ${email}`);
+  } catch (err) {
+    console.error(`[Outbound] Failed to cancel cold-drip steps for ${email}: ${err instanceof Error ? err.message : err}`);
+  }
+
+  // ── 3. Remove KV cold-outreach context (no longer needed) ──
+  // Keep enrichment data — useful for warm onboarding sequences.
+  try {
+    await env.KV_MARKETING.delete(`${KV_PREFIX.EMAIL_CONTEXT}${email}:cold-outreach`);
+  } catch {
+    /* non-critical */
+  }
+
+  console.log(`[Outbound] Conversion attribution recorded for ${email} (ref=${outboundRef})`);
 }

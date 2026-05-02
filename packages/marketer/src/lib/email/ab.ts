@@ -2,10 +2,20 @@ export function pickWeightedIndex(poolSize: number, weights?: number[] | null): 
   if (!weights || weights.length !== poolSize) {
     return Math.floor(Math.random() * poolSize);
   }
-  const total = weights.reduce((sum, w) => sum + Math.max(w, 1), 0);
+  // A weight of 0 (or any non-positive value) marks a variant as disabled —
+  // used by the prune-weakest admin endpoint to retire underperformers without
+  // shifting indices (which would break KV weight-array alignment and D1
+  // subject_variant_idx persistence for historical rows).
+  const clamped = weights.map((w) => (typeof w === 'number' && w > 0 ? w : 0));
+  const total = clamped.reduce((sum, w) => sum + w, 0);
+  if (total <= 0) {
+    // All variants disabled (should not happen in normal ops) — fall back to
+    // uniform random so we never block a send.
+    return Math.floor(Math.random() * poolSize);
+  }
   let rnd = Math.random() * total;
-  for (let i = 0; i < weights.length; i++) {
-    rnd -= Math.max(weights[i], 1);
+  for (let i = 0; i < clamped.length; i++) {
+    rnd -= clamped[i];
     if (rnd <= 0) {
       return i;
     }
@@ -19,11 +29,15 @@ export async function recordVariantEngagement(
   variantType: 'subject' | 'body',
   variantIdx: number,
   event: 'send' | 'open' | 'click' | 'reply',
+  tier?: string | null,
 ): Promise<void> {
   const key = `ab:variants:${templateKey}`;
   const raw = await kv.get(key);
   const data: Record<string, number[]> = raw ? JSON.parse(raw) : {};
-  const poolKey = `${variantType}:${templateKey}`;
+  // When a tier is provided, weights are scoped per tier so each score-band
+  // learns its own best variant independently. Legacy un-tiered rows fall
+  // through to the non-tier key for backward compatibility.
+  const poolKey = tier ? `${variantType}:${templateKey}:${tier}` : `${variantType}:${templateKey}`;
 
   if (!data[poolKey]) {
     data[poolKey] = [];

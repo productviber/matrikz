@@ -40,7 +40,14 @@ export async function handleListEmailSends(
     PAGINATION.MAX_PAGE_SIZE
   );
 
-  let sql = `SELECT es.*, est.subject, est.template_key, seq.name as sequence_name
+  // Prefer the actually-rendered subject (set by processDueEmails after
+  // variant selection + interpolation). Falls back to the template string on
+  // email_steps.subject for legacy rows sent before migration 0011.
+  let sql = `SELECT es.*,
+                    COALESCE(es.rendered_subject, est.subject) AS subject,
+                    est.subject AS template_subject,
+                    est.template_key,
+                    seq.name AS sequence_name
      FROM email_sends es
      JOIN email_steps est ON es.step_id = est.id
      JOIN email_sequences seq ON es.sequence_id = seq.id`;

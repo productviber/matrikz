@@ -550,8 +550,8 @@ describe('webhooks — Brevo handler', () => {
 
   describe('A/B variant tracking on opens/clicks', () => {
     it('records variant engagement on open when ab:send data exists', async () => {
-      // Set up: a send with variant data was stored  
-      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+      // Set up: a send with variant data was stored (legacy row — variant indices not persisted).
+      env.DB.onQuery(/FROM email_sends es\s+JOIN email_steps est/i, () => [
         { id: 42, template_key: 'cold-outreach-step1' },
       ]);
       await env.KV_MARKETING.put('ab:send:user@example.com:42', JSON.stringify({
@@ -577,7 +577,7 @@ describe('webhooks — Brevo handler', () => {
     });
 
     it('records variant engagement on click with +5 weight', async () => {
-      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+      env.DB.onQuery(/FROM email_sends es\s+JOIN email_steps est/i, () => [
         { id: 99, template_key: 'cold-outreach-step2' },
       ]);
       await env.KV_MARKETING.put('ab:send:clicker@example.com:99', JSON.stringify({
@@ -602,7 +602,7 @@ describe('webhooks — Brevo handler', () => {
     });
 
     it('does not fail when no ab:send data exists for the email', async () => {
-      env.DB.onQuery(/SELECT id, template_key FROM email_sends/, () => [
+      env.DB.onQuery(/FROM email_sends es\s+JOIN email_steps est/i, () => [
         { id: 50, template_key: 'step1' },
       ]);
       // No ab:send entry → should still succeed

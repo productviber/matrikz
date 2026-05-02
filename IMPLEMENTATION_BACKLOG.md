@@ -30,8 +30,9 @@ Access lanes (earmarked):
 
 ### Agentic access lane
 - `[x]` Add agentic token lane (disabled unless configured).
-- `[ ]` Define which endpoints are agent-eligible and explicitly deny all others.
-- `[ ]` Add narrow-scoped agent permissions and operation-level audit metadata.
+- `[x]` Define which endpoints are agent-eligible and explicitly deny all others (`AGENTIC_ALLOWED_OPERATIONS` constant in `route-lanes.ts`; `detectAgenticTokenMisuse` guard in `access.ts` + main router returns 403 when agent token hits non-agentic lane).
+- `[x]` Add narrow-scoped agent permissions and operation-level audit metadata (`auditAgenticAccess` emits a KV record with operation + request fingerprint on every successful agentic request).
+- `[x]` Add operation scopes for `/api/agentic/*` (`signals:read`, `subjects:read`, `actions:read`, `actions:propose`, `actions:dry_run`, `actions:execute_low_risk`).
 
 ## 2) Critical Fixes
 
@@ -44,16 +45,16 @@ Access lanes (earmarked):
 
 - `[x]` Refactor payout batch generation to avoid per-affiliate sequential KV/DB fan-out (single grouped DB read + parallel KV fetches).
 - `[x]` Optimize A/B stats endpoint KV fanout (batched parallel KV reads + defensive payload parsing).
-- `[ ]` Split cron email processing into bounded concurrency worker units.
-- `[ ]` Add queue/backpressure strategy for burst webhook traffic.
+- `[x]` Split cron email processing into bounded concurrency worker units (`CRON_EMAIL_TIME_BUDGET_MS = 25 s` guard added to cold-sends loop in `email.ts`; warm sends already use `runWithConcurrency`; cold sends have intentional inter-send delays and cannot be parallelised without breaking warmup compliance).
+- `[-]` Add queue/backpressure strategy for burst webhook traffic (KV-backed rate limiter exists at `lib/rate-limit.ts`; Cloudflare Queue binding optional upgrade deferred to future slice).
 
 ## 4) Maintainability
 
 - `[x]` Split `routes/admin.ts` into domain modules (dashboard, outbound, campaigns, contacts).
 - `[x]` Split `lib/email.ts` into renderer, scheduler, provider, and orchestration modules.
 	- Completed slices: extracted A/B helpers to `src/lib/email/ab.ts`, template-context prep to `src/lib/email/context.ts`, provider transport to `src/lib/email/provider.ts`, and renderer/templates to `src/lib/email/renderer.ts`; `lib/email.ts` now remains orchestration-only.
-- `[ ]` Consolidate auth/access helpers into one library and remove duplicate checks.
-- `[ ]` Standardize error envelope with code, message, and correlation ID.
+- `[x]` Consolidate auth/access helpers into one library and remove duplicate checks (all access logic centralised in `lib/access.ts`; `lib/auth.ts` is a thin delegation shim; `detectAgenticTokenMisuse` added for cross-lane detection).
+- `[x]` Standardize error envelope with code, message, and correlation ID (`badRequest`, `unauthorized`, `forbidden`, `notFound`, `serverError`, `tooManyRequests` in `lib/response.ts` now include `code` and `correlationId`; `ApiResponse` type updated; new `forbidden()` helper added).
 
 ## 5) Analytics Package Hardening
 
@@ -65,9 +66,76 @@ Access lanes (earmarked):
 ## 6) Testing & CI
 
 - `[x]` Add tests for access-lane guard behavior (admin/user/system/agentic).
-- `[ ]` Add negative tests for webhook and system endpoint spoofing.
-- `[ ]` Add migration/schema consistency test for SQL column references.
-- `[ ]` Add cross-worker contract tests for marketer <-> analytics APIs.
+- `[x]` Add negative tests for webhook and system endpoint spoofing (`tests/unit/security-spoofing.test.ts` — covers admin/system/agentic/webhook wrong-token, missing-token, replay-source, agentic-misuse, error-envelope shape).
+- `[-]` Add migration/schema consistency test for SQL column references (deferred — comprehensive schema linting requires a separate tooling spike).
+- `[x]` Add cross-worker contract tests for marketer <-> analytics APIs (`tests/unit/analytics-client-contract.test.ts` — validates path, method, auth header, correlationId forwarding, and error-envelope parsing).
+
+## 7) Skrip Multichannel Integration Program
+
+### Phase 0: Contracts and foundation
+- `[x]` Add D1 schema for channel authority, canonical identity mapping, outbox, lineage, DLQ, and push opt-in events (`migrations/0013`).
+- `[x]` Add Skrip client wrapper with HMAC-SHA256 signing, retries, timeout policy, and KV-backed circuit breaker.
+- `[x]` Add feature flags for tenant, campaign, and channel progressive enablement (KV-backed).
+- `[x]` Add strict contract fixtures for Skrip `v1` requests and outcomes (`tests/fixtures/skrip/`).
+- `[x]` Add admin diagnostics for authority state, outbox health by status, and DLQ depth.
+- `[x]` Add outbox dispatcher with exponential backoff, DLQ promotion, and dry-run-safe execution.
+- `[x]` Add contact channel registration with reconciliation sweep for pending identities.
+- `[x]` Add admin trigger endpoints: dispatch sweep, reconcile sweep, message lineage viewer.
+- `[x]` Add operational scripts: `skrip-replay-dlq.mjs`, `skrip-reconcile.mjs`.
+- `[ ]` Apply migration `0013` to staging and production D1 databases.
+
+### Phase 1: Push-only pilot
+- `[x]` Add browser push subscription capture (`POST /api/push/subscribe`, `DELETE /api/push/unsubscribe`).
+- `[x]` Add Skrip contact registration for push subscriptions with tenant-safe identity binding.
+- `[x]` Add `send_via_skrip` path — outbox staging in channel orchestrator (B2B outbound steps) + direct admin trigger `POST /api/admin/push/send` for product lifecycle events.
+- `[x]` Add signed Skrip outcomes webhook and normalized lineage ingestion (`POST /webhooks/skrip/v1/outcomes`).
+- `[-]` Add push opt-in funnel dashboard — backend diagnostics complete; frontend UI pending.
+- `[-]` Pilot rollback switch — `channel_authorities.rollout_state` supports `dry_run → enabled → rollback`; admin UI toggle pending.
+
+### Phase 2: Messaging channel rollout
+- `[x]` Per-contact channel eligibility engine — consent/suppression/availability checks in `outbox.ts`; all four channels (push/SMS/WhatsApp/Telegram) eligible via `SKRIP_CHANNELS` list.
+- `[x]` Add WhatsApp channel capture route + tests (`POST /api/channels/whatsapp/subscribe`, `DELETE /api/channels/whatsapp/unsubscribe`; E.164 validation; `tests/unit/skrip-channels.test.ts`).
+- `[x]` Add SMS channel capture route + tests (`POST /api/channels/sms/subscribe`, `DELETE /api/channels/sms/unsubscribe`; E.164 validation).
+- `[x]` Add Telegram channel capture route + tests (`POST /api/channels/telegram/subscribe`, `DELETE /api/channels/telegram/unsubscribe`; numeric chat_id validation).
+- `[x]` Add multichannel attribution and ROI dashboard (`GET /api/admin/outbound/skrip/attribution` — `channel_message_lineage` breakdown by channel + status vs email_sends baseline; summary delivery/failure rates per channel).
+
+### Phase 3: Optional email convergence
+- `[ ]` Establish decision gate for email convergence based on parity, SLOs, and rollback proof.
+- `[ ]` If approved, add isolated email authority flag and parity checklist.
+
+## 8) Agent-Led Growth Controller Foundation
+
+### Phase 1: deterministic growth signals
+- `[x]` Add D1 growth signal projection (`migrations/0014_agentic_growth_foundation.sql`).
+- `[x]` Materialize signal candidates from trusted event ingestion (`audit.completed`, `lead.captured`, Shopify lifecycle, trial expiry, outbound enrichment, share creation, affiliate click).
+- `[x]` Add signal dedupe, expiration, severity, confidence, source event, and evidence JSON.
+- `[-]` Extend signal coverage to Brevo engagement/Skrip outcomes and deeper product adoption gaps.
+
+### Phase 2: agent action ledger
+- `[x]` Add `agent_actions`, `agent_action_events`, and `agent_action_outcomes` D1 tables.
+- `[x]` Add deterministic action idempotency, input/output hashes, correlation IDs, policy snapshots, and ai-engine metadata snapshots.
+- `[x]` Add action audit endpoint (`GET /api/agentic/actions/:id/audit`).
+
+### Phase 3: agentic API namespace
+- `[x]` Add dedicated `/api/agentic/*` namespace for signal reads, subject context, proposal, dry-run, execution, action reads, and audit reads.
+- `[x]` Keep broad `/api/admin/*` outside the agentic lane while preserving the explicit legacy allowlist for email processing and outbound campaign start/pause.
+
+### Phase 4: policy and execution rails
+- `[x]` Add central growth policy engine for suppression, unsubscribe, personal email, channel availability, frequency cap, campaign state, daily budget, risk, approval threshold, and kill switches.
+- `[-]` Expand policy to domain-gap and campaign/channel rollout checks as rollout data matures.
+- `[x]` Execute `wait`, `manual_review`, `escalate_to_human`, `enroll_sequence`, `send_via_skrip`, `pause_contact`, `pause_campaign`, and `start_campaign` only through ledger + policy.
+
+### Phase 5: ai-engine advisory client
+- `[x]` Add optional `AI_ENGINE` service binding and typed client methods for `growthNextAction`, `growthSignalSummarize`, `journeyCritic`, `messageBrief`, and `outcomeDiagnose`.
+- `[x]` Add timeout, retry, KV-backed circuit breaker, and deterministic fallback to `wait`/`manual_review` when ai-engine is unavailable.
+- `[x]` Ensure ai-engine can advise/rank/explain but cannot execute actions.
+
+### Remaining productization
+- `[x]` Add operator APIs for growth signals, agent action review/approval, Skrip opt-in funnel, rollout controls, and performance outcomes.
+- `[x]` Add scheduled stale-outcome job and richer attribution joins to email/Skrip execution surfaces.
+- `[x]` Add deterministic event-to-action proposal materialization for eligible growth signals.
+- `[x]` Add staging smoke script for Skrip diagnostics + signed outcome webhook verification (`pnpm run test:smoke:skrip`).
+- `[ ]` Apply migration `0014` to staging and production D1 databases after local dry-run checks.
 
 ## Route Ownership Matrix (initial)
 
@@ -90,6 +158,13 @@ System access:
 - `/webhooks/brevo/inbound`
 
 Agentic access (proposed, gated by token):
+- `/api/agentic/growth-signals`
+- `/api/agentic/subjects/:id/context`
+- `/api/agentic/actions/propose`
+- `/api/agentic/actions/dry-run`
+- `/api/agentic/actions/execute`
+- `/api/agentic/actions/:id`
+- `/api/agentic/actions/:id/audit`
 - `/api/admin/emails/process`
 - `/api/admin/campaigns/outbound/:id/start`
 - `/api/admin/campaigns/outbound/:id/pause`

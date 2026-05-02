@@ -13,6 +13,7 @@ import {
   PAGINATION,
   TLD_UTC_OFFSET,
   SEND_WINDOW,
+  CRON_EMAIL_TIME_BUDGET_MS,
 } from '../constants';
 import { query, queryOne, execute, now } from './db';
 import { runWithConcurrency } from './concurrency';
@@ -39,6 +40,56 @@ import type { WarmupStep } from './warmup';
 
 const WARM_EMAIL_CONCURRENCY = 4;
 
+/**
+ * Resolve recipient UTC offset from email domain TLD with compound-TLD support.
+ */
+function resolveRecipientUtcOffset(email: string): number {
+  const domain = email.split('@')[1]?.toLowerCase() ?? '';
+  const parts = domain.split('.');
+  const tld2 = parts.length >= 3 ? `${parts[parts.length - 2]}.${parts[parts.length - 1]}` : '';
+  const tld1 = parts[parts.length - 1] ?? '';
+  return TLD_UTC_OFFSET[tld2] ?? TLD_UTC_OFFSET[tld1] ?? 0;
+}
+
+/**
+ * Align a UTC timestamp to the recipient's local weekday send window.
+ * Keeps cadence semantics by never scheduling earlier than `earliestUtcTs`.
+ */
+function alignToRecipientSendWindow(earliestUtcTs: number, email: string): number {
+  const offsetHours = resolveRecipientUtcOffset(email);
+  const offsetSeconds = offsetHours * 3600;
+
+  // Convert to "synthetic local time" by applying the UTC offset.
+  const local = new Date((earliestUtcTs + offsetSeconds) * 1000);
+
+  // Push weekend sends to Monday 09:00 local.
+  const localDay = local.getUTCDay();
+  if (localDay === 0 || localDay === 6) {
+    const daysToMonday = localDay === 0 ? 1 : 2;
+    local.setUTCDate(local.getUTCDate() + daysToMonday);
+    local.setUTCHours(SEND_WINDOW.IDEAL_START, 0, 0, 0);
+  }
+
+  const localHour = local.getUTCHours();
+  if (localHour < SEND_WINDOW.IDEAL_START) {
+    local.setUTCHours(SEND_WINDOW.IDEAL_START, 0, 0, 0);
+  } else if (localHour >= SEND_WINDOW.IDEAL_END) {
+    local.setUTCDate(local.getUTCDate() + 1);
+    local.setUTCHours(SEND_WINDOW.IDEAL_START, 0, 0, 0);
+
+    // If we rolled into weekend, jump to Monday.
+    const rolledDay = local.getUTCDay();
+    if (rolledDay === 0 || rolledDay === 6) {
+      const daysToMonday = rolledDay === 0 ? 1 : 2;
+      local.setUTCDate(local.getUTCDate() + daysToMonday);
+      local.setUTCHours(SEND_WINDOW.IDEAL_START, 0, 0, 0);
+    }
+  }
+
+  const alignedUtcTs = Math.floor(local.getTime() / 1000) - offsetSeconds;
+  return Math.max(alignedUtcTs, earliestUtcTs);
+}
+
 export { pickWeightedIndex, recordVariantEngagement, loadVariantWeights };
 export { prepareWarmTemplateContext };
 export { injectUtmParams } from './email/renderer';
@@ -53,12 +104,18 @@ export function prepareTemplateContext(
 
 /**
  * Enroll a contact in all active sequences matching an event type.
+ *
+ * @param capabilityHookId Optional attribution tag persisted onto each
+ *   email_sends row (see migration 0010). Lets the admin metrics dashboard
+ *   group opens / clicks / replies by capability hook. Pass `undefined` when
+ *   the caller does not have a hook for this contact — the column is NULL.
  */
 export async function enrollInSequences(
   env: Env,
   contactEmail: string,
   triggerEvent: string,
-  contextData?: Record<string, unknown>
+  contextData?: Record<string, unknown>,
+  capabilityHookId?: string | null,
 ): Promise<number> {
   const sequences = await query<{ id: number; name: string }>(
     env.DB,
@@ -70,6 +127,8 @@ export async function enrollInSequences(
 
   let totalScheduled = 0;
   const baseTime = now();
+  const isOutboundTrigger = triggerEvent.startsWith('outbound.');
+  const hookIdParam = capabilityHookId && capabilityHookId.length > 0 ? capabilityHookId : null;
 
   for (const seq of sequences) {
     const existing = await queryOne(
@@ -89,12 +148,15 @@ export async function enrollInSequences(
     );
 
     for (const step of steps) {
-      const scheduledAt = baseTime + step.delay_seconds;
+      const earliestAt = baseTime + step.delay_seconds;
+      const scheduledAt = isOutboundTrigger
+        ? alignToRecipientSendWindow(earliestAt, contactEmail)
+        : earliestAt;
       await execute(
         env.DB,
-        `INSERT INTO email_sends (contact_email, sequence_id, step_id, status, scheduled_at)
-         VALUES (?, ?, ?, '${EMAIL_STATUS.SCHEDULED}', ?)`,
-        [contactEmail, seq.id, step.id, scheduledAt]
+        `INSERT INTO email_sends (contact_email, sequence_id, step_id, status, scheduled_at, capability_hook_id)
+         VALUES (?, ?, ?, '${EMAIL_STATUS.SCHEDULED}', ?, ?)`,
+        [contactEmail, seq.id, step.id, scheduledAt, hookIdParam]
       );
       totalScheduled++;
     }
@@ -217,6 +279,7 @@ export async function processDueEmails(
   let skippedThrottle = 0;
   let skippedDomainGap = 0;
   let coldSendIndex = 0;
+  const loopStartedAt = Date.now();
 
   /**
    * Check if the current UTC hour is within the prospect's local business window.
@@ -252,7 +315,10 @@ export async function processDueEmails(
       }
 
       if (isColdOutreach) {
-        context = prepareTemplateContext(context, send.template_key);
+        // Load A/B weights so tiered cold pools learn over time (previously
+        // cold selection was uniform random — a real learning no-op).
+        const coldWeights = await loadVariantWeights(env.KV_MARKETING, send.template_key);
+        context = prepareTemplateContext(context, send.template_key, coldWeights);
       } else {
         // Warm sends: prepare template context with weighted A/B variant selection
         const warmWeights = await loadVariantWeights(env.KV_MARKETING, send.template_key);
@@ -263,17 +329,68 @@ export async function processDueEmails(
         ? String(context.variantSubject)
         : send.subject;
 
-      await sendEmail(env, {
+      // Extract variant indices set by prepareTemplateContext / prepareWarmTemplateContext.
+      // Stored as numbers (null if the template has no variant pool).
+      const subjectVariantIdx = typeof context._subjectVariantIdx === 'number'
+        ? context._subjectVariantIdx
+        : null;
+      const bodyVariantIdx = typeof context._bodyVariantIdx === 'number'
+        ? context._bodyVariantIdx
+        : null;
+      // Framing tier drives score-band copy selection AND A/B learning partition.
+      const framingTier = typeof context._framingTier === 'string'
+        ? context._framingTier
+        : null;
+
+      const providerResult = await sendEmail(env, {
         to: send.contact_email,
         subject,
         templateKey: send.template_key,
         context,
+        sendId: send.id,
       });
+
+      // Persist engagement correlator for webhook (see constants.KV_PREFIX.AB_SEND).
+      // Best-effort — webhook has a fallback query path if this KV write fails.
+      try {
+        await env.KV_MARKETING.put(
+          `${KV_PREFIX.AB_SEND}${send.contact_email}:${send.id}`,
+          JSON.stringify({
+            templateKey: send.template_key,
+            subIdx: subjectVariantIdx,
+            bodyIdx: bodyVariantIdx,
+            tier: framingTier,
+            sentAt: now(),
+          }),
+          { expirationTtl: TTL.DAYS_90 },
+        );
+      } catch (kvErr) {
+        console.warn(
+          `[Email] ab:send KV write failed for send ${send.id}:`,
+          kvErr instanceof Error ? kvErr.message : kvErr,
+        );
+      }
 
       await execute(
         env.DB,
-        `UPDATE email_sends SET status = '${EMAIL_STATUS.SENT}', sent_at = ? WHERE id = ?`,
-        [now(), send.id]
+        `UPDATE email_sends
+            SET status = '${EMAIL_STATUS.SENT}',
+                sent_at = ?,
+                rendered_subject = ?,
+                subject_variant_idx = ?,
+                body_variant_idx = ?,
+                brevo_message_id = ?,
+                framing_tier = ?
+          WHERE id = ?`,
+        [
+          now(),
+          subject,
+          subjectVariantIdx,
+          bodyVariantIdx,
+          providerResult.messageId,
+          framingTier,
+          send.id,
+        ],
       );
 
       if (isColdOutreach) {
@@ -330,6 +447,13 @@ export async function processDueEmails(
 
   for (const send of coldSends) {
     const isColdOutreach = true;
+
+    // Time-budget guard: stop claiming new cold sends if the cron is near its
+    // wall-clock limit. Deferred sends are picked up cleanly on the next run.
+    if (Date.now() - loopStartedAt > CRON_EMAIL_TIME_BUDGET_MS) {
+      console.log('[Email] Cron time budget reached, deferring remaining cold sends');
+      break;
+    }
 
     if (isColdOutreach) {
       if (!isBusinessHours) {
@@ -440,17 +564,26 @@ interface EmailPayload {
   subject: string;
   templateKey: string;
   context: Record<string, unknown>;
+  /** email_sends.id threaded to the provider as a tag for webhook correlation. */
+  sendId?: number;
 }
 
 /**
  * Send one email via configured provider.
+ *
+ * Returns the provider's message id (or `null` if suppressed / in dev mode /
+ * provider did not surface one). Callers persist the id onto the email_sends
+ * row so webhooks can correlate opens, clicks, bounces, and complaints.
  */
-async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
-  const { to, subject, templateKey, context } = payload;
+async function sendEmail(
+  env: Env,
+  payload: EmailPayload,
+): Promise<{ messageId: string | null }> {
+  const { to, subject, templateKey, context, sendId } = payload;
 
   if (await isUnsubscribed(env, to)) {
     console.log(`[Email] Skipping send to ${to} - unsubscribed`);
-    return;
+    return { messageId: null };
   }
 
   const htmlBody = await renderTemplate(env, templateKey, {
@@ -461,11 +594,13 @@ async function sendEmail(env: Env, payload: EmailPayload): Promise<void> {
 
   if (env.ENVIRONMENT === 'development' || !env.EMAIL_API_KEY) {
     console.log(`[Email:Dev] Would send to ${to}: "${subject}" (template: ${templateKey})`);
-    return;
+    return { messageId: null };
   }
 
   const isCold = templateKey.startsWith('cold-outreach-');
-  await sendWithProvider(env, to, subject, htmlBody, {
+  return sendWithProvider(env, to, subject, htmlBody, {
     skipBulkHeaders: isCold,
+    sendId,
+    templateKey,
   });
 }

@@ -18,6 +18,15 @@ export interface AccessDecision {
   error?: string;
 }
 
+const DEFAULT_AGENTIC_SCOPES = [
+  'signals:read',
+  'subjects:read',
+  'actions:read',
+  'actions:propose',
+  'actions:dry_run',
+  'actions:execute_low_risk',
+] as const;
+
 function getBearerToken(request: Request): string | null {
   const auth = request.headers.get('Authorization');
   if (!auth) return null;
@@ -37,6 +46,14 @@ function parseTokenCandidates(primary?: string, rollover?: string): string[] {
 function hasMatchingToken(token: string, candidates: string[]): boolean {
   const normalizedToken = token.trim();
   return candidates.some((candidate) => timingSafeEqual(normalizedToken, candidate));
+}
+
+function parseScopeList(input?: string): string[] {
+  const raw = input && input.trim().length > 0 ? input : DEFAULT_AGENTIC_SCOPES.join(',');
+  return raw
+    .split(',')
+    .map((scope) => scope.trim())
+    .filter((scope) => scope.length > 0);
 }
 
 function requestFingerprint(request: Request): string {
@@ -108,6 +125,30 @@ export function ensureAgenticAccess(request: Request, env: Env): AccessDecision 
   return allow('agentic');
 }
 
+export function resolveAgenticScopes(request: Request, env: Env): string[] {
+  const headerToken = request.headers.get('x-agent-token');
+  const bearer = getBearerToken(request);
+  const token = headerToken ?? bearer;
+  if (!token) return [];
+
+  const primaryCandidates = parseTokenCandidates(env.AGENT_TOKEN);
+  if (hasMatchingToken(token, primaryCandidates)) {
+    return parseScopeList(env.AGENT_TOKEN_SCOPES);
+  }
+
+  const rolloverCandidates = parseTokenCandidates(undefined, env.AGENT_TOKEN_ROLLOVER);
+  if (hasMatchingToken(token, rolloverCandidates)) {
+    return parseScopeList(env.AGENT_TOKEN_ROLLOVER_SCOPES);
+  }
+
+  return [];
+}
+
+export function hasAgenticScope(request: Request, env: Env, requiredScope: string): boolean {
+  const scopes = resolveAgenticScopes(request, env);
+  return scopes.includes('*') || scopes.includes(requiredScope);
+}
+
 export function ensureSystemAccess(
   request: Request,
   env: Env,
@@ -163,4 +204,52 @@ export async function ensureUserAccess(request: Request, env: Env): Promise<Acce
     return deny('user', 401, 'Affiliate bearer token required');
   }
   return allow('user');
+}
+
+/**
+ * Detect agentic token credentials on a non-agentic route.
+ * Returns a denied decision when an agent token is presented against a lane
+ * that isn't `agentic` — prevents privilege escalation via token reuse.
+ */
+export function detectAgenticTokenMisuse(
+  request: Request,
+  env: Env,
+  resolvedLane: AccessLane,
+): AccessDecision | null {
+  if (resolvedLane === 'agentic') return null; // correct lane, no issue
+
+  const candidates = parseTokenCandidates(env.AGENT_TOKEN, env.AGENT_TOKEN_ROLLOVER);
+  if (candidates.length === 0) return null; // agentic not configured
+
+  const headerToken = request.headers.get('x-agent-token');
+  const bearer = getBearerToken(request);
+  const token = headerToken ?? bearer;
+  if (!token) return null;
+  if (!hasMatchingToken(token, candidates)) return null;
+
+  // Agentic token presented on a non-agentic route — explicit deny.
+  return deny('agentic', 403, 'Agentic token not permitted on this route');
+}
+
+/**
+ * Emit an audit record for every successful agentic access.
+ * Stored in KV so operators can query the agentic activity log.
+ */
+export async function auditAgenticAccess(
+  env: Env,
+  request: Request,
+  operation: string,
+): Promise<void> {
+  try {
+    const now = Date.now();
+    const key = `${KV_PREFIX.AUTH_NONCE}agent-access:${now}:${Math.random().toString(36).slice(2, 8)}`;
+    const record = {
+      at: new Date(now).toISOString(),
+      operation,
+      fingerprint: requestFingerprint(request),
+    };
+    await env.KV_MARKETING.put(key, JSON.stringify(record), { expirationTtl: TTL.DAYS_30 });
+  } catch {
+    // Non-fatal — never block the request for an audit write failure.
+  }
 }

@@ -51,6 +51,8 @@ export const EVENT_TYPES = {
   OUTBOUND_EMAIL_COMPLAINED: 'outbound.email_complained',
   OUTBOUND_EMAIL_REPLIED: 'outbound.email_replied',
   OUTBOUND_UNSUBSCRIBED: 'outbound.unsubscribed',
+  /** Cold-email prospect completed OAuth — closes the attribution loop. */
+  OUTBOUND_PROSPECT_CONVERTED: 'outbound.prospect_converted',
   // ── Audit Funnel Events (from analytics free-audit flow) ──
   AUDIT_COMPLETED: 'audit.completed',
   LEAD_CAPTURED: 'lead.captured',
@@ -84,6 +86,166 @@ export const EMAIL_STATUS = {
   SENT: 'sent',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
+} as const;
+
+// ─── Skrip Integration ─────────────────────────────────────────────────────
+
+export const SKRIP_CHANNEL = {
+  EMAIL: 'email',
+  PUSH: 'push',
+  SMS: 'sms',
+  WHATSAPP: 'whatsapp',
+  TELEGRAM: 'telegram',
+} as const;
+
+export const SKRIP_POLICY = {
+  EMAIL_ONLY: 'email_only',
+  PUSH_ASSIST: 'push_assist',
+  PUSH_PRIMARY_WITH_EMAIL_FALLBACK: 'push_primary_with_email_fallback',
+  MULTI_CHANNEL_PROGRESSIVE: 'multi_channel_progressive',
+} as const;
+
+export const SKRIP_AUTHORITY = {
+  VISIBILITY_MARKETING: 'visibility_marketing',
+  SKRIP: 'skrip',
+} as const;
+
+export const SKRIP_ROLLOUT_STATE = {
+  DISABLED: 'disabled',
+  DRY_RUN: 'dry_run',
+  ENABLED: 'enabled',
+  ROLLBACK: 'rollback',
+} as const;
+
+export const SKRIP_OUTBOX_STATUS = {
+  DRY_RUN: 'dry_run',
+  PENDING: 'pending',
+  DISPATCHED: 'dispatched',
+  RETRYING: 'retrying',
+  FAILED: 'failed',
+  CANCELLED: 'cancelled',
+} as const;
+
+export const SKRIP_CONFIG = {
+  DEFAULT_TENANT_ID: 'default',
+  DEFAULT_TIMEOUT_MS: 10_000,
+  MAX_RETRIES: 3,
+  CIRCUIT_FAILURE_THRESHOLD: 3,
+  CIRCUIT_OPEN_TTL_SECS: 60,
+  MAX_TIMESTAMP_DRIFT_MS: 5 * 60 * 1000,
+  NONCE_TTL_SECS: 15 * 60,
+  HEADER_TIMESTAMP: 'x-skrip-timestamp',
+  HEADER_NONCE: 'x-skrip-nonce',
+  HEADER_SIGNATURE: 'x-skrip-signature',
+  HEADER_CORRELATION_ID: 'x-skrip-correlation-id',
+  HEADER_TENANT_ID: 'x-vm-tenant-id',
+} as const;
+
+// ─── Agent-Led Growth Foundation ───────────────────────────────────────────
+
+export const GROWTH_SIGNAL_STATUS = {
+  ACTIVE: 'active',
+  DISMISSED: 'dismissed',
+  CONVERTED: 'converted',
+  EXPIRED: 'expired',
+} as const;
+
+export const GROWTH_SIGNAL_SEVERITY = {
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+  CRITICAL: 'critical',
+} as const;
+
+export const GROWTH_SIGNAL_TYPE = {
+  INSTALLED_NO_FIRST_ANALYSIS: 'installed_no_first_analysis',
+  AUDIT_COMPLETED_NO_SIGNUP: 'audit_completed_no_signup',
+  SIGNUP_NO_SITE_CONNECTED: 'signup_no_site_connected',
+  FIRST_ANALYSIS_NO_RETURN: 'first_analysis_no_return',
+  TRIAL_EXPIRING_HIGH_INTENT: 'trial_expiring_high_intent',
+  UNINSTALL_WITH_RECENT_ENGAGEMENT: 'uninstall_with_recent_engagement',
+  COLD_CLICKED_NO_REPLY: 'cold_clicked_no_reply',
+  AUDIT_GRADE_LOW_HIGH_FIT: 'audit_grade_low_high_fit',
+  PRICING_VISIT_NO_SIGNUP: 'pricing_visit_no_signup',
+  SHARE_CREATED_NO_CONVERSION: 'share_created_no_conversion',
+  AFFILIATE_CLICK_NO_SIGNUP: 'affiliate_click_no_signup',
+  WARM_AUDIT_LEAD_FOLLOWUP: 'warm_audit_lead_followup',
+} as const;
+
+export const GROWTH_SUBJECT_TYPE = {
+  CONTACT: 'contact',
+  DOMAIN: 'domain',
+  SHOP: 'shop',
+  AFFILIATE: 'affiliate',
+  SHARE: 'share',
+} as const;
+
+export const AGENT_ACTION_TYPE = {
+  WAIT: 'wait',
+  MANUAL_REVIEW: 'manual_review',
+  ENROLL_SEQUENCE: 'enroll_sequence',
+  SEND_VIA_SKRIP: 'send_via_skrip',
+  PAUSE_CAMPAIGN: 'pause_campaign',
+  START_CAMPAIGN: 'start_campaign',
+  PAUSE_CONTACT: 'pause_contact',
+  ESCALATE_TO_HUMAN: 'escalate_to_human',
+} as const;
+
+export const AGENT_ACTION_STATUS = {
+  PROPOSED: 'proposed',
+  POLICY_CHECKED: 'policy_checked',
+  APPROVED: 'approved',
+  EXECUTED: 'executed',
+  REJECTED: 'rejected',
+  FAILED: 'failed',
+  ROLLED_BACK: 'rolled_back',
+  OUTCOME_OBSERVED: 'outcome_observed',
+  NO_OUTCOME_OBSERVED: 'no_outcome_observed',
+} as const;
+
+export const AGENT_ACTION_EVENT = {
+  PROPOSED: 'proposed',
+  POLICY_CHECKED: 'policy_checked',
+  APPROVED: 'approved',
+  EXECUTED: 'executed',
+  REJECTED: 'rejected',
+  FAILED: 'failed',
+  ROLLED_BACK: 'rolled_back',
+  OUTCOME_OBSERVED: 'outcome_observed',
+  NO_OUTCOME_OBSERVED: 'no_outcome_observed',
+} as const;
+
+export const AGENT_RISK_LEVEL = {
+  LOW: 'low',
+  MEDIUM: 'medium',
+  HIGH: 'high',
+  CRITICAL: 'critical',
+} as const;
+
+export const GROWTH_POLICY = {
+  DEFAULT_SIGNAL_TTL_DAYS: 7,
+  HIGH_INTENT_SIGNAL_TTL_DAYS: 14,
+  ACTION_WINDOW_SECONDS: 24 * 60 * 60,
+  DEFAULT_OUTCOME_WINDOW_SECONDS: 14 * 24 * 60 * 60,
+  MAX_LIST_LIMIT: 200,
+  DEFAULT_LIST_LIMIT: 50,
+  DEFAULT_CONFIDENCE: 65,
+  MIN_EXECUTION_CONFIDENCE: 40,
+  DEFAULT_AGENT_ID: 'visibility-growth-agent',
+  KILL_SWITCH_GLOBAL_KEY: 'agent:growth:kill:global',
+  KILL_SWITCH_TENANT_PREFIX: 'agent:growth:kill:tenant:',
+  KILL_SWITCH_CAMPAIGN_PREFIX: 'agent:growth:kill:campaign:',
+  KILL_SWITCH_CHANNEL_PREFIX: 'agent:growth:kill:channel:',
+  DAILY_ACTION_LIMIT: 100,
+} as const;
+
+export const AI_ENGINE_CONFIG = {
+  DEFAULT_TIMEOUT_MS: 8_000,
+  MAX_RETRIES: 1,
+  CIRCUIT_FAILURE_THRESHOLD: 3,
+  CIRCUIT_OPEN_TTL_SECS: 60,
+  CAPABILITY_VERSION: '2026-05-02',
+  RESPONSE_SCHEMA_VERSION: 'growth-action-v1',
 } as const;
 
 // ─── Payout Statuses ────────────────────────────────────────────────────────
@@ -149,6 +311,16 @@ export const PAGINATION = {
   CRON_BATCH_SIZE: 100,
 } as const;
 
+/**
+ * Wall-clock budget for the cron email processing loop.
+ * Cold sends have intentional 2-6 s inter-send delays to respect warmup
+ * schedules and avoid IP-reputation damage. The budget stops claiming new
+ * sends when the cron invocation approaches its platform timeout, ensuring
+ * deferred sends are picked up cleanly on the next run rather than getting
+ * orphaned mid-loop.
+ */
+export const CRON_EMAIL_TIME_BUDGET_MS = 25_000;
+
 // ─── String Length Limits ───────────────────────────────────────────────────
 
 export const MAX_LENGTH = {
@@ -197,10 +369,27 @@ export const KV_PREFIX = {
   OUTBOUND_BOUNCE: 'outbound:bounce:',
   /** Engagement tracking per email (opens, clicks, last activity) */
   OUTBOUND_ENGAGEMENT: 'outbound:engagement:',
+  /**
+   * A/B variant correlation record written at send-time, read by webhook
+   * handlers so we can credit the right variant pool on opens/clicks/replies.
+   * Full key shape: `ab:send:<email>:<email_sends.id>`
+   * Payload: `{ templateKey, subIdx, bodyIdx, sentAt }`
+   */
+  AB_SEND: 'ab:send:',
   /** Contact form submission dedup tracker (per domain) */
   OUTBOUND_FORM: 'outbound:form:',
   /** Nonce dedupe keys for replay-protected sensitive user actions */
   AUTH_NONCE: 'auth:nonce:',
+  /** Feature flags for Skrip progressive enablement */
+  SKRIP_FLAG: 'skrip:flag:',
+  /** Circuit breaker state for Skrip upstream calls */
+  SKRIP_CIRCUIT: 'skrip:circuit:',
+  /** Consecutive failure counters for Skrip upstream calls */
+  SKRIP_FAILURE: 'skrip:failure:',
+  /** Circuit breaker state for ai-engine advisory calls */
+  AI_ENGINE_CIRCUIT: 'ai-engine:circuit:',
+  /** Consecutive failure counters for ai-engine advisory calls */
+  AI_ENGINE_FAILURE: 'ai-engine:failure:',
 } as const;
 
 // ─── Payout Providers ──────────────────────────────────────────────────────

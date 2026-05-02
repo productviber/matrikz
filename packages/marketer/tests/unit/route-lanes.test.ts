@@ -9,6 +9,7 @@ describe('route lane resolver', () => {
   it('maps webhook ingress routes', () => {
     expect(resolveRouteLane('POST', '/webhooks/brevo')).toBe('webhook');
     expect(resolveRouteLane('POST', '/webhooks/brevo/inbound')).toBe('webhook');
+    expect(resolveRouteLane('POST', '/webhooks/skrip/v1/outcomes')).toBe('webhook');
   });
 
   it('maps user self-service routes', () => {
@@ -32,6 +33,13 @@ describe('route lane resolver', () => {
   });
 
   it('maps bounded agentic routes', () => {
+    expect(resolveRouteLane('GET', '/api/agentic/growth-signals')).toBe('agentic');
+    expect(resolveRouteLane('GET', '/api/agentic/subjects/lead%40acme.com/context')).toBe('agentic');
+    expect(resolveRouteLane('POST', '/api/agentic/actions/propose')).toBe('agentic');
+    expect(resolveRouteLane('POST', '/api/agentic/actions/dry-run')).toBe('agentic');
+    expect(resolveRouteLane('POST', '/api/agentic/actions/execute')).toBe('agentic');
+    expect(resolveRouteLane('GET', '/api/agentic/actions/act_123')).toBe('agentic');
+    expect(resolveRouteLane('GET', '/api/agentic/actions/act_123/audit')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/emails/process')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/campaigns/outbound/12/start')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/campaigns/outbound/12/pause')).toBe('agentic');

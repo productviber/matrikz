@@ -49,7 +49,18 @@
  *   GET  /api/admin/outbound/channels/:domain        — Admin: per-prospect channels & attempts
  *   POST /api/admin/outbound/channels/:domain/attempt — Admin: record manual outreach attempt
  *
+ *   Skrip multichannel integration:
+ *   GET  /api/admin/outbound/skrip/diagnostics  — Admin: Skrip integration diagnostics
+ *   POST /api/admin/outbound/skrip/dispatch     — Admin: trigger outbox dispatch sweep
+ *   POST /api/admin/outbound/skrip/reconcile    — Admin: trigger identity reconciliation
+ *   GET  /api/admin/outbound/skrip/lineage      — Admin: message lineage by tenant/campaign
+ *
+ *   POST /api/admin/push/send           — Admin: enqueue push notification for a contact
+ *   POST /api/push/subscribe            — Capture browser Web Push subscription
+ *   DELETE /api/push/unsubscribe        — Record Web Push opt-out
+ *
  *   POST /webhooks/brevo                — Brevo deliverability webhooks
+ *   POST /webhooks/skrip/v1/outcomes    — Skrip normalized outcome webhooks
  */
 
 import type { Env } from './types';
@@ -64,6 +75,7 @@ import {
   RATE_LIMIT,
 } from './constants'; import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
+import { handleAgenticRoute } from './routes/agentic';
 import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
 import { handleCreateAffiliateSession } from './routes/affiliate-session';
 import { handleAffiliateApply, handleAffiliateApprove, handleListApplications } from './routes/affiliate-recruitment';
@@ -95,9 +107,34 @@ import {
   handleCrossSystemHealth,
   handleOutboundSLO,
   handleReputationTrend,
+  handleEmailMetrics,
+  handleEmailTimeline,
+  handleEnqueueProspect,
+  handleVariantMetrics,
+  handlePruneVariants,
+  handleSkripDiagnostics,
+  handleSkripDispatchTrigger,
+  handleSkripReconcileTrigger,
+  handleSkripLineage,
+  handleAdminPushSend,
+  handleSkripAttribution,
+  handleSkripOptInFunnel,
+  handleSkripAuthorityUpsert,
+  handleAdminAgenticSignals,
+  handleAdminAgenticPerformance,
+  handleApproveAgentAction,
+  handleAgenticOutcomeExport,
+  handleMarkStaleAgentActions,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
 import { handleBrevoWebhook, handleBrevoInbound } from './routes/webhooks';
+import { handleSkripOutcomeWebhook } from './routes/webhooks-skrip';
+import { handlePushSubscribe, handlePushUnsubscribe } from './routes/skrip-push';
+import {
+  handleWhatsAppSubscribe, handleWhatsAppUnsubscribe,
+  handleSmsSubscribe, handleSmsUnsubscribe,
+  handleTelegramSubscribe, handleTelegramUnsubscribe,
+} from './routes/skrip-channels';
 import { handleSetAffiliatePayoutDetails, handleGetAffiliatePayoutDetails } from './routes/affiliate-payout-setup';
 import { corsPreflightResponse, notFound, tooManyRequests, badRequest } from './lib/response';
 import {
@@ -108,6 +145,8 @@ import {
   ensureWebhookAccess,
   ensureUserAccess,
   auditDeniedAdminAttempt,
+  detectAgenticTokenMisuse,
+  auditAgenticAccess,
 } from './lib/access';
 import { resolveRouteLane } from './lib/route-lanes';
 import { processDueEmails } from './lib/email';
@@ -117,6 +156,9 @@ import { toErrorResponse } from './lib/errors';
 import { logEvent } from './lib/observability';
 import { correlationIdFromRequest, setCorrelationId, clearCorrelationId } from './lib/correlation';
 import { captureReputationSnapshot } from './lib/reputation';
+import { dispatchOutboxBatch } from './lib/skrip/dispatcher';
+import { reconcilePendingIdentities } from './lib/skrip/registration';
+import { markStaleAgentActions } from './lib/growth/outcomes';
 
 export default {
   /**
@@ -149,6 +191,12 @@ export default {
       // ── Service binding events from visibility-analytics ──
       const lane = resolveRouteLane(method, path);
       if (lane) {
+        // Guard against agentic credentials being used on non-agentic routes.
+        const agenticMisuse = detectAgenticTokenMisuse(request, env, lane);
+        if (agenticMisuse) {
+          return accessDenied(agenticMisuse);
+        }
+
         const source = request.headers.get('x-source') ?? undefined;
         const decision =
           lane === 'admin' ? ensureAdminAccess(request, env)
@@ -160,6 +208,11 @@ export default {
         if (!decision.ok) {
           await auditDeniedAdminAttempt(env, request, decision);
           return accessDenied(decision);
+        }
+
+        // Emit structured audit record for every successful agentic access.
+        if (lane === 'agentic') {
+          ctx.waitUntil(auditAgenticAccess(env, request, `${method} ${path}`));
         }
       }
 
@@ -267,6 +320,11 @@ export default {
         return handleUnsubscribe(request, env);
       }
 
+      // ── Agentic Growth Controller Routes ──
+      if (path.startsWith('/api/agentic/')) {
+        return handleAgenticRoute(request, env);
+      }
+
       // ── Admin Routes ──
       if (method === 'GET' && path === '/api/admin/dashboard') {
         return handleAdminDashboard(request, env);
@@ -316,6 +374,46 @@ export default {
       }
       if (method === 'GET' && path === '/api/admin/outbound/reputation') {
         return handleReputationTrend(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/skrip/diagnostics') {
+        return handleSkripDiagnostics(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/outbound/skrip/dispatch') {
+        return handleSkripDispatchTrigger(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/outbound/skrip/reconcile') {
+        return handleSkripReconcileTrigger(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/skrip/lineage') {
+        return handleSkripLineage(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/skrip/opt-in-funnel') {
+        return handleSkripOptInFunnel(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/outbound/skrip/authority') {
+        return handleSkripAuthorityUpsert(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/push/send') {
+        return handleAdminPushSend(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/skrip/attribution') {
+        return handleSkripAttribution(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/agentic/signals') {
+        return handleAdminAgenticSignals(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/agentic/performance') {
+        return handleAdminAgenticPerformance(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/agentic/outcomes/export') {
+        return handleAgenticOutcomeExport(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/agentic/outcomes/review-stale') {
+        return handleMarkStaleAgentActions(request, env);
+      }
+      const approveMatch = path.match(/^\/api\/admin\/agentic\/actions\/([^/]+)\/approve$/);
+      if (method === 'POST' && approveMatch) {
+        return handleApproveAgentAction(request, env, decodeURIComponent(approveMatch[1]));
       }
       if (method === 'GET' && path === '/api/admin/outbound/ab-stats') {
         return handleAbStats(request, env);
@@ -370,12 +468,61 @@ export default {
         }
       }
 
+      // ── Internal (service-binding) admin endpoints ──
+      // Called by the analytics worker's operator dashboard. Lane='system'.
+      if (method === 'GET' && path === '/api/internal/outbound/metrics') {
+        return handleEmailMetrics(request, env);
+      }
+      if (method === 'GET' && path === '/api/internal/outbound/timeline') {
+        return handleEmailTimeline(request, env);
+      }
+      if (method === 'GET' && path === '/api/internal/outbound/variants') {
+        return handleVariantMetrics(request, env);
+      }
+      if (method === 'POST' && path === '/api/internal/outbound/variants/prune') {
+        return handlePruneVariants(request, env);
+      }
+      if (method === 'POST' && path === '/api/internal/outbound/enqueue') {
+        return handleEnqueueProspect(request, env);
+      }
+
       // ── Webhooks ──
       if (method === 'POST' && path === '/webhooks/brevo') {
         return handleBrevoWebhook(request, env);
       }
       if (method === 'POST' && path === '/webhooks/brevo/inbound') {
         return handleBrevoInbound(request, env);
+      }
+      if (method === 'POST' && path === '/webhooks/skrip/v1/outcomes') {
+        return handleSkripOutcomeWebhook(request, env);
+      }
+
+      // ── Push Subscription ──
+      if (method === 'POST' && path === '/api/push/subscribe') {
+        return handlePushSubscribe(request, env);
+      }
+      if (method === 'DELETE' && path === '/api/push/unsubscribe') {
+        return handlePushUnsubscribe(request, env);
+      }
+
+      // ── Multi-Channel Subscriptions (WhatsApp · SMS · Telegram) ──
+      if (method === 'POST' && path === '/api/channels/whatsapp/subscribe') {
+        return handleWhatsAppSubscribe(request, env);
+      }
+      if (method === 'DELETE' && path === '/api/channels/whatsapp/unsubscribe') {
+        return handleWhatsAppUnsubscribe(request, env);
+      }
+      if (method === 'POST' && path === '/api/channels/sms/subscribe') {
+        return handleSmsSubscribe(request, env);
+      }
+      if (method === 'DELETE' && path === '/api/channels/sms/unsubscribe') {
+        return handleSmsUnsubscribe(request, env);
+      }
+      if (method === 'POST' && path === '/api/channels/telegram/subscribe') {
+        return handleTelegramSubscribe(request, env);
+      }
+      if (method === 'DELETE' && path === '/api/channels/telegram/unsubscribe') {
+        return handleTelegramUnsubscribe(request, env);
       }
 
       // ── Root — worker identifier ──
@@ -424,6 +571,40 @@ export default {
     ctx.waitUntil(
       captureReputationSnapshot(env).catch((err) => {
         console.warn('[Cron] Reputation snapshot failed:', err instanceof Error ? err.message : err);
+      })
+    );
+
+    // Skrip outbox dispatch — sends pending channel_execution_outbox rows
+    ctx.waitUntil(
+      dispatchOutboxBatch(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+        console.log(`[Cron] Skrip dispatch: ${result.dispatched} dispatched, ${result.skipped} skipped, ${result.failed} failed`);
+        return logEvent(env, 'cron.skripDispatch.completed', { ...result });
+      }).catch((err) => {
+        console.error('[Cron] Skrip dispatch error:', err);
+        return logEvent(env, 'cron.skripDispatch.failed', {
+          error: err instanceof Error ? err.message : String(err),
+        }, 'error');
+      })
+    );
+
+    // Skrip identity reconciliation — registers pending channel identities with Skrip
+    ctx.waitUntil(
+      reconcilePendingIdentities(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+        if (result.scanned > 0) {
+          console.log(`[Cron] Skrip reconcile: ${result.registered} registered, ${result.failed} failed of ${result.scanned} scanned`);
+        }
+      }).catch((err) => {
+        console.warn('[Cron] Skrip reconciliation error:', err instanceof Error ? err.message : err);
+      })
+    );
+
+    ctx.waitUntil(
+      markStaleAgentActions(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+        if (result.marked > 0) {
+          console.log(`[Cron] Agent outcomes: ${result.marked} stale action(s) marked no_outcome_observed`);
+        }
+      }).catch((err) => {
+        console.warn('[Cron] Agent outcome review error:', err instanceof Error ? err.message : err);
       })
     );
   },

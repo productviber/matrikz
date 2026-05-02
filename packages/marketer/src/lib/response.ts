@@ -4,6 +4,7 @@
 
 import type { ApiResponse, Env } from '../types';
 import { CORS, CONTENT_TYPE_JSON } from '../constants';
+import { getCorrelationId } from './correlation';
 
 const JSON_HEADERS = { 'Content-Type': CONTENT_TYPE_JSON };
 
@@ -33,23 +34,27 @@ export function created<T>(data?: T, env?: Env): Response {
 }
 
 export function badRequest(error: string, env?: Env): Response {
-  return json<ApiResponse>({ ok: false, error }, 400, undefined, env);
+  return json<ApiResponse>({ ok: false, error, code: 'bad_request', correlationId: getCorrelationId() }, 400, undefined, env);
 }
 
 export function unauthorized(error = 'Unauthorized', env?: Env): Response {
-  return json<ApiResponse>({ ok: false, error }, 401, undefined, env);
+  return json<ApiResponse>({ ok: false, error, code: 'unauthorized', correlationId: getCorrelationId() }, 401, undefined, env);
+}
+
+export function forbidden(error = 'Forbidden', env?: Env): Response {
+  return json<ApiResponse>({ ok: false, error, code: 'forbidden', correlationId: getCorrelationId() }, 403, undefined, env);
 }
 
 export function notFound(error = 'Not found', env?: Env): Response {
-  return json<ApiResponse>({ ok: false, error }, 404, undefined, env);
+  return json<ApiResponse>({ ok: false, error, code: 'not_found', correlationId: getCorrelationId() }, 404, undefined, env);
 }
 
 export function serverError(error = 'Internal server error', env?: Env): Response {
-  return json<ApiResponse>({ ok: false, error }, 500, undefined, env);
+  return json<ApiResponse>({ ok: false, error, code: 'internal_error', correlationId: getCorrelationId() }, 500, undefined, env);
 }
 
 export function tooManyRequests(error = 'Too many requests', env?: Env): Response {
-  return json<ApiResponse>({ ok: false, error }, 429, undefined, env);
+  return json<ApiResponse>({ ok: false, error, code: 'rate_limited', correlationId: getCorrelationId() }, 429, undefined, env);
 }
 
 export function corsPreflightResponse(env?: Env): Response {

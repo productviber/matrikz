@@ -1,0 +1,16 @@
+{
+  "subscription": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/test-token",
+    "keys": {
+      "p256dh": "BNcRdreALRFXTkOOUHK1abc",
+      "auth": "tBHItJI5svbpez7abc"
+    }
+  },
+  "contactId": "lead@acme.com",
+  "tenantId": "default",
+  "browserSessionId": "sess_abc123",
+  "metadata": {
+    "source": "push_prompt",
+    "page": "/audit-result"
+  }
+}

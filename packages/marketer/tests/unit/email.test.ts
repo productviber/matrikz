@@ -4,7 +4,7 @@
  * Tests enrollment, deduplication, and cancellation.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { enrollInSequences, cancelPendingEmails, prepareTemplateContext } from '../../src/lib/email';
 import { createMockEnv, type MockEnv } from '../helpers';
 
@@ -13,6 +13,10 @@ describe('email', () => {
 
   beforeEach(() => {
     env = createMockEnv();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe('enrollInSequences()', () => {
@@ -63,6 +67,44 @@ describe('email', () => {
 
       const count = await enrollInSequences(env as any, 'user@test.com', 'user.converted');
       expect(count).toBe(0);
+    });
+
+    it('aligns outbound scheduled_at to recipient local weekday send window', async () => {
+      // Fixed UTC time: 03:00. For .com (UTC-5), local time is 22:00 (outside window),
+      // so step1 should align to next local 09:00 => 14:00 UTC.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-04-23T03:00:00.000Z'));
+
+      env.DB.onQuery(/SELECT id, name FROM email_sequences/, () => {
+        return [{ id: 1, name: 'Cold Outreach' }];
+      });
+      env.DB.onQuery(/SELECT id FROM email_sends/, () => {
+        return [];
+      });
+      env.DB.onQuery(/SELECT id, step_order, delay_seconds FROM email_steps/, () => {
+        return [
+          { id: 10, step_order: 1, delay_seconds: 0 },
+          { id: 11, step_order: 2, delay_seconds: 86_400 },
+        ];
+      });
+
+      const count = await enrollInSequences(
+        env as any,
+        'user@example.com',
+        'outbound.prospect_discovered',
+      );
+      expect(count).toBe(2);
+
+      const inserts = env.DB._queries.filter((q) => q.sql.includes('INSERT INTO email_sends'));
+      expect(inserts).toHaveLength(2);
+
+      // step1: 2026-04-23 14:00:00 UTC
+      const expectedStep1 = Math.floor(new Date('2026-04-23T14:00:00.000Z').getTime() / 1000);
+      // step2 base is +1 day at 03:00 UTC, still outside local window => 14:00 UTC same day
+      const expectedStep2 = Math.floor(new Date('2026-04-24T14:00:00.000Z').getTime() / 1000);
+
+      expect(inserts[0].params[3]).toBe(expectedStep1);
+      expect(inserts[1].params[3]).toBe(expectedStep2);
     });
   });
 

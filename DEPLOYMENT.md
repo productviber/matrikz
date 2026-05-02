@@ -352,6 +352,99 @@ await cache.set(key, value, { ttl: 21600 }) // 6 hours
 - [ ] Monitoring/logging enabled
 - [ ] Backup strategy in place (D1 backups)
 
+## Marketer D1 Migration Runbook
+
+Apply all pending migrations to the marketer D1 database. Run staging first, then production.
+
+### Prerequisites
+
+Ensure Wrangler is authenticated and the D1 database binding name matches `wrangler.toml`:
+
+```powershell
+# Confirm binding name in packages/marketer/wrangler.toml:
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "visibility-marketing"
+# database_id = "<your-d1-id>"
+```
+
+### Apply to Staging
+
+```powershell
+Set-Location packages/marketer
+# Dry-run first — lists pending migrations without applying
+wrangler d1 migrations apply visibility-marketing --env staging --dry-run
+
+# Apply after confirming dry-run output
+wrangler d1 migrations apply visibility-marketing --env staging
+```
+
+### Verify Migration State
+
+```powershell
+# List applied migrations
+wrangler d1 execute visibility-marketing --env staging --command "SELECT * FROM d1_migrations ORDER BY applied_at DESC LIMIT 20;"
+
+# Verify key tables exist
+wrangler d1 execute visibility-marketing --env staging --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;"
+```
+
+Expected tables after all migrations (0001–0014):
+`outbound_campaigns`, `outbound_prospects`, `cold_outreach_sequences`, `warmup_schedule`,
+`prospect_channels`, `follow_up_sequences`, `suppression_list`, `email_sends`,
+`email_sends_engagement`, `contact_channel_identities`, `channel_authorities`,
+`channel_execution_outbox`, `channel_message_lineage`, `skrip_outbound_events`,
+`growth_signals`, `agent_actions`, `agent_action_events`, `agent_action_outcomes`.
+
+### Verify Channel Authority Rows (dry_run gate)
+
+Before enabling live Skrip sends, insert `dry_run` authority rows for each non-email channel
+and confirm the policy engine sees them:
+
+```sql
+-- Insert dry_run authority for push (repeat for sms, whatsapp, telegram)
+INSERT INTO channel_authorities (tenant_id, campaign_id, channel, authority, rollout_state)
+VALUES ('default', NULL, 'push', 'skrip', 'dry_run')
+ON CONFLICT DO UPDATE SET rollout_state = 'dry_run', authority = 'skrip';
+
+INSERT INTO channel_authorities (tenant_id, campaign_id, channel, authority, rollout_state)
+VALUES ('default', NULL, 'sms', 'skrip', 'dry_run')
+ON CONFLICT DO UPDATE SET rollout_state = 'dry_run', authority = 'skrip';
+
+INSERT INTO channel_authorities (tenant_id, campaign_id, channel, authority, rollout_state)
+VALUES ('default', NULL, 'whatsapp', 'skrip', 'dry_run')
+ON CONFLICT DO UPDATE SET rollout_state = 'dry_run', authority = 'skrip';
+
+INSERT INTO channel_authorities (tenant_id, campaign_id, channel, authority, rollout_state)
+VALUES ('default', NULL, 'telegram', 'skrip', 'dry_run')
+ON CONFLICT DO UPDATE SET rollout_state = 'dry_run', authority = 'skrip';
+```
+
+Verify rows:
+```sql
+SELECT tenant_id, channel, authority, rollout_state FROM channel_authorities ORDER BY channel;
+```
+
+### Apply to Production
+
+Only after staging dry-run checks pass:
+
+```powershell
+wrangler d1 migrations apply visibility-marketing --env production --dry-run
+wrangler d1 migrations apply visibility-marketing --env production
+```
+
+### Rollback a Migration
+
+D1 migrations are append-only by convention. To roll back, apply the inverse SQL manually:
+
+```powershell
+wrangler d1 execute visibility-marketing --env staging --command "DROP TABLE IF EXISTS growth_signals;"
+# Then remove the migration file from d1_migrations tracking if needed
+```
+
+For full rollback scripts, see the comments at the top of each migration file in `packages/marketer/migrations/`.
+
 ## Ongoing Maintenance
 
 ### Weekly

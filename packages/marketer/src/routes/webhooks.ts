@@ -16,6 +16,7 @@ import type { Env } from '../types';
 import { ok, badRequest, serverError, unauthorized } from '../lib/response';
 import { execute, query, queryOne } from '../lib/db';
 import { recordVariantEngagement, incrementCampaignMetric } from '../lib/email';
+import { upsertGrowthSignal } from '../lib/growth/signals';
 import { ensureWebhookAccess, accessDenied } from '../lib/access';
 import { logEvent } from '../lib/observability';
 import { addSuppression } from '../lib/suppression';
@@ -28,6 +29,9 @@ import {
   COMPLIANCE,
   EVENT_TYPES,
   EMAIL_STATUS,
+  GROWTH_SIGNAL_SEVERITY,
+  GROWTH_SIGNAL_TYPE,
+  GROWTH_SUBJECT_TYPE,
 } from '../constants';
 
 // ─── Brevo Event Types ──────────────────────────────────────────────────────
@@ -64,6 +68,11 @@ interface BrevoWebhookPayload {
   /** Additional bounce details */
   ts_event?: number;
 }
+
+const RETARGET_ACCELERATION_SECONDS = Object.freeze({
+  opened: SECONDS_PER_DAY,
+  click: 12 * 3600,
+});
 
 // ─── KV Keys ────────────────────────────────────────────────────────────────
 
@@ -124,6 +133,18 @@ export async function handleBrevoWebhook(
   const emailLower = email.trim().toLowerCase();
   const ts = payload.ts_event ?? Math.floor(Date.now() / 1000);
 
+  // Extract our send-id from the Brevo tag ("send:<id>") we attach at send-time.
+  // Brevo surfaces the first tag in `payload.tag`. Other tags (e.g. "tpl:...")
+  // are ignored here.
+  const correlation: { sendId?: number | null; messageId?: string | null } = {
+    sendId: null,
+    messageId: payload['message-id'] ?? null,
+  };
+  if (typeof payload.tag === 'string' && payload.tag.startsWith('send:')) {
+    const n = Number.parseInt(payload.tag.slice(5), 10);
+    if (Number.isFinite(n) && n > 0) correlation.sendId = n;
+  }
+
   try {
     switch (event) {
       case 'hard_bounce':
@@ -146,7 +167,7 @@ export async function handleBrevoWebhook(
       case 'delivered':
       case 'opened':
       case 'click':
-        await trackPositiveEvent(env, emailLower, event, ts);
+        await trackPositiveEvent(env, emailLower, event, ts, correlation);
         break;
 
       case 'blocked':
@@ -317,14 +338,23 @@ async function handleProviderUnsubscribe(env: Env, email: string): Promise<void>
 
 /**
  * Track positive deliverability signals (delivered, opened, click).
- * For opens/clicks, also update A/B variant weights so future sends
- * favour better-performing subject/body variants.
+ * For opens/clicks, also:
+ *   - UPDATE the matching email_sends row (opened_at / clicked_at / counters)
+ *     so the admin dashboard can segment engagement by step / variant /
+ *     capability hook without scanning KV.
+ *   - call recordVariantEngagement so future sends favour winning variants.
+ *
+ * Correlation precedence (most → least reliable):
+ *   1. payload.tag = "send:<id>"          — threaded by provider.ts on send
+ *   2. payload['message-id'] matches      brevo_message_id column
+ *   3. most recent sent row for the email (legacy path)
  */
 async function trackPositiveEvent(
   env: Env,
   email: string,
   event: string,
-  ts: number
+  ts: number,
+  correlation?: { sendId?: number | null; messageId?: string | null },
 ): Promise<void> {
   // Store last engagement for the contact (useful for re-engagement logic)
   const key = `${KV_PREFIX.OUTBOUND_ENGAGEMENT}${email}`;
@@ -338,34 +368,208 @@ async function trackPositiveEvent(
     expirationTtl: TTL.DAYS_90,
   });
 
-  // A/B variant tracking — credit the variant used in the most recent send
-  if (event === 'opened' || event === 'click') {
-    try {
-      const abEvent = event === 'click' ? 'click' : 'open';
-      // Find the most recent *sent* send for this contact
-      const rows = await query(
+  if (event !== 'opened' && event !== 'click') {
+    return;
+  }
+
+  // ── Resolve the matching email_sends row ──────────────────────────────────
+  let send: {
+    id: number;
+    sequence_id: number;
+    trigger_event: string | null;
+    template_key: string;
+    subject_variant_idx: number | null;
+    body_variant_idx: number | null;
+    framing_tier: string | null;
+  } | undefined;
+
+  if (correlation?.sendId) {
+    const row = await queryOne<{
+      id: number;
+      sequence_id: number;
+      trigger_event: string | null;
+      template_key: string;
+      subject_variant_idx: number | null;
+      body_variant_idx: number | null;
+      framing_tier: string | null;
+    }>(
+      env.DB,
+      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
+         FROM email_sends es
+         JOIN email_steps est ON est.id = es.step_id
+         JOIN email_sequences seq ON seq.id = es.sequence_id
+        WHERE es.id = ? AND es.contact_email = ? LIMIT 1`,
+      [correlation.sendId, email],
+    );
+    if (row) send = row;
+  }
+
+  if (!send && correlation?.messageId) {
+    const row = await queryOne<{
+      id: number;
+      sequence_id: number;
+      trigger_event: string | null;
+      template_key: string;
+      subject_variant_idx: number | null;
+      body_variant_idx: number | null;
+      framing_tier: string | null;
+    }>(
+      env.DB,
+      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
+         FROM email_sends es
+         JOIN email_steps est ON est.id = es.step_id
+         JOIN email_sequences seq ON seq.id = es.sequence_id
+        WHERE es.brevo_message_id = ? LIMIT 1`,
+      [correlation.messageId],
+    );
+    if (row) send = row;
+  }
+
+  if (!send) {
+    const rows = await query<{
+      id: number;
+      sequence_id: number;
+      trigger_event: string | null;
+      template_key: string;
+      subject_variant_idx: number | null;
+      body_variant_idx: number | null;
+      framing_tier: string | null;
+    }>(
+      env.DB,
+      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
+         FROM email_sends es
+         JOIN email_steps est ON est.id = es.step_id
+         JOIN email_sequences seq ON seq.id = es.sequence_id
+        WHERE es.contact_email = ? AND es.status = 'sent'
+        ORDER BY es.sent_at DESC LIMIT 1`,
+      [email],
+    );
+    if (rows[0]) send = rows[0];
+  }
+
+  if (!send) {
+    return; // No row to credit — likely an old contact from before persistence was wired.
+  }
+
+  // ── Persist per-send engagement onto email_sends (authoritative source) ──
+  try {
+    if (event === 'opened') {
+      await execute(
         env.DB,
-        `SELECT id, template_key FROM email_sends
-         WHERE contact_email = ? AND status = 'sent'
-         ORDER BY sent_at DESC LIMIT 1`,
-        [email]
+        `UPDATE email_sends
+            SET opened_at = COALESCE(opened_at, ?),
+                open_count = open_count + 1
+          WHERE id = ?`,
+        [ts, send.id],
       );
-      const send = rows?.[0] as { id: number; template_key: string } | undefined;
-      if (send) {
-        const abRaw = await env.KV_MARKETING.get(`ab:send:${email}:${send.id}`);
-        if (abRaw) {
-          const abData = JSON.parse(abRaw) as { templateKey: string; subIdx?: number; bodyIdx?: number };
-          if (typeof abData.subIdx === 'number') {
-            await recordVariantEngagement(env.KV_MARKETING, abData.templateKey, 'subject', abData.subIdx, abEvent);
-          }
-          if (typeof abData.bodyIdx === 'number') {
-            await recordVariantEngagement(env.KV_MARKETING, abData.templateKey, 'body', abData.bodyIdx, abEvent);
-          }
-        }
-      }
-    } catch {
-      // Non-critical — A/B tracking failure shouldn't block webhook processing
+    } else {
+      await execute(
+        env.DB,
+        `UPDATE email_sends
+            SET clicked_at = COALESCE(clicked_at, ?),
+                click_count = click_count + 1,
+                opened_at = COALESCE(opened_at, ?)
+          WHERE id = ?`,
+        [ts, ts, send.id],
+      );
     }
+  } catch (err) {
+    console.warn(`[Webhook:Brevo] email_sends engagement update failed for ${send.id}:`, err);
+  }
+
+  // P5: tighten cadence for engaged outbound contacts and expose engagement
+  // flags to template context (step3 retarget copy reads _hasOpened).
+  const isOutbound = typeof send.trigger_event === 'string' && send.trigger_event.startsWith('outbound.');
+  if (isOutbound) {
+    if (event === 'click') {
+      await upsertGrowthSignal(env, {
+        subjectType: GROWTH_SUBJECT_TYPE.CONTACT,
+        subjectId: email,
+        signalType: GROWTH_SIGNAL_TYPE.COLD_CLICKED_NO_REPLY,
+        severity: GROWTH_SIGNAL_SEVERITY.HIGH,
+        confidence: 84,
+        sourceEventId: correlation?.messageId ?? `email_send_${send.id}`,
+        evidence: { provider: 'brevo', sendId: send.id, sequenceId: send.sequence_id, templateKey: send.template_key },
+      }).catch(() => { /* Non-critical growth signal projection. */ });
+    }
+
+    await markEngagementContext(env, email, send.sequence_id, event).catch(() => {
+      // Non-critical best effort.
+    });
+
+    const tightenBy = event === 'click'
+      ? RETARGET_ACCELERATION_SECONDS.click
+      : RETARGET_ACCELERATION_SECONDS.opened;
+    const nextAt = ts + tightenBy;
+    await execute(
+      env.DB,
+      `UPDATE email_sends
+          SET scheduled_at = CASE WHEN scheduled_at > ? THEN ? ELSE scheduled_at END
+        WHERE contact_email = ?
+          AND sequence_id = ?
+          AND status = ?
+          AND scheduled_at > ?`,
+      [nextAt, nextAt, email, send.sequence_id, EMAIL_STATUS.SCHEDULED, ts],
+    ).catch(() => {
+      // Non-critical best effort.
+    });
+  }
+
+  // ── A/B variant tracking — prefer indices stored on the row (set at send
+  //    time by email.ts), fall back to KV correlator for legacy rows. ──
+  try {
+    const abEvent = event === 'click' ? 'click' : 'open';
+    let subIdx: number | null = send.subject_variant_idx;
+    let bodyIdx: number | null = send.body_variant_idx;
+    let templateKey: string = send.template_key;
+    let tier: string | null = send.framing_tier;
+
+    if (subIdx == null && bodyIdx == null) {
+      const abRaw = await env.KV_MARKETING.get(`${KV_PREFIX.AB_SEND}${email}:${send.id}`);
+      if (abRaw) {
+        const abData = JSON.parse(abRaw) as {
+          templateKey: string;
+          subIdx?: number;
+          bodyIdx?: number;
+          tier?: string | null;
+        };
+        if (typeof abData.subIdx === 'number') subIdx = abData.subIdx;
+        if (typeof abData.bodyIdx === 'number') bodyIdx = abData.bodyIdx;
+        if (abData.templateKey) templateKey = abData.templateKey;
+        if (typeof abData.tier === 'string' && !tier) tier = abData.tier;
+      }
+    }
+
+    if (typeof subIdx === 'number') {
+      await recordVariantEngagement(env.KV_MARKETING, templateKey, 'subject', subIdx, abEvent, tier);
+    }
+    if (typeof bodyIdx === 'number') {
+      await recordVariantEngagement(env.KV_MARKETING, templateKey, 'body', bodyIdx, abEvent, tier);
+    }
+  } catch {
+    // Non-critical — A/B tracking failure shouldn't block webhook processing
+  }
+}
+
+async function markEngagementContext(
+  env: Env,
+  email: string,
+  sequenceId: number,
+  event: 'opened' | 'click',
+): Promise<void> {
+  const keys = [
+    `${KV_PREFIX.EMAIL_CONTEXT}${email}:cold-outreach`,
+    `${KV_PREFIX.EMAIL_CONTEXT}${email}:${sequenceId}`,
+  ];
+
+  for (const key of keys) {
+    const raw = await env.KV_MARKETING.get(key);
+    const existing = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+    existing._hasOpened = true;
+    if (event === 'click') {
+      existing._hasClicked = true;
+    }
+    await env.KV_MARKETING.put(key, JSON.stringify(existing), { expirationTtl: TTL.DAYS_90 });
   }
 }
 
@@ -627,26 +831,56 @@ export async function handleBrevoInbound(
       { expirationTtl: TTL.DAYS_90 }
     );
 
-    // 3b. A/B variant tracking — credit the variant that earned the reply (+10 weight)
+    // 3b. A/B variant tracking — credit the variant that earned the reply (+10 weight),
+    //     and stamp replied_at on the latest sent row for dashboard analytics.
     try {
       const rows = await query(
         env.DB,
-        `SELECT id, template_key FROM email_sends
-         WHERE contact_email = ? AND status = 'sent'
-         ORDER BY sent_at DESC LIMIT 1`,
+        `SELECT es.id, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
+           FROM email_sends es
+           JOIN email_steps est ON est.id = es.step_id
+          WHERE es.contact_email = ? AND es.status = 'sent'
+          ORDER BY es.sent_at DESC LIMIT 1`,
         [fromEmail]
       );
-      const send = rows?.[0] as { id: number; template_key: string } | undefined;
+      const send = rows?.[0] as {
+        id: number;
+        template_key: string;
+        subject_variant_idx: number | null;
+        body_variant_idx: number | null;
+        framing_tier: string | null;
+      } | undefined;
       if (send) {
-        const abRaw = await env.KV_MARKETING.get(`ab:send:${fromEmail}:${send.id}`);
-        if (abRaw) {
-          const abData = JSON.parse(abRaw) as { templateKey: string; subIdx?: number; bodyIdx?: number };
-          if (typeof abData.subIdx === 'number') {
-            await recordVariantEngagement(env.KV_MARKETING, abData.templateKey, 'subject', abData.subIdx, 'reply');
+        await execute(
+          env.DB,
+          `UPDATE email_sends SET replied_at = COALESCE(replied_at, ?) WHERE id = ?`,
+          [Math.floor(Date.now() / 1000), send.id],
+        ).catch(() => { /* non-critical */ });
+
+        let subIdx: number | null = send.subject_variant_idx;
+        let bodyIdx: number | null = send.body_variant_idx;
+        let templateKey: string = send.template_key;
+        let tier: string | null = send.framing_tier;
+        if (subIdx == null && bodyIdx == null) {
+          const abRaw = await env.KV_MARKETING.get(`${KV_PREFIX.AB_SEND}${fromEmail}:${send.id}`);
+          if (abRaw) {
+            const abData = JSON.parse(abRaw) as {
+              templateKey: string;
+              subIdx?: number;
+              bodyIdx?: number;
+              tier?: string | null;
+            };
+            if (typeof abData.subIdx === 'number') subIdx = abData.subIdx;
+            if (typeof abData.bodyIdx === 'number') bodyIdx = abData.bodyIdx;
+            if (abData.templateKey) templateKey = abData.templateKey;
+            if (typeof abData.tier === 'string' && !tier) tier = abData.tier;
           }
-          if (typeof abData.bodyIdx === 'number') {
-            await recordVariantEngagement(env.KV_MARKETING, abData.templateKey, 'body', abData.bodyIdx, 'reply');
-          }
+        }
+        if (typeof subIdx === 'number') {
+          await recordVariantEngagement(env.KV_MARKETING, templateKey, 'subject', subIdx, 'reply', tier);
+        }
+        if (typeof bodyIdx === 'number') {
+          await recordVariantEngagement(env.KV_MARKETING, templateKey, 'body', bodyIdx, 'reply', tier);
         }
       }
     } catch { /* Non-critical — A/B tracking failure shouldn't block reply processing */ }
@@ -676,7 +910,7 @@ export async function handleBrevoInbound(
     // 5b. Increment campaign-level reply metric
     const replySlug = await getActiveCampaignSlug(env);
     if (replySlug) {
-      await incrementCampaignMetric(env.DB, replySlug, 'total_replied').catch(() => {});
+      await incrementCampaignMetric(env.DB, replySlug, 'total_replied').catch(() => { });
     }
 
     return ok({ processed: true, action: 'reply_detected', email: fromEmail });

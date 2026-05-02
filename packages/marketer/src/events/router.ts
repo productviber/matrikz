@@ -69,8 +69,10 @@ import type {
 import { handlePlanUpgraded, handlePlanDowngraded } from './plan-lifecycle';
 import { handleTrialExpiring } from './trial-expiring';
 import { handleInsightGenerated } from './insight-generated';
-import { handleProspectDiscovered, handleProspectEnriched } from './outbound-events';
+import { handleProspectDiscovered, handleProspectEnriched, handleProspectConverted } from './outbound-events';
 import { handleAuditCompleted, handleLeadCaptured } from './audit-funnel';
+import { materializeGrowthSignalsFromEvent } from '../lib/growth/signals';
+import { proposeEligibleAgentActionsFromSignals } from '../lib/growth/event-actions';
 
 /**
  * Main event handler — called by the worker entry point for POST /events.
@@ -310,6 +312,19 @@ export async function routeEvent(
         );
         break;
 
+      // Outbound attribution loop closed — prospect signed up via cold email CTA
+      case EVENT_TYPES.OUTBOUND_PROSPECT_CONVERTED:
+        dispatchEventTask(ctx, event, source, timestamp, () =>
+          handleProspectConverted(env, data as {
+            email: string | null;
+            outboundRef: string;
+            visitorId: string | null;
+            provider: string;
+            siteId: string;
+          }, timestamp)
+        );
+        break;
+
       // ── Audit funnel events (from analytics free-audit flow) ──
       case EVENT_TYPES.AUDIT_COMPLETED:
         dispatchEventTask(ctx, event, source, timestamp, () =>
@@ -329,6 +344,14 @@ export async function routeEvent(
           JSON.stringify(data).slice(0, MAX_LENGTH.JSON_PREVIEW_SHORT)
         );
     }
+
+    ctx.waitUntil(
+      materializeGrowthSignalsFromEvent(env, event, data, timestamp)
+        .then((signals) => proposeEligibleAgentActionsFromSignals(env, signals, { sourceEvent: event, timestamp }))
+        .catch((err) => {
+          console.warn('[Events] Growth signal/action materialization failed:', err instanceof Error ? err.message : err);
+        })
+    );
 
     return new Response(JSON.stringify({ ok: true, event }), {
       status: 200,

@@ -64,15 +64,27 @@ describe('pickWeightedIndex()', () => {
     expect(counts[2]).toBeLessThan(50);
   });
 
-  it('ensures minimum weight of 1 (exploration guarantee)', () => {
+  it('treats weight 0 as disabled (P2b prune semantics)', () => {
     const counts = [0, 0];
-    // Even with 0 weight, min floor of 1 ensures occasional selection
+    // weight 0 means disabled — variant should never be picked.
     const weights = [0, 100];
     for (let i = 0; i < 1000; i++) {
       counts[pickWeightedIndex(2, weights)]++;
     }
-    // Variant 0 should still get some picks (exploration)
-    expect(counts[0]).toBeGreaterThan(0);
+    expect(counts[0]).toBe(0);
+    expect(counts[1]).toBe(1000);
+  });
+
+  it('falls back to uniform when all weights are 0', () => {
+    const counts = [0, 0, 0];
+    const weights = [0, 0, 0];
+    for (let i = 0; i < 3000; i++) {
+      counts[pickWeightedIndex(3, weights)]++;
+    }
+    // Uniform: each should get ~1000.
+    expect(counts[0]).toBeGreaterThan(800);
+    expect(counts[1]).toBeGreaterThan(800);
+    expect(counts[2]).toBeGreaterThan(800);
   });
 });
 

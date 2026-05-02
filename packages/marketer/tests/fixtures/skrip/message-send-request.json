@@ -1,0 +1,26 @@
+{
+  "idempotencyKey": "default:cmp_1:step_push_1:lead@acme.com:push:2024-05-02T10:00Z",
+  "tenantId": "default",
+  "campaignId": "cmp_1",
+  "journeyId": null,
+  "stepId": "step_push_1",
+  "contact": {
+    "externalContactId": "lead@acme.com",
+    "canonicalId": "skrip_can_acme_push_1"
+  },
+  "channel": "push",
+  "schedule": {
+    "mode": "scheduled",
+    "scheduledFor": "2024-05-02T10:00:00.000Z",
+    "scheduleSlot": "2024-05-02T10:00Z"
+  },
+  "metadata": {
+    "domain": "acme.com",
+    "dryRun": false
+  },
+  "context": {
+    "companyName": "Acme Inc",
+    "auditScore": 65
+  },
+  "correlationId": "cron-abc123"
+}
