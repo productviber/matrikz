@@ -17,7 +17,7 @@
     "test:smoke:skrip": "node scripts/skrip-smoke.mjs",
     "test:all": "vitest run && node tests/smoke.mjs",
     "db:migrate": "wrangler d1 migrations apply visibility-marketing-db --local",
-    "db:migrate:prod": "wrangler d1 migrations apply visibility-marketing-db",
+    "db:migrate:prod": "wrangler d1 migrations apply visibility-marketing-db --remote",
     "activate": "node scripts/activate.mjs",
     "activate:check": "node scripts/activate.mjs --check",
     "lint": "tsc --noEmit",
