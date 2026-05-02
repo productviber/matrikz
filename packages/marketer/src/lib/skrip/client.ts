@@ -10,6 +10,14 @@ interface SkripRequestOptions {
   body?: unknown;
 }
 
+function getSkripServiceToken(env: Env): string | null {
+  return env.SKRIP_SERVICE_TOKEN ?? env.SYSTEM_TOKEN ?? null;
+}
+
+function getSkripSigningSecret(env: Env): string | null {
+  return env.SKRIP_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET ?? null;
+}
+
 function getConfiguredTimeout(env: Env): number {
   const parsed = Number.parseInt(env.SKRIP_TIMEOUT_MS ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : SKRIP_CONFIG.DEFAULT_TIMEOUT_MS;
@@ -42,7 +50,9 @@ async function clearFailures(env: Env): Promise<void> {
 }
 
 async function performRequest<T>(env: Env, options: SkripRequestOptions): Promise<T> {
-  if (!env.SKRIP_BASE_URL || !env.SKRIP_SERVICE_TOKEN || !env.SKRIP_SIGNING_SECRET) {
+  const serviceToken = getSkripServiceToken(env);
+  const signingSecret = getSkripSigningSecret(env);
+  if (!env.SKRIP_BASE_URL || !serviceToken || !signingSecret) {
     throw new Error('Skrip client is not fully configured');
   }
 
@@ -61,7 +71,7 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
     timestamp,
     nonce,
     rawBody,
-    secret: env.SKRIP_SIGNING_SECRET,
+    secret: signingSecret,
   });
 
   const timeoutMs = getConfiguredTimeout(env);
@@ -75,7 +85,7 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
       const response = await fetch(url, {
         method: options.method,
         headers: {
-          Authorization: `Bearer ${env.SKRIP_SERVICE_TOKEN}`,
+          Authorization: `Bearer ${serviceToken}`,
           'Content-Type': 'application/json',
           [SKRIP_CONFIG.HEADER_TIMESTAMP]: timestamp,
           [SKRIP_CONFIG.HEADER_NONCE]: nonce,
@@ -106,8 +116,10 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
 }
 
 export function createSkripClient(env: Env) {
+  const serviceToken = getSkripServiceToken(env);
+  const signingSecret = getSkripSigningSecret(env);
   return {
-    configured: Boolean(env.SKRIP_BASE_URL && env.SKRIP_SERVICE_TOKEN && env.SKRIP_SIGNING_SECRET),
+    configured: Boolean(env.SKRIP_BASE_URL && serviceToken && signingSecret),
     registerContact: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/v1/contacts/upsert', method: 'POST', body: payload }),
     sendMessage: <T>(tenantId: string, payload: unknown) =>

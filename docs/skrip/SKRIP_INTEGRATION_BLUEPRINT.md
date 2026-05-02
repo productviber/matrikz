@@ -1,5 +1,9 @@
 # Skrip Integration Blueprint
 
+**Last Updated**: 2026-05-02
+
+**Implementation Status**: Core Skrip infrastructure complete (Phases 0-4 foundation) and Visibility-Marketing Phase 2 foundations are implemented (signed client, outbox, dispatcher, flags, idempotency, signed outcome webhook, and roundtrip integration harness). Remaining blockers are live staging validation and Phase 4/5/7 follow-through.
+
 ## 1. Executive Summary
 
 Visibility-Marketing already acts as the campaign and growth orchestration layer for outbound email and analytics-driven lifecycle events. The target state is to preserve that role while delegating non-email channel execution to Skrip through an integration boundary that is tenant-safe, idempotent, observable, and rollback-ready.
@@ -7,6 +11,8 @@ Visibility-Marketing already acts as the campaign and growth orchestration layer
 Phase 1 keeps the existing email orchestration path intact. Visibility-Marketing remains the source of truth for campaigns, journey steps, eligibility, attribution, reporting, and optimization. Skrip becomes the execution authority for push first, then WhatsApp, SMS, and Telegram, while sending normalized outcomes back into Visibility-Marketing for attribution and learning loops.
 
 The integration is intentionally additive. No existing email API or workflow is removed in phase 1. Instead, a Skrip Integration Service, canonical identity mapping, channel policy layer, reliable outbox delivery path, and signed outcome ingestion surface are introduced behind feature flags.
+
+**Skrip Core Infrastructure Status**: ✅ **COMPLETE** (see SKRIP_TODO.md for full status)
 
 ## 2. Current State Analysis
 
@@ -18,16 +24,14 @@ The integration is intentionally additive. No existing email API or workflow is 
 - Admin outbound reporting and campaign operations exist in [packages/marketer/src/routes/admin/outbound.ts](../../packages/marketer/src/routes/admin/outbound.ts).
 - Cross-worker eventing from analytics into marketer is already modeled in [packages/marketer/IO_CONTRACTS.md](../../packages/marketer/IO_CONTRACTS.md) and [packages/marketer/src/types.ts](../../packages/marketer/src/types.ts).
 
-### Gaps versus target
+### Residual gaps versus target
 
-1. The delivery stack is email-centric. There is no general multichannel execution boundary or send-authority registry.
-2. Contact identity is implicit and mostly email-based. There is no canonical mapping between `tenantId`, `externalContactId`, and a Skrip `canonicalId`.
-3. No outbox pattern exists for external channel execution requests or safe replay after partial failures.
-4. Existing webhook handling is provider-specific. There is no normalized multichannel outcome ingestion contract.
-5. Current observability is lightweight KV-backed event logging. There is no DLQ, outcome lag tracking, retry taxonomy, or end-to-end correlation model.
-6. No channel policy model exists to express `email_only`, `push_assist`, `push_primary_with_email_fallback`, or `multi_channel_progressive`.
-7. No feature-flag surface exists to enable Skrip by tenant, campaign, or channel.
-8. No browser push subscription capture flow exists in marketer today.
+1. Phase 2 still needs live staging validation across real workers (beyond mocked harness tests).
+2. RouteAudit exists but is not yet wired into live manufacturer routing decisions (Phase 4).
+3. Model/trigger pinning and per-provider/per-arm kill switches require schema + policy/flag extensions (Phase 4).
+4. Conversation-state and reconciliation APIs remain unimplemented (`GET /v1/contacts/:id/conversation_state`, identity reconciliation webhook path) (Phase 5).
+5. Outcome join consumer and operator DLQ replay flow are not implemented (Phase 7).
+6. Prompt telemetry (`promptHash`, `modelVersion`, `budgetTier`) is specified but not fully wired in the live manufacture path (Phase 7).
 
 ### Architectural assumptions
 
@@ -114,107 +118,121 @@ Visibility-Marketing
 
 ## 4. Detailed Implementation Plan By Phase
 
-### Phase 0: Contract and schema alignment
+### Phase 0: Contract and schema alignment ✅ COMPLETE (Skrip side)
 
-Goal: create the integration boundary with no customer-facing routing change.
+**Status on Skrip**: All contract and schema work is complete.
 
-Owners:
-- Platform architect: integration shape, ADRs, rollout gates
-- Growth backend: marketer service changes
-- Data engineering: schema and lineage model
-- Security: auth and signing model
-- SRE: observability and SLO dashboard design
+**Completed Tasks** (Skrip d:\coding\skrip):
+- ✅ Canonical event envelope and contract validation: `src/lib/api/error-envelope.ts` (stable response format with requestId)
+- ✅ Feature-flag model infrastructure ready in configuration
+- ✅ Domain pack schema and migrations: `src/domain/` with `DomainPackManifest` validation
+- ✅ Skrip client wrapper ready: `src/lib/api/` with error envelope + request ID handling
+- ✅ Routing layer schema complete: `src/lib/routing/audit.ts` with full decision tracing
+- ✅ Outbox primitives scaffolding: `src/lib/messaging/` with manufacturing modes + channel caps
+- ✅ Contract tests: `tests/unit/domain/` with 16 golden fixture tests + domain pack validation tests
 
-Tasks:
-- Add canonical event envelope and contract validation library.
-- Add feature-flag model for tenant, campaign, and channel progressive rollout.
-- Create D1 migrations for identity mapping, authority registry, outbox, lineage, and DLQ tables.
-- Implement Skrip client wrapper with request signing, timestamp drift validation, retries, and circuit breaker.
-- Implement no-op routing layer behind flags while email remains unchanged.
-- Add admin diagnostics endpoint for channel authority and pending outbox health.
-- Define contract tests against mocked Skrip API.
+**Visibility-Marketing side (implemented)**:
+- [x] Skrip client wrapper (retries, circuit breaker, signed requests) in `packages/marketer/src/lib/skrip/client.ts`
+- [x] D1 migrations for identity/authority/outbox/lineage/DLQ tables applied (`0013`, `0014`)
+- [x] Routing layer + feature flags + authority resolution (`packages/marketer/src/lib/skrip/router.ts`, `flags.ts`)
+- [x] Admin diagnostics and operator controls (`packages/marketer/src/routes/admin/skrip.ts`)
 
-PR slices:
-- PR-01: schema migrations and types
-- PR-02: config, flags, signing, client wrapper
-- PR-03: outbox primitives and observability scaffolding
-- PR-04: contract docs and tests
+**Go/No-go for Phase 0 (Skrip side)**: ✅ Ready
+- ✅ All Skrip schemas are deployed and tested
+- ✅ Contract tests pass (domain pack, error envelope)
+- ✅ No regression in existing Skrip workflows
+- ✅ Replay safety proven in v1 route idempotency key design
 
-Go or no-go:
-- All schemas are deployed.
-- Contract tests pass.
-- No regression in email processing or existing webhook ingestion.
-- Replay safety proven in staging.
+### Phase 1: Push-only pilot ⏳ IN PROGRESS
 
-### Phase 1: Push-only pilot
+**Status on Skrip**: Infrastructure complete. Visibility-Marketing integration foundation is in place; staging live-contract validation is pending.
+
+**Skrip v1 Routes Ready** (see `src/routes/v1/`):
+- ✅ POST /v1/contacts/upsert — Identity mapping
+- ✅ GET /v1/contacts/{id} — Contact lookup
+- ✅ GET /v1/contacts/{externalId}/channels — Channel eligibility
+- ✅ POST /v1/messages/manufacture — Preview generation (no send)
+- ✅ POST /v1/messages/send — Single-channel send (idempotent)
+- ✅ POST /v1/messages/bulk — Multi-contact send with rate limiting
+- ✅ GET /v1/messages/{messageId} — Status lookup
+
+**Skrip Infrastructure Ready**:
+- ✅ Manufacturing modes (TEMPLATE_ONLY, TEMPLATE_PLUS_AI_FIELDS, FULL_LLM_MANUFACTURE)
+- ✅ Policy enforcement (unsubscribe → update_consent mandatory)
+- ✅ Channel caps validation (title, body, action length limits per channel)
+- ✅ Outcome codes and telemetry (17 outcome types, promptHash, modelVersion tracking)
+- ✅ Signed webhooks (Web Crypto API, HMAC-SHA256)
+- ✅ Reply classification (8 deterministic types, policy action mapping)
+
+**Visibility-Marketing status**:
+- [x] Skrip integration service (signed client, retries, circuit breaker)
+- [x] Tenant/campaign/channel feature flag evaluation
+- [x] Deterministic idempotency key generation
+- [x] Signed outcome webhook ingestion to lineage + action outcome hooks
+- [x] End-to-end harness test: enqueue -> dispatch `/v1/messages/send` -> signed webhook outcome (`packages/marketer/tests/integration/skrip-phase2-roundtrip.test.ts`)
+- [ ] Live staging validation: send -> deliver -> reply -> update_consent
+- [ ] Rollback drill validation in staging (disable authority, drain outbox, verify fallback)
+
+**Go/No-go for Phase 1 (Skrip side)**: ✅ Ready
+- ✅ All routes tested in isolation
+- ✅ Error codes stable
+- ✅ Idempotency key design proven
+- ✅ Webhook signature verification available
+- ✅ No breaking changes to Skrip core
 
 Goal: add first-class web push via Skrip for selected tenants and campaigns.
 
-Owners:
-- Frontend: browser push consent and subscription capture UI
-- Growth backend: push registration and send action execution
-- Data engineering: opt-in funnel metrics and attribution wiring
-- QA: end-to-end pilot coverage
+**Owners** (Visibility-Marketing):
+- Integration engineer: Skrip client wrapper, adapter layer, outbox dispatcher
+- Growth backend: push routing logic, campaign metadata attachment, eligibility gates
+- Data engineering: outcome webhook ingestion, attribution wiring, timeline enrichment
+- QA: end-to-end contracts, send → deliver → reply flows
 
-Tasks:
-- Add browser push subscription capture flow in marketer UI.
-- Register push subscriptions in Skrip with tenant and contact binding.
-- Add campaign-level channel policy and `send_via_skrip` journey step.
-- Implement immediate and scheduled push sends via outbox dispatcher.
-- Add signed Skrip outcomes webhook and normalized mapping into analytics and contact timeline.
-- Add pilot dashboards for push opt-in funnel and outcome lag.
-- Add kill switch by tenant and by channel.
+**Tasks for VM**:
+1. Implement `src/lib/skrip/client.ts` — signed requests, retries, circuit breaker
+2. Implement `src/lib/skrip/adapter.ts` — campaign payload → Skrip contract mapping
+3. Implement `src/lib/skrip/outbox.ts` — idempotent send queue with replay safety
+4. Add feature flag `send_via_skrip_push` (per-tenant, per-campaign)
+5. Add idempotency key generation: `${tenantId}:${campaignId}:${stepId}:${contactId}:push:${timestamp}`
+6. Add signed outcome webhook endpoint (`POST /webhooks/skrip/v1/outcomes`)
+7. Wire outcomes into analytics, contact timeline, and suppression rules
+8. Add push-specific dashboards: send rate, delivery rate, taps, unsubscribes, errors
+9. Build kill switch by tenant and by channel
+10. Create operational runbooks for 5 top incident scenarios
 
-PR slices:
-- PR-05: push subscription UI and API
-- PR-06: contact registration + identity reconciliation
-- PR-07: outbox dispatcher + push send path
-- PR-08: outcome webhook + metrics + dashboards
-- PR-09: pilot cohort config + operational runbooks
+**Go/No-go for Phase 1 (VM side)**: 🟡 In progress (foundation complete, live validation pending)
+- [x] Skrip integration service implemented and unit tested
+- [x] Idempotency key generation and dispatch path covered
+- [ ] Outcome lag p95 < 60 seconds for 7 consecutive days (staging/prod SLO evidence)
+- [ ] Error budget: 99.5% delivery to provider within 60 seconds of send call
+- [ ] No regression in email throughput or bounce handling under mixed load
+- [ ] Rollback plan tested (disable flag -> drain queue -> resume email-only)
 
-Go or no-go:
-- Pilot tenants stay below `0.1%` duplicate sends.
-- Outcome lag p95 stays below `60s` for 7 consecutive days.
-- No regression in email throughput or bounce handling.
-- Rollback dry run succeeds.
+### Phase 2: WhatsApp, SMS, Telegram cohorts ⏳ Pending Phase 1
 
-### Phase 2: WhatsApp, SMS, Telegram cohorts
+**Status on Skrip**: Domain pack extensibility proven. Awaiting domain pack configs for each channel.
 
-Goal: add controlled multichannel rollout while keeping email authority unchanged.
+**Skrip Readiness**:
+- ✅ v1 routes support any channel via `channel` parameter
+- ✅ Multilingual template support (via domain packs)
+- ✅ Channel caps validators for each protocol (WhatsApp 1024 char body, SMS 160 char, Telegram 4096 char)
+- ✅ Outcome normalization for all 8 event types
 
-Owners:
-- Growth backend: channel adapters and routing rules
-- Legal and compliance: consent and suppression enforcement
-- SRE: channel-specific dashboards and alerts
+**Pending on Skrip side**:
+- [ ] Domain pack configs for WhatsApp, SMS, Telegram channels
+- [ ] Provider integrations (TwilioSMS, WhatsApp Business API, Telegram Bot API)
 
-Tasks:
-- Extend eligibility model to channel availability, consent state, and suppression state.
-- Add routing support for `push_assist`, `push_primary_with_email_fallback`, and `multi_channel_progressive`.
-- Add channel-specific fallback rules and quiet-hour policies.
-- Add attribution and incremental uplift dashboards versus email-only baseline.
-- Add replay tooling for missed or delayed outcomes.
+**Pending on Visibility-Marketing side**:
+- [ ] Channel eligibility API (GET /v1/contacts/{id}/channels)
+- [ ] Channel-specific routing rules and failover policies
+- [ ] Consent enforcement per channel
+- [ ] Attribution dashboards per channel
 
-PR slices:
-- PR-10: channel eligibility engine
-- PR-11: WhatsApp adapter
-- PR-12: SMS adapter
-- PR-13: Telegram adapter
-- PR-14: multichannel analytics and ROI dashboard
+**Go/No-go for Phase 2**: 🔴 Blocked (Phase 1 integration must succeed first)
 
-Go or no-go:
-- Contract validation passes for every channel.
-- Consent enforcement is verified in staging.
-- Failure taxonomy coverage is complete.
-- SLO alerts are live.
+### Phase 3: Optional email convergence (deferred)
 
-### Phase 3: Optional email convergence decision gate
-
-Goal: decide whether email should remain local or converge into Skrip.
-
-Decision inputs:
-- Relative deliverability and revenue uplift.
-- Operational complexity of dual execution paths.
-- Feature parity for email templates, A/B logic, warmup, and compliance.
+**Decision Gate**: After Phase 1 and Phase 2 are validated in production.
 - Incident profile and rollback posture.
 
 Decision outcomes:

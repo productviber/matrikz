@@ -1,41 +1,77 @@
 # Skrip API and Data Contracts
 
+## Implementation Status
+
+✅ **Phase 2 Route Surface Complete**: All v1 routes implemented and registered in `src/index.ts`.
+- Error envelope middleware: `src/lib/api/error-envelope.ts`
+- Message routes: `src/routes/v1/messages.ts` (4 endpoints)
+- Contact routes: `src/routes/v1/contacts.ts` (3 endpoints)
+- All routes require tenant context middleware (`tenantMiddleware`)
+- All routes return stable error envelopes with v1RequestId and correlation ID
+
+✅ **VM Integration Harness Available** (Visibility-Marketing):
+- Signed client wrapper: `packages/marketer/src/lib/skrip/client.ts`
+- Outbox + dispatcher + webhook wiring: `packages/marketer/src/lib/skrip/outbox.ts`, `packages/marketer/src/lib/skrip/dispatcher.ts`, `packages/marketer/src/routes/webhooks-skrip.ts`
+- End-to-end roundtrip test: `packages/marketer/tests/integration/skrip-phase2-roundtrip.test.ts`
+
 ## 1. Contract Versioning Strategy
 
 - All contracts are versioned under `/v1`.
 - Breaking changes require `/v2` routes and schema copies.
-- All request and response payloads use strict schema validation.
+- All request and response payloads use strict schema validation (Zod).
 - Unknown fields are rejected on signed system-to-system routes.
+- Request ID tracking: `x-request-id` header (or auto-generated) sets `v1RequestId` on response.
 
 ## 2. Authentication and Signing
 
-### Headers required on Visibility-Marketing to Skrip requests
+### Skrip-to-Visibility-Marketing Requests (Signed Webhooks)
 
-```http
-Authorization: Bearer <service-token>
-X-VM-Tenant-Id: tenant_acme
-X-VM-Correlation-Id: corr_01JTSKRIP123
-X-VM-Timestamp: 2026-05-01T12:00:00.000Z
-X-VM-Nonce: nonce_01JTSKRIP123
-X-VM-Signature: sha256=<hex-hmac>
-Content-Type: application/json
-```
+Skrip sends outcome callbacks to Marketing with HMAC-SHA256 signatures.
 
-Signing base string:
+- **Signature method**: `HMAC-SHA256(webhookSecret, JSON.stringify({ event, timestamp }))`
+- **Verification**: `verifyWebhookSignature(payload, timestamp, signature, webhookSecret, maxAgeSeconds)`
+  - Timestamp drift max: `5 minutes`
+  - Available in `src/lib/outcomes/webhooks.ts`
 
-```text
-<http-method>\n<path>\n<iso-timestamp>\n<nonce>\n<sha256-body>
-```
+### Visibility-Marketing-to-Skrip Requests
 
-Validation rules:
+Skrip v1 routes require tenant context (via middleware). Visibility-Marketing now calls Skrip with a signed client wrapper (`packages/marketer/src/lib/skrip/client.ts`) that sends:
 
-- Timestamp drift max: `5 minutes`
-- Nonce uniqueness window: `15 minutes`
-- Invalid signature: `401`
-- Timestamp drift exceeded: `401`
-- Replay nonce: `409`
+- bearer auth (`Authorization`),
+- tenant header (`x-tenant-id`),
+- request signature headers (`x-skrip-timestamp`, `x-skrip-nonce`, `x-skrip-signature`),
+- correlation header (`x-correlation-id`),
+- retry + circuit-breaker guards.
 
 ## 3. Visibility-Marketing to Skrip Contracts
+
+### Response Envelope (All endpoints)
+
+All responses use a stable error envelope:
+
+```json
+{
+  "ok": true,
+  "requestId": "req_01J...",
+  "data": {}
+}
+```
+
+On error:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "UNPROCESSABLE",
+    "message": "Identity resolution failed",
+    "requestId": "req_01J...",
+    "correlationId": "corr_01J..."
+  }
+}
+```
+
+Error codes: `BAD_REQUEST`, `UNAUTHORIZED`, `FORBIDDEN`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, `UNPROCESSABLE`, `INTERNAL`, `SERVICE_UNAVAILABLE`.
 
 ### 3.1 Upsert contact channel identity
 
@@ -45,52 +81,66 @@ Endpoint:
 POST /v1/contacts/upsert
 ```
 
-Request:
+**Implementation**: `src/routes/v1/contacts.ts`
+
+Request schema (Zod validated):
 
 ```json
 {
   "tenantId": "tenant_acme",
-  "externalContactId": "contact_12345",
-  "canonicalId": "skrip_can_98765",
-  "profile": {
-    "email": "alex@example.com",
-    "phoneE164": "+14155550123",
-    "firstName": "Alex",
-    "lastName": "Rivera",
-    "locale": "en-US",
-    "timezone": "America/Los_Angeles"
-  },
-  "channels": {
-    "push": {
-      "eligible": true,
-      "consentState": "opted_in",
-      "subscriptions": [
-        {
-          "subscriptionId": "push_sub_01",
-          "endpoint": "https://fcm.googleapis.com/fcm/send/abc",
-          "p256dh": "base64-key",
-          "auth": "base64-auth",
-          "userAgent": "Chrome/135"
-        }
-      ]
-    },
-    "sms": {
-      "eligible": true,
-      "consentState": "unknown"
-    },
-    "whatsapp": {
-      "eligible": false,
-      "consentState": "not_provided"
-    },
-    "telegram": {
-      "eligible": false,
-      "consentState": "not_linked"
+  "identifiers": [
+    {
+      "type": "push_endpoint|phone|email|wa_phone|tg_chat_id|device_fingerprint|cookie_id",
+      "value": "string"
     }
-  },
-  "source": {
-    "system": "visibility-marketing",
-    "occurredAt": "2026-05-01T12:00:00.000Z"
+  ],
+  "contactId": "optional_contact_id",
+  "source": "api_upsert",
+  "metadata": {}
+}
+```
+
+Response (201 if new contact, 200 otherwise):
+
+```json
+{
+  "ok": true,
+  "requestId": "req_01J...",
+  "data": {
+    "canonicalId": "skrip_can_98765",
+    "isNew": true,
+    "confidence": 1.0,
+    "method": "deterministic",
+    "mergedFrom": [],
+    "identifiersMapped": 1
   }
+}
+```
+
+### 3.2 Manufacture preview
+
+Endpoint:
+
+```http
+POST /v1/messages/manufacture
+```
+
+**Implementation**: `src/routes/v1/messages.ts`
+
+Request schema:
+
+```json
+{
+  "tenantId": "tenant_acme",
+  "canonicalId": "skrip_can_98765",
+  "channel": "push|whatsapp|telegram|sms",
+  "trigger": {
+    "type": "string",
+    "id": "string",
+    "data": {}
+  },
+  "messageType": "signal|vernacular",
+  "manufacturingMode": "TEMPLATE_ONLY|TEMPLATE_PLUS_AI_FIELDS|FULL_LLM_MANUFACTURE"
 }
 ```
 
@@ -99,18 +149,26 @@ Response:
 ```json
 {
   "ok": true,
-  "version": "v1",
-  "contact": {
-    "tenantId": "tenant_acme",
-    "externalContactId": "contact_12345",
-    "canonicalId": "skrip_can_98765",
-    "state": "active",
-    "updatedAt": "2026-05-01T12:00:01.100Z"
+  "requestId": "req_01J...",
+  "data": {
+    "channel": "push",
+    "manufacturingMode": "TEMPLATE_PLUS_AI_FIELDS",
+    "usedFallback": false,
+    "validationOutcome": "ok",
+    "payload": {
+      "title": "Seats filling fast",
+      "body": "Book now",
+      "actions": [{"action": "book", "title": "Book"}]
+    },
+    "modelMetadata": {
+      "model": "claude-3-5-sonnet",
+      "version": "2026-05-01"
+    }
   }
 }
 ```
 
-### 3.2 Send single channel message
+### 3.3 Send single channel message
 
 Endpoint:
 
@@ -118,67 +176,48 @@ Endpoint:
 POST /v1/messages/send
 ```
 
-Request:
+**Implementation**: `src/routes/v1/messages.ts`
+
+Request schema:
 
 ```json
 {
-  "version": "v1",
   "tenantId": "tenant_acme",
-  "campaignId": "cmp_growth_q2",
-  "journeyId": "journey_trial_reengage",
-  "stepId": "step_push_01",
-  "contact": {
-    "externalContactId": "contact_12345",
-    "canonicalId": "skrip_can_98765"
+  "canonicalId": "skrip_can_98765",
+  "channel": "push|whatsapp|telegram|sms",
+  "trigger": {
+    "type": "flash_sale",
+    "id": "trig_123",
+    "data": {}
   },
-  "channel": "push",
-  "policy": "push_primary_with_email_fallback",
-  "schedule": {
-    "mode": "scheduled",
-    "scheduledFor": "2026-05-01T12:05:00.000Z",
-    "scheduleSlot": "2026-05-01T12:05Z"
-  },
-  "idempotencyKey": "tenant_acme:cmp_growth_q2:step_push_01:contact_12345:push:2026-05-01T12:05Z",
-  "correlationId": "corr_01JTSKRIP123",
-  "message": {
-    "intent": "trial_recovery",
-    "templateKey": "push.trial.recover.v1",
-    "title": "Your site still has fixable wins",
-    "body": "Open Visibility to see the latest actions.",
-    "data": {
-      "ctaUrl": "https://visibility.clodo.dev/action",
-      "reportId": "rpt_123"
-    }
-  },
-  "fallback": {
-    "enabled": true,
-    "fallbackChannel": "email",
-    "fallbackAfterSeconds": 7200
-  },
-  "metadata": {
-    "tenantTier": "growth",
-    "sourceSystem": "visibility-marketing"
+  "messageType": "signal|vernacular",
+  "manufacturingMode": "TEMPLATE_PLUS_AI_FIELDS",
+  "idempotencyKey": "tenant_acme:contact_12345:2026-05-01T12:05Z",
+  "campaignMetadata": {
+    "campaignId": "cmp_growth_q2",
+    "journeyId": "journey_trial_reengage",
+    "stepId": "step_push_01"
   }
 }
 ```
 
-Response:
+Response (idempotent, returns same messageId for duplicate requests):
 
 ```json
 {
   "ok": true,
-  "version": "v1",
-  "message": {
-    "messageId": "msg_01JTSKRIP123",
-    "skripOutboundId": "skrip_out_01JTSKRIP123",
-    "providerRef": null,
-    "status": "accepted",
-    "acceptedAt": "2026-05-01T12:00:01.450Z"
+  "requestId": "req_01J...",
+  "data": {
+    "messageId": "msg_01J...",
+    "idempotent": false,
+    "status": "enqueued",
+    "language": "en",
+    "enqueued": true
   }
 }
 ```
 
-### 3.3 Bulk or broadcast send
+### 3.4 Bulk or broadcast send
 
 Endpoint:
 
@@ -186,37 +225,22 @@ Endpoint:
 POST /v1/messages/bulk
 ```
 
-Request:
+**Implementation**: `src/routes/v1/messages.ts`
+
+Request schema:
 
 ```json
 {
-  "version": "v1",
   "tenantId": "tenant_acme",
-  "campaignId": "cmp_product_launch",
-  "stepId": "step_sms_announce",
-  "channel": "sms",
-  "schedule": {
-    "mode": "immediate",
-    "scheduleSlot": "2026-05-01T12:00Z"
+  "canonicalIds": ["skrip_can_1", "skrip_can_2"],
+  "trigger": {
+    "type": "flash_sale",
+    "id": "trig_123",
+    "data": {}
   },
-  "message": {
-    "intent": "launch_announcement",
-    "templateKey": "sms.launch.v1",
-    "body": "Visibility has shipped multichannel journeys. Reply YES for a walkthrough."
-  },
-  "audience": [
-    {
-      "externalContactId": "contact_1",
-      "canonicalId": "skrip_can_1",
-      "idempotencyKey": "tenant_acme:cmp_product_launch:step_sms_announce:contact_1:sms:2026-05-01T12:00Z"
-    },
-    {
-      "externalContactId": "contact_2",
-      "canonicalId": "skrip_can_2",
-      "idempotencyKey": "tenant_acme:cmp_product_launch:step_sms_announce:contact_2:sms:2026-05-01T12:00Z"
-    }
-  ],
-  "correlationId": "corr_01JTBULK123"
+  "messageType": "signal|vernacular",
+  "manufacturingMode": "TEMPLATE_PLUS_AI_FIELDS",
+  "workflowId": "workflow_123"
 }
 ```
 
@@ -225,17 +249,18 @@ Response:
 ```json
 {
   "ok": true,
-  "version": "v1",
-  "batch": {
-    "batchId": "batch_01JTBULK123",
-    "accepted": 2,
-    "rejected": 0,
-    "acceptedAt": "2026-05-01T12:00:02.100Z"
+  "requestId": "req_01J...",
+  "data": {
+    "total": 2,
+    "enqueued": 2,
+    "skipped": 0
   }
 }
 ```
 
-### 3.4 Message status lookup
+**Rate limit**: 10 requests/hour per tenant.
+
+### 3.5 Message status lookup
 
 Endpoint:
 
@@ -243,119 +268,169 @@ Endpoint:
 GET /v1/messages/{messageId}
 ```
 
+**Implementation**: `src/routes/v1/messages.ts`
+
 Response:
 
 ```json
 {
   "ok": true,
-  "version": "v1",
-  "message": {
-    "messageId": "msg_01JTSKRIP123",
-    "skripOutboundId": "skrip_out_01JTSKRIP123",
-    "providerRef": "provider_445566",
-    "status": "delivered",
-    "channel": "push",
-    "lastOutcomeAt": "2026-05-01T12:00:10.000Z"
+  "requestId": "req_01J...",
+  "data": {
+    "messageId": "msg_01J...",
+    "status": "sent|delivered|failed",
+    "sent_at": "2026-05-01T12:00:06.000Z",
+    "delivered_at": null,
+    "engaged_at": null,
+    "failed_at": null,
+    "retry_count": 0
+  }
+}
+```
+
+### 3.6 Contact lookup by ID
+
+Endpoint:
+
+```http
+GET /v1/contacts/{id}
+```
+
+**Implementation**: `src/routes/v1/contacts.ts`
+
+Response:
+
+```json
+{
+  "ok": true,
+  "requestId": "req_01J...",
+  "data": {
+    "canonicalId": "skrip_can_98765",
+    "language": "en",
+    "phone": "+14155550123",
+    "email": "alex@example.com",
+    "createdAt": "2026-05-01T12:00:01.000Z"
+  }
+}
+```
+
+### 3.7 Channel eligibility for contact
+
+Endpoint:
+
+```http
+GET /v1/contacts/{externalId}/channels
+```
+
+**Implementation**: `src/routes/v1/contacts.ts`
+
+Response:
+
+```json
+{
+  "ok": true,
+  "requestId": "req_01J...",
+  "data": {
+    "canonicalId": "skrip_can_98765",
+    "channels": {
+      "push": {
+        "reachable": true,
+        "count": 1
+      },
+      "sms": {
+        "reachable": false,
+        "count": 0
+      }
+    }
   }
 }
 ```
 
 ## 4. Skrip to Visibility-Marketing Contracts
 
-### 4.1 Normalized outcome callback
+### Signed Webhook Payload
 
-Endpoint:
+Skrip sends outcomes via signed webhooks to Marketing. Implementation in `src/lib/outcomes/webhooks.ts`.
+
+Webhook request to Marketing:
 
 ```http
 POST /webhooks/skrip/v1/outcomes
+Content-Type: application/json
+X-Skrip-Signature: sha256=<hex-hmac>
+X-Skrip-Timestamp: 2026-05-01T12:00:10.000Z
 ```
 
-Request:
+Payload:
 
 ```json
 {
-  "version": "v1",
-  "eventId": "evt_01JTOUTCOME123",
-  "eventType": "message.tapped",
-  "tenantId": "tenant_acme",
-  "contactId": "contact_12345",
-  "canonicalId": "skrip_can_98765",
-  "campaignId": "cmp_growth_q2",
-  "journeyId": "journey_trial_reengage",
-  "stepId": "step_push_01",
-  "channel": "push",
-  "messageId": "msg_01JTSKRIP123",
-  "skripOutboundId": "skrip_out_01JTSKRIP123",
-  "providerRef": "provider_445566",
-  "occurredAt": "2026-05-01T12:00:10.000Z",
-  "sourceSystem": "skrip",
-  "correlationId": "corr_01JTSKRIP123",
-  "reason": null,
-  "metadata": {
-    "device": "web",
-    "destination": "browser",
-    "linkUrl": "https://visibility.clodo.dev/action"
-  }
-}
-```
-
-Success response:
-
-```json
-{
-  "ok": true,
-  "accepted": true,
-  "eventId": "evt_01JTOUTCOME123",
-  "processedAt": "2026-05-01T12:00:11.000Z"
-}
-```
-
-### 4.2 Pull sync alternative
-
-Endpoint:
-
-```http
-GET /v1/outcomes?cursor=cursor_123&limit=500
-```
-
-Response:
-
-```json
-{
-  "ok": true,
-  "version": "v1",
-  "cursor": "cursor_124",
-  "items": [
-    {
-      "eventId": "evt_01JTOUTCOME123",
-      "eventType": "message.delivered",
-      "tenantId": "tenant_acme",
-      "contactId": "contact_12345",
-      "channel": "push",
-      "messageId": "msg_01JTSKRIP123",
-      "occurredAt": "2026-05-01T12:00:06.000Z",
-      "sourceSystem": "skrip",
-      "correlationId": "corr_01JTSKRIP123"
+  "event": {
+    "event": "message.delivered",
+    "messageId": "msg_01J...",
+    "tenantId": "tenant_acme",
+    "canonicalId": "skrip_can_98765",
+    "channel": "push",
+    "providerRef": "fcm_ref_123",
+    "occurredAt": "2026-05-01T12:00:10.000Z",
+    "requestId": "req_01J...",
+    "campaignId": "cmp_growth_q2",
+    "workflowId": "workflow_123",
+    "detail": null,
+    "telemetry": {
+      "promptHash": "sha256_abc...",
+      "promptVersion": "1.0",
+      "modelVersion": "claude-3-5-sonnet-2026-05-01",
+      "budgetTier": 1,
+      "manufacturingMode": "FULL_LLM_MANUFACTURE",
+      "usedFallback": false,
+      "domainKey": "generic"
     }
-  ]
+  },
+  "timestamp": "2026-05-01T12:00:11.000Z",
+  "signature": "abc123...",
+  "retryCount": 0
 }
 ```
 
-## 5. Normalized Outcome Taxonomy
+**Signature verification** (in Marketing):
 
-Supported `eventType` values:
+```typescript
+import { verifyWebhookSignature } from 'skrip-client';
 
-- `message.accepted`
-- `message.sent`
-- `message.delivered`
-- `message.read`
-- `message.tapped`
-- `message.failed`
-- `message.replied`
-- `message.suppressed`
-- `message.dropped`
+const valid = await verifyWebhookSignature(
+  JSON.stringify(payload.event),
+  payload.timestamp,
+  payload.signature,
+  webhookSecret,
+  300 // 5 minutes max drift
+);
+```
 
-Visibility-Marketing must map provider-specific statuses into this taxonomy before reporting.
+## 5. Normalized Outcome Event Types
+
+Skrip normalizes provider outcomes into standardized event types. Implementation in `src/lib/outcomes/contract.ts`.
+
+Supported `event` values (OutcomeEventType):
+
+- `message.accepted` — Message accepted by Skrip queue
+- `message.sent` — Provider accepted for delivery
+- `message.delivered` — Provider confirms delivery to contact
+- `message.failed` — Provider delivery failed (terminal)
+- `message.opened` — Contact opened/read message (if provider supports)
+- `message.clicked` — Contact tapped a link in the message
+- `message.replied` — Contact replied to the message
+- `message.unsubscribed` — Contact opted out via this channel
+
+**Telemetry fields included in every event**:
+
+- `promptHash`: SHA-256 hash of the generated prompt (for debugging)
+- `promptVersion`: Version of the prompt template used
+- `modelVersion`: LLM model and version (e.g., "claude-3-5-sonnet-2026-05-01")
+- `budgetTier`: Tenant budget tier (1/2/3) at time of generation
+- `manufacturingMode`: Mode used (TEMPLATE_ONLY, TEMPLATE_PLUS_AI_FIELDS, FULL_LLM_MANUFACTURE)
+- `usedFallback`: Boolean; whether fallback content was used
+- `domainKey`: Domain pack used (e.g., "bus_booking", "generic")
 
 ## 6. Data Contract Specification
 

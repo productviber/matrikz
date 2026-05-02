@@ -8,10 +8,11 @@
  *
  * Usage:
  *   node scripts/skrip-smoke.mjs --url https://visibility-marketing-dev.workers.dev \
- *     --adminToken <ADMIN_TOKEN> --webhookSecret <SKRIP_WEBHOOK_SIGNING_SECRET>
+ *     --adminToken <ADMIN_TOKEN> --webhookSecret <SKRIP_WEBHOOK_SIGNING_SECRET> \
+ *     [--webhookToken <WEBHOOK_TOKEN>]
  *
  * Environment alternatives:
- *   WORKER_URL, ADMIN_TOKEN, SKRIP_WEBHOOK_SIGNING_SECRET
+ *   WORKER_URL, ADMIN_TOKEN, SKRIP_WEBHOOK_SIGNING_SECRET, WEBHOOK_TOKEN
  */
 
 import { createHash, createHmac } from 'node:crypto';
@@ -24,6 +25,7 @@ const { values } = parseArgs({
     url: { type: 'string' },
     adminToken: { type: 'string' },
     webhookSecret: { type: 'string' },
+    webhookToken: { type: 'string' },
     tenantId: { type: 'string', default: 'default' },
     channel: { type: 'string', default: 'push' },
   },
@@ -32,7 +34,8 @@ const { values } = parseArgs({
 
 const workerUrl = values.url ?? process.env.WORKER_URL;
 const adminToken = values.adminToken ?? process.env.ADMIN_TOKEN;
-const webhookSecret = values.webhookSecret ?? process.env.SKRIP_WEBHOOK_SIGNING_SECRET;
+const webhookSecret = values.webhookSecret ?? process.env.SKRIP_WEBHOOK_SIGNING_SECRET ?? process.env.WEBHOOK_SIGNING_SECRET;
+const webhookToken = values.webhookToken ?? process.env.WEBHOOK_TOKEN;
 const tenantId = values.tenantId ?? 'default';
 const channel = values.channel ?? 'push';
 
@@ -101,6 +104,7 @@ async function main() {
       'x-skrip-timestamp': timestamp,
       'x-skrip-nonce': nonce,
       'x-skrip-signature': signature,
+      ...(webhookToken ? { 'x-webhook-token': webhookToken } : {}),
     },
     body: rawBody,
   }), 'signed webhook');

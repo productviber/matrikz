@@ -65,7 +65,8 @@ export async function handleSkripOutcomeWebhook(
   request: Request,
   env: Env,
 ): Promise<Response> {
-  if (!env.SKRIP_WEBHOOK_SIGNING_SECRET) {
+  const webhookSigningSecret = env.SKRIP_WEBHOOK_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET;
+  if (!webhookSigningSecret) {
     return new Response(
       JSON.stringify({ ok: false, error: 'Skrip webhook signing is not configured' }),
       { status: 503, headers: { 'Content-Type': CONTENT_TYPE_JSON } },
@@ -86,7 +87,7 @@ export async function handleSkripOutcomeWebhook(
     nonce: request.headers.get(SKRIP_CONFIG.HEADER_NONCE),
     signature: request.headers.get(SKRIP_CONFIG.HEADER_SIGNATURE),
     rawBody,
-    secret: env.SKRIP_WEBHOOK_SIGNING_SECRET,
+    secret: webhookSigningSecret,
   });
   if (!signatureCheck.ok) {
     return new Response(

@@ -209,9 +209,9 @@ export async function handleSkripDiagnostics(
     return ok({
       configured: {
         baseUrl: env.SKRIP_BASE_URL ?? null,
-        serviceToken: Boolean(env.SKRIP_SERVICE_TOKEN),
-        signingSecret: Boolean(env.SKRIP_SIGNING_SECRET),
-        webhookSigningSecret: Boolean(env.SKRIP_WEBHOOK_SIGNING_SECRET),
+        serviceToken: Boolean(env.SKRIP_SERVICE_TOKEN ?? env.SYSTEM_TOKEN),
+        signingSecret: Boolean(env.SKRIP_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET),
+        webhookSigningSecret: Boolean(env.SKRIP_WEBHOOK_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET),
         clientConfigured: client.configured,
       },
       scope: {
