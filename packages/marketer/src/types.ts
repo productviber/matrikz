@@ -848,16 +848,21 @@ export interface GrowthSkripStrategicRequest {
   reason: string;
   channelPreferences: string[];
   constraints: {
+    brandVoice: string;
     locale: string;
-    allowedChannels: string[];
+    forbiddenClaims: string[];
     complianceTags: string[];
-    quietHoursOnly: boolean;
+    allowedHours?: {
+      startHour: number;
+      endHour: number;
+      timezone?: string;
+    };
   };
   brief: GrowthMessageBrief;
   lineage: {
     correlationId: string;
     requestId: string;
-    agentActionId: string;
+    agentActionId: string | null;
     growthCapability: string;
     promptVersion: string | null;
     responseSchemaVersion: string | null;

@@ -238,10 +238,10 @@ export function buildSkripStrategicRequest(
     reason: action.proposedAction.reason ?? 'Agent-directed strategic outreach.',
     channelPreferences,
     constraints: {
+      brandVoice: 'professional, concise',
       locale: briefResult.brief.locale,
-      allowedChannels: intent.policyFlags.effectiveChannels,
+      forbiddenClaims: [],
       complianceTags: [],
-      quietHoursOnly: Boolean(intent.policyFlags.cooldownUntil),
     },
     brief: briefResult.brief,
     lineage: {
