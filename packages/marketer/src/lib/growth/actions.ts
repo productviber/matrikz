@@ -18,7 +18,13 @@ import { cancelPendingEmails, enrollInSequences } from '../email';
 import { execute, now, query, queryOne } from '../db';
 import { getCorrelationId } from '../correlation';
 import { enqueueEligibleSkripChannels } from '../skrip/outbox';
+import { createSkripClient } from '../skrip/client';
 import { evaluateGrowthPolicy } from './policy';
+import {
+  buildGrowthExecutionIntent,
+  buildSkripStrategicRequest,
+  resolveGrowthMessageBrief,
+} from './execution-intent';
 import { hashObject, isRecord, normalizeSubjectId, normalizeTenantId, parseJsonObject, stableStringify } from './common';
 import { createAiEngineClient } from '../ai-engine/client';
 
@@ -307,24 +313,52 @@ async function executeSkripSend(env: Env, action: AgentActionView): Promise<Reco
     agentActionId: action.action_id,
   };
 
-  // C3: Optionally attach an AI-generated message brief to the context.
-  // Non-blocking — failure here must not prevent the send from proceeding.
-  const aiClient = createAiEngineClient(env);
-  if (aiClient.configured) {
+  const intent = buildGrowthExecutionIntent(action);
+  await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.EXECUTION_INTENT_BUILT, { intent });
+
+  const briefResult = await resolveGrowthMessageBrief(env, action, intent);
+  await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.MESSAGE_BRIEF_READY, {
+    source: briefResult.source,
+    degradedReason: briefResult.degradedReason,
+    brief: briefResult.brief,
+    metadata: briefResult.metadata,
+  });
+
+  const strategicRequest = buildSkripStrategicRequest(action, intent, briefResult);
+  await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.SKRIP_HANDOFF_PREPARED, {
+    handoff: strategicRequest,
+    summary: {
+      objective: strategicRequest.objective,
+      preferredChannels: strategicRequest.channelPreferences,
+      priority: strategicRequest.execution.priority,
+    },
+  });
+
+  const skripClient = createSkripClient(env);
+  if (skripClient.configured) {
     try {
-      const briefResult = await aiClient.messageBrief({
-        tenantId: action.tenant_id,
-        signalType: typeof context.signalType === 'string' ? context.signalType : null,
-        channel: action.proposedAction.params?.primaryChannel ?? 'push',
-        evidence: action.evidence,
-        agentActionId: action.action_id,
+      const strategicResponse = await skripClient.strategicSend<unknown>(action.tenant_id ?? 'default', strategicRequest);
+      await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.SKRIP_STRATEGIC_ACCEPTED, {
+        response: strategicResponse,
       });
-      if (briefResult.ok && briefResult.data) {
-        context.aiBrief = briefResult.data;
-      }
-    } catch {
-      // Brief is advisory only — swallow error and continue.
+      return {
+        type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+        campaignId,
+        stepId,
+        intent,
+        messageBrief: briefResult.brief,
+        messageBriefSource: briefResult.source,
+        strategicResponse,
+      };
+    } catch (error) {
+      await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.SKRIP_STRATEGIC_FALLBACK, {
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
+  } else {
+    await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.SKRIP_STRATEGIC_FALLBACK, {
+      reason: 'skrip_service_not_configured',
+    });
   }
 
   const enqueued = await enqueueEligibleSkripChannels(env, {
@@ -333,9 +367,29 @@ async function executeSkripSend(env: Env, action: AgentActionView): Promise<Reco
     stepId,
     contactId: action.subject_id,
     domain,
-    context: { ...context, agentActionId: action.action_id },
+    context: {
+      ...context,
+      agentActionId: action.action_id,
+      growthExecutionIntent: intent,
+      messageBrief: briefResult.brief,
+      skripStrategicRequest: strategicRequest,
+    },
   });
-  return { type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP, campaignId, stepId, enqueued };
+  await recordAgentActionEvent(env, action.action_id, AGENT_ACTION_EVENT.SKRIP_HANDOFF_ENQUEUED, {
+    campaignId,
+    stepId,
+    channelCount: enqueued.length,
+    channels: enqueued.map((item) => ({ channel: item.channel, status: item.status, dryRun: item.dryRun })),
+  });
+  return {
+    type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+    campaignId,
+    stepId,
+    intent,
+    messageBrief: briefResult.brief,
+    messageBriefSource: briefResult.source,
+    enqueued,
+  };
 }
 
 async function executeCampaignStatus(env: Env, action: AgentActionView, status: 'active' | 'paused'): Promise<Record<string, unknown>> {

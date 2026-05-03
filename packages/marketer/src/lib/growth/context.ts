@@ -10,6 +10,7 @@ export interface SubjectOutcomeSummary {
   actionType: string;
   confidence: number;
   outcomeType: string | null;
+  attributionStrength: string | null;
   daysSinceExecution: number;
 }
 
@@ -64,9 +65,10 @@ export async function loadSubjectContextForDecision(
       confidence: number;
       executed_at: number | null;
       outcome_type: string | null;
+      attribution_strength: string | null;
     }>(
       env.DB,
-      `SELECT aa.action_id, aa.proposed_action, aa.confidence, aa.executed_at, aao.outcome_type
+      `SELECT aa.action_id, aa.proposed_action, aa.confidence, aa.executed_at, aao.outcome_type, aao.attribution_strength
          FROM agent_actions aa
          LEFT JOIN agent_action_outcomes aao ON aao.action_id = aa.action_id
         WHERE aa.tenant_id = ?
@@ -123,6 +125,7 @@ export async function loadSubjectContextForDecision(
     actionType: row.proposed_action,
     confidence: row.confidence,
     outcomeType: row.outcome_type ?? null,
+    attributionStrength: row.attribution_strength ?? null,
     daysSinceExecution: row.executed_at
       ? Math.floor((epochNow - row.executed_at) / (24 * 60 * 60))
       : 0,

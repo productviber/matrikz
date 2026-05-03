@@ -114,7 +114,7 @@ function metadataFromResponse(capability: GrowthCapability, response: Record<str
   };
 }
 
-async function requestCapability<T>(
+async function requestCapability<T extends Record<string, unknown>>(
   env: Env,
   capability: GrowthCapability,
   payload: Record<string, unknown>,
@@ -171,6 +171,7 @@ async function requestCapability<T>(
       }
 
       const parsed = await response.json() as T;
+      await trackFallbackRate(env, parsed);
       await clearFailures(env);
       return { ok: true, data: parsed };
     } catch (error) {
@@ -191,6 +192,22 @@ function signalSeverity(signals: unknown[]): string {
     }
   }
   return 'medium';
+}
+
+async function trackFallbackRate(env: Env, parsed: Record<string, unknown>): Promise<void> {
+  const key = `${KV_PREFIX.AI_ENGINE_FALLBACK_RATE}default`;
+  const metadata = typeof parsed.metadata === 'object' && parsed.metadata !== null
+    ? (parsed.metadata as Record<string, unknown>)
+    : null;
+
+  if (metadata?.fallback === true) {
+    const current = Number.parseInt((await env.KV_MARKETING.get(key)) ?? '0', 10);
+    const next = Number.isFinite(current) ? current + 1 : 1;
+    await env.KV_MARKETING.put(key, String(next), { expirationTtl: TTL.DAYS_1 });
+    return;
+  }
+
+  await env.KV_MARKETING.delete(key);
 }
 
 export function fallbackGrowthNextAction(input: GrowthNextActionRequest, error?: string): GrowthNextActionResult {

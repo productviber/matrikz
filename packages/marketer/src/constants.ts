@@ -213,6 +213,12 @@ export const AGENT_ACTION_EVENT = {
   ROLLED_BACK: 'rolled_back',
   OUTCOME_OBSERVED: 'outcome_observed',
   NO_OUTCOME_OBSERVED: 'no_outcome_observed',
+  EXECUTION_INTENT_BUILT: 'execution_intent_built',
+  MESSAGE_BRIEF_READY: 'message_brief_ready',
+  SKRIP_HANDOFF_PREPARED: 'skrip_handoff_prepared',
+  SKRIP_HANDOFF_ENQUEUED: 'skrip_handoff_enqueued',
+  SKRIP_STRATEGIC_ACCEPTED: 'skrip_strategic_accepted',
+  SKRIP_STRATEGIC_FALLBACK: 'skrip_strategic_fallback',
 } as const;
 
 export const AGENT_RISK_LEVEL = {
@@ -401,6 +407,8 @@ export const KV_PREFIX = {
   AI_ENGINE_CIRCUIT: 'ai-engine:circuit:',
   /** Consecutive failure counters for ai-engine advisory calls */
   AI_ENGINE_FAILURE: 'ai-engine:failure:',
+  /** Daily fallback rate counter for ai-engine advisory calls */
+  AI_ENGINE_FALLBACK_RATE: 'ai-engine:fallback-rate:',
 } as const;
 
 // ─── Payout Providers ──────────────────────────────────────────────────────

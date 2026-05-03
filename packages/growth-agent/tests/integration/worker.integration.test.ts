@@ -183,6 +183,103 @@ describe("growth-agent integration", () => {
     expect(res.status).toBe(200);
   });
 
+  it("returns success envelope on valid request", async () => {
+    const req = makeRequest("/internal/growth-next-action", {
+      subjectId: "s",
+      signals: [{ kind: "number", name: "intent", value: 9 }],
+    });
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as {
+      ok: boolean;
+      metadata: { responseSchemaVersion: string; correlationId: string };
+    };
+    expect(payload.ok).toBe(true);
+    expect(payload.metadata.responseSchemaVersion).toBe("1.0.0");
+    expect(payload.metadata.correlationId).toBe(corr);
+  });
+
+  it("handles detailed growth-next-action payloads with rich signals and context", async () => {
+    const req = makeRequest("/internal/growth-next-action", detailedGrowthNextActionPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+    expect(payload.metadata.correlationId).toBe(corr);
+  });
+
+  it("rejects invalid growth-next-action payloads", async () => {
+    const req = makeRequest("/internal/growth-next-action", invalidGrowthNextActionPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed growth-signal-summarize payloads", async () => {
+    const req = makeRequest("/internal/growth-signal-summarize", detailedGrowthSignalSummarizePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid growth-signal-summarize payloads", async () => {
+    const req = makeRequest("/internal/growth-signal-summarize", invalidGrowthSignalSummarizePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed journey-critic payloads", async () => {
+    const req = makeRequest("/internal/journey-critic", detailedJourneyCriticPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid journey-critic payloads", async () => {
+    const req = makeRequest("/internal/journey-critic", invalidJourneyCriticPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed message-brief payloads", async () => {
+    const req = makeRequest("/internal/message-brief", detailedMessageBriefPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid message-brief payloads", async () => {
+    const req = makeRequest("/internal/message-brief", invalidMessageBriefPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed outcome-diagnose payloads", async () => {
+    const req = makeRequest("/internal/outcome-diagnose", detailedOutcomeDiagnosePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid outcome-diagnose payloads", async () => {
+    const req = makeRequest("/internal/outcome-diagnose", invalidOutcomeDiagnosePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json() as any;
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
   it("returns validation error for malformed correlation id", async () => {
     const req = makeRequest(
       "/internal/growth-next-action",

@@ -137,6 +137,8 @@ export function createSkripClient(env: Env) {
       performRequest<T>(env, { tenantId, path: '/v1/messages/send', method: 'POST', body: payload }),
     sendBulk: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/v1/messages/bulk', method: 'POST', body: payload }),
+    strategicSend: <T>(tenantId: string, payload: unknown) =>
+      performRequest<T>(env, { tenantId, path: '/internal/strategy/send', method: 'POST', body: payload }),
     getMessageStatus: <T>(tenantId: string, messageId: string) =>
       performRequest<T>(env, { tenantId, path: `/v1/messages/${encodeURIComponent(messageId)}`, method: 'GET' }),
   };

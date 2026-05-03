@@ -19,6 +19,7 @@ export const AGENTIC_ALLOWED_OPERATIONS: ReadonlyArray<{ method: string; descrip
   { method: 'POST /api/agentic/actions/execute', description: 'Execute an approved low-risk agent action' },
   { method: 'GET /api/agentic/actions/:id', description: 'Read agent action state' },
   { method: 'GET /api/agentic/actions/:id/audit', description: 'Read agent action audit events' },
+  { method: 'GET /api/agentic/actions/:id/trace', description: 'Read agent action execution trace and Skrip lineage' },
   { method: 'POST /api/admin/emails/process', description: 'Trigger due-email processing batch' },
   { method: 'POST /api/admin/campaigns/outbound/:id/start', description: 'Start outbound campaign' },
   { method: 'POST /api/admin/campaigns/outbound/:id/pause', description: 'Pause outbound campaign' },

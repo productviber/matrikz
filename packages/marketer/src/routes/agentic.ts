@@ -15,6 +15,7 @@ import {
   getAgentAction,
   listAgentActionEvents,
 } from '../lib/growth/actions';
+import { loadAgentActionExecutionTrace } from '../lib/growth/execution-trace';
 import { evaluateGrowthPolicy } from '../lib/growth/policy';
 import { isRecord, normalizeSubjectId, normalizeTenantId } from '../lib/growth/common';
 
@@ -230,6 +231,14 @@ async function handleGetActionAudit(request: Request, env: Env, actionId: string
   return ok({ action, events });
 }
 
+async function handleGetActionTrace(request: Request, env: Env, actionId: string): Promise<Response> {
+  const denied = requireScope(request, env, 'actions:read');
+  if (denied) return denied;
+  const trace = await loadAgentActionExecutionTrace(env, actionId);
+  if (!trace) return notFound('Agent action not found');
+  return ok({ trace });
+}
+
 export async function handleAgenticRoute(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -252,6 +261,11 @@ export async function handleAgenticRoute(request: Request, env: Env): Promise<Re
   }
   if (method === 'POST' && path === '/api/agentic/actions/execute') {
     return handleExecuteAction(request, env);
+  }
+
+  const traceMatch = path.match(/^\/api\/agentic\/actions\/([^/]+)\/trace$/);
+  if (method === 'GET' && traceMatch) {
+    return handleGetActionTrace(request, env, decodeURIComponent(traceMatch[1]));
   }
 
   const actionMatch = path.match(/^\/api\/agentic\/actions\/([^/]+)(\/audit)?$/);

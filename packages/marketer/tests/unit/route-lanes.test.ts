@@ -42,6 +42,7 @@ describe('route lane resolver', () => {
     expect(resolveRouteLane('POST', '/api/agentic/actions/execute')).toBe('agentic');
     expect(resolveRouteLane('GET', '/api/agentic/actions/act_123')).toBe('agentic');
     expect(resolveRouteLane('GET', '/api/agentic/actions/act_123/audit')).toBe('agentic');
+    expect(resolveRouteLane('GET', '/api/agentic/actions/act_123/trace')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/emails/process')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/campaigns/outbound/12/start')).toBe('agentic');
     expect(resolveRouteLane('POST', '/api/admin/campaigns/outbound/12/pause')).toBe('agentic');

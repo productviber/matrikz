@@ -42,6 +42,55 @@ describe("growth-next-action", () => {
     expect(result.data.action.type).toBe("send_message");
   });
 
+  it("accepts production-format growth signals", async () => {
+    const llm = mockWorkersAi({
+      "growth-next-action": {
+        action: { type: "manual_review", params: {}, reason: "signal requires review" },
+        riskLevel: "medium",
+        confidence: 0.72,
+        explanation: "The signal indicates a strong but atypical pattern, so manual review is safest.",
+        rawSummary: "production-style audit signal received",
+      },
+    });
+
+    const productionPayload = {
+      tenantId: "tenant-1",
+      subjectId: "customer-234",
+      outputLocale: "en",
+      context: {
+        subjectContext: {
+          recentOutcomes: [{ actionType: "send_via_skrip", outcomeType: "no_outcome_observed", daysSinceExecution: 3, confidence: 0.35 }],
+          lastActionType: "send_via_skrip",
+          lastActionDaysAgo: 3,
+          activeSignalCount: 1,
+          lifecycleStage: "prospect",
+          pushRegistered: false,
+        },
+        policyHints: {
+          effectiveChannels: ["email"],
+          hintBlocked: false,
+          hintBlockedReasons: [],
+        },
+      },
+      signals: [
+        {
+          signalId: "sig-123",
+          signalType: "AUDIT_GRADE_LOW_HIGH_FIT",
+          severity: "high",
+          confidence: 0.85,
+          evidence: { auditScore: 0.93 },
+          detectedAt: 1690000000,
+          expiresAt: 1690003600,
+        },
+      ],
+    };
+
+    const result = await handleGrowthNextAction(productionPayload, { llm, config });
+
+    expect(result.fallback).toBe(false);
+    expect(result.data.action.type).toBe("manual_review");
+  });
+
   it("throws validation error for malformed input", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {

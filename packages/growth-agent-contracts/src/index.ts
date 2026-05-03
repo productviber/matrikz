@@ -60,6 +60,16 @@ export const GrowthSignalSchema = z.discriminatedUnion("kind", [
   BaseSignal.extend({ kind: z.literal("boolean"), value: z.boolean() }),
 ]);
 
+export const ProductionGrowthSignalSchema = z.object({
+  signalId: z.string().optional(),
+  signalType: z.string(),
+  severity: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  evidence: z.record(z.unknown()).optional(),
+  detectedAt: z.number().optional(),
+  expiresAt: z.number().optional(),
+});
+
 export const RiskLevelSchema = z.enum(["low", "medium", "high", "critical"]);
 
 export const MetadataSchema = z.object({
@@ -81,7 +91,7 @@ export const MetadataSchema = z.object({
 export const GrowthNextActionRequestSchema = z.object({
   tenantId: z.string().optional(),
   subjectId: z.string(),
-  signals: z.array(GrowthSignalSchema),
+  signals: z.array(z.union([GrowthSignalSchema, ProductionGrowthSignalSchema])),
   outputLocale: z.string().default("en").optional(),
   context: z.record(z.unknown()).optional(),
 });

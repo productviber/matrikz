@@ -791,6 +791,85 @@ export interface AgentActionOutcomeRow {
   created_at: number;
 }
 
+export interface GrowthExecutionIntent {
+  tenantId: string;
+  subjectId: string;
+  actionId: string;
+  actionType: string;
+  actionReason: string | null;
+  riskLevel: string;
+  confidence: number;
+  strategySource: 'growth-agent' | 'fallback';
+  growthCapability: string;
+  promptVersion: string | null;
+  responseSchemaVersion: string | null;
+  correlationId: string;
+  requestId: string;
+  channelHints: string[];
+  messageBriefRequired: boolean;
+  executionTarget: 'skrip' | 'manual_review' | 'campaign_control' | 'wait' | 'sequence';
+  policyFlags: {
+    allowed: boolean;
+    requiredApproval: boolean;
+    warnings: string[];
+    blockedReasons: string[];
+    effectiveChannels: string[];
+    cooldownUntil: number | null;
+  };
+  createdAt: number;
+}
+
+export interface GrowthMessageBrief {
+  objective: string;
+  channel: string;
+  locale: string;
+  headline: string;
+  bodyIntent: string;
+  cta: string;
+  tone: string;
+  personalizationHints: string[];
+  offerContext: Record<string, unknown>;
+  fallbackTemplateKey: string | null;
+}
+
+export interface GrowthMessageBriefResult {
+  brief: GrowthMessageBrief;
+  source: 'ai' | 'deterministic';
+  degradedReason: string | null;
+  metadata: Record<string, unknown> | null;
+}
+
+export interface GrowthSkripStrategicRequest {
+  tenantId: string;
+  subjectId: string;
+  contactIdentityId: string;
+  objective: string;
+  urgency: string;
+  reason: string;
+  channelPreferences: string[];
+  constraints: {
+    locale: string;
+    allowedChannels: string[];
+    complianceTags: string[];
+    quietHoursOnly: boolean;
+  };
+  brief: GrowthMessageBrief;
+  lineage: {
+    correlationId: string;
+    requestId: string;
+    agentActionId: string;
+    growthCapability: string;
+    promptVersion: string | null;
+    responseSchemaVersion: string | null;
+    strategyVersion: string;
+  };
+  execution: {
+    dryRun: boolean;
+    idempotencyKey: string;
+    priority: 'normal' | 'high';
+  };
+}
+
 // ─── Commission Tiers ───────────────────────────────────────────────────────
 
 export interface CommissionTier {

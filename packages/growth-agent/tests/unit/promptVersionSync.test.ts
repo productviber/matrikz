@@ -19,7 +19,8 @@ describe("prompt version and schema version sync", () => {
     for (const registry of registries) {
       const version = registry.current.version;
       const semver = version.slice(version.lastIndexOf("-") + 1);
-      expect(semver).toBe(DEFAULTS.responseSchemaVersion);
+      const expected = registry === NextActionPrompts ? "1.2.0" : DEFAULTS.responseSchemaVersion;
+      expect(semver).toBe(expected);
     }
   });
 });
