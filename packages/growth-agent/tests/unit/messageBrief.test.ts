@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleMessageBrief } from "../../src/capabilities/messageBrief";
 import { mockWorkersAi } from "./mocks/workersAi";
 import type { RuntimeConfig } from "../../src/types";
+import { detailedMessageBriefPayload, invalidMessageBriefPayload } from "../fixtures/payloads";
 
 const config: RuntimeConfig = {
   appVersion: "0.1.0",
@@ -35,11 +36,24 @@ describe("message-brief", () => {
       },
     });
 
-    const result = await handleMessageBrief(
-      { objective: "acquire", audience: "new users" },
-      { llm, config },
-    );
+    const result = await handleMessageBrief(detailedMessageBriefPayload, { llm, config });
 
     expect(result.data.cta).toBe("Start today");
+  });
+
+  it("throws validation error for malformed input", async () => {
+    const llm = mockWorkersAi({
+      "message-brief": {
+        headline: "Save time",
+        coreMessage: "Automate now",
+        tone: "clear",
+        cta: "Start today",
+        guardrails: ["no_overpromise"],
+      },
+    });
+
+    await expect(handleMessageBrief(invalidMessageBriefPayload, { llm, config })).rejects.toThrow(
+      "VALIDATION_ERROR",
+    );
   });
 });

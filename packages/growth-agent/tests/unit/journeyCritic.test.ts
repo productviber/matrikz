@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleJourneyCritic } from "../../src/capabilities/journeyCritic";
 import { mockWorkersAi } from "./mocks/workersAi";
 import type { RuntimeConfig } from "../../src/types";
+import { detailedJourneyCriticPayload, invalidJourneyCriticPayload } from "../fixtures/payloads";
 
 const config: RuntimeConfig = {
   appVersion: "0.1.0",
@@ -33,11 +34,22 @@ describe("journey-critic", () => {
       },
     });
 
-    const result = await handleJourneyCritic(
-      { journeyState: {}, priorActions: [], outcomes: [] },
-      { llm, config },
-    );
+    const result = await handleJourneyCritic(detailedJourneyCriticPayload, { llm, config });
 
     expect(result.data.risks[0]).toBe("dropoff");
+  });
+
+  it("throws validation error for malformed input", async () => {
+    const llm = mockWorkersAi({
+      "journey-critic": {
+        critique: "state is stale",
+        risks: ["dropoff"],
+        suggestedAdjustments: ["shorten step"],
+      },
+    });
+
+    await expect(handleJourneyCritic(invalidJourneyCriticPayload, { llm, config })).rejects.toThrow(
+      "VALIDATION_ERROR",
+    );
   });
 });

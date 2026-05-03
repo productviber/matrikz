@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleGrowthSignalSummarize } from "../../src/capabilities/growthSignalSummarize";
 import { mockWorkersAi } from "./mocks/workersAi";
 import type { RuntimeConfig } from "../../src/types";
+import { detailedGrowthSignalSummarizePayload, invalidGrowthSignalSummarizePayload } from "../fixtures/payloads";
 
 const config: RuntimeConfig = {
   appVersion: "0.1.0",
@@ -34,12 +35,24 @@ describe("growth-signal-summarize", () => {
       },
     });
 
-    const result = await handleGrowthSignalSummarize(
-      { signals: [{ kind: "number", name: "intent", value: 8 }] },
-      { llm, config },
-    );
+    const result = await handleGrowthSignalSummarize(detailedGrowthSignalSummarizePayload, { llm, config });
 
     expect(result.fallback).toBe(false);
     expect(result.data.summary).toContain("signal");
+  });
+
+  it("throws validation error for malformed input", async () => {
+    const llm = mockWorkersAi({
+      "growth-signal-summarize": {
+        summary: "signal trend",
+        severity: "medium",
+        keyDrivers: ["intent"],
+        urgencyWindow: "next_72_hours",
+      },
+    });
+
+    await expect(handleGrowthSignalSummarize(invalidGrowthSignalSummarizePayload, { llm, config })).rejects.toThrow(
+      "VALIDATION_ERROR",
+    );
   });
 });

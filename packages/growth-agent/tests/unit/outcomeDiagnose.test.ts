@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { handleOutcomeDiagnose } from "../../src/capabilities/outcomeDiagnose";
 import { mockWorkersAi } from "./mocks/workersAi";
 import type { RuntimeConfig } from "../../src/types";
+import { detailedOutcomeDiagnosePayload, invalidOutcomeDiagnosePayload } from "../fixtures/payloads";
 
 const config: RuntimeConfig = {
   appVersion: "0.1.0",
@@ -33,11 +34,22 @@ describe("outcome-diagnose", () => {
       },
     });
 
-    const result = await handleOutcomeDiagnose(
-      { expected: {}, observed: {} },
-      { llm, config },
-    );
+    const result = await handleOutcomeDiagnose(detailedOutcomeDiagnosePayload, { llm, config });
 
     expect(result.data.diagnosis).toBe("timing mismatch");
+  });
+
+  it("throws validation error for malformed input", async () => {
+    const llm = mockWorkersAi({
+      "outcome-diagnose": {
+        diagnosis: "timing mismatch",
+        likelyCauses: ["channel delay"],
+        recommendedNextExperiments: ["time-window-shift"],
+      },
+    });
+
+    await expect(handleOutcomeDiagnose(invalidOutcomeDiagnosePayload, { llm, config })).rejects.toThrow(
+      "VALIDATION_ERROR",
+    );
   });
 });

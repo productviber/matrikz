@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { handleGrowthNextAction } from "../../src/capabilities/growthNextAction";
-import { mockWorkersAi } from "./mocks/workersAi";
+import { mockWorkersAi, mockWorkersAiInvalidOutput } from "./mocks/workersAi";
 import type { RuntimeConfig } from "../../src/types";
+import { detailedGrowthNextActionPayload, invalidGrowthNextActionPayload } from "../fixtures/payloads";
 
 const config: RuntimeConfig = {
   appVersion: "0.1.0",
@@ -35,15 +36,33 @@ describe("growth-next-action", () => {
       },
     });
 
-    const result = await handleGrowthNextAction(
-      {
-        subjectId: "s1",
-        signals: [{ kind: "number", name: "intent", value: 9 }],
-      },
-      { llm, config },
-    );
+    const result = await handleGrowthNextAction(detailedGrowthNextActionPayload, { llm, config });
 
     expect(result.fallback).toBe(false);
     expect(result.data.action.type).toBe("send_via_skrip");
+  });
+
+  it("throws validation error for malformed input", async () => {
+    const llm = mockWorkersAi({
+      "growth-next-action": {
+        action: { type: "send_via_skrip", params: {}, reason: "high intent" },
+        riskLevel: "low",
+        confidence: 0.83,
+        explanation: "Act now",
+        rawSummary: "intent spike",
+      },
+    });
+
+    await expect(handleGrowthNextAction(invalidGrowthNextActionPayload, { llm, config })).rejects.toThrow(
+      "VALIDATION_ERROR",
+    );
+  });
+
+  it("throws upstream failure when LLM output is invalid", async () => {
+    const llm = mockWorkersAiInvalidOutput();
+
+    await expect(handleGrowthNextAction(detailedGrowthNextActionPayload, { llm, config })).rejects.toThrow(
+      "invalid_output",
+    );
   });
 });

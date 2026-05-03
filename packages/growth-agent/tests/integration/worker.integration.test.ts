@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
 import worker from "../../src/index";
 import type { GrowthAgentEnv } from "../../src/types";
+import {
+  detailedGrowthNextActionPayload,
+  detailedGrowthSignalSummarizePayload,
+  detailedJourneyCriticPayload,
+  detailedMessageBriefPayload,
+  detailedOutcomeDiagnosePayload,
+  invalidGrowthNextActionPayload,
+  invalidGrowthSignalSummarizePayload,
+  invalidJourneyCriticPayload,
+  invalidMessageBriefPayload,
+  invalidOutcomeDiagnosePayload,
+} from "../fixtures/payloads";
 
 // base36 correlation format: ${base36timestamp}-${4+chars}
 const corr = "lq3abc-xy12";
@@ -12,16 +24,67 @@ function makeEnv(partial?: Partial<GrowthAgentEnv>): GrowthAgentEnv {
     AI_MAX_RETRIES: "0",
     AI_OUTPUT_REPAIR_ATTEMPTS: "1",
     CAPABILITY_GROWTH_NEXT_ACTION_ENABLED: "true",
+    CAPABILITY_GROWTH_SIGNAL_SUMMARIZE_ENABLED: "true",
+    CAPABILITY_JOURNEY_CRITIC_ENABLED: "true",
+    CAPABILITY_MESSAGE_BRIEF_ENABLED: "true",
+    CAPABILITY_OUTCOME_DIAGNOSE_ENABLED: "true",
     AI_MODEL: "model",
     WORKERS_AI: {
-      async run() {
+      async run(_model, input) {
+        const rawPrompt = (input as any)?.messages?.[1]?.content;
+        const parsed = rawPrompt ? JSON.parse(rawPrompt) : {};
+        const payload = parsed.input ?? {};
+
+        if (payload.subjectId) {
+          return {
+            response: JSON.stringify({
+              action: { type: "send_via_skrip", params: {}, reason: "intent" },
+              riskLevel: "low",
+              confidence: 0.8,
+              explanation: "Go",
+              rawSummary: "summary",
+            }),
+          };
+        }
+
+        if (payload.objective) {
+          return {
+            response: JSON.stringify({
+              headline: "Save time",
+              coreMessage: "Automate now",
+              tone: "clear",
+              cta: "Start today",
+              guardrails: ["no_overpromise"],
+            }),
+          };
+        }
+
+        if (payload.journeyState) {
+          return {
+            response: JSON.stringify({
+              critique: "state is stale",
+              risks: ["dropoff"],
+              suggestedAdjustments: ["shorten step"],
+            }),
+          };
+        }
+
+        if (payload.expected) {
+          return {
+            response: JSON.stringify({
+              diagnosis: "timing mismatch",
+              likelyCauses: ["channel delay"],
+              recommendedNextExperiments: ["time-window-shift"],
+            }),
+          };
+        }
+
         return {
           response: JSON.stringify({
-            action: { type: "send_via_skrip", params: {}, reason: "intent" },
-            riskLevel: "low",
-            confidence: 0.8,
-            explanation: "Go",
-            rawSummary: "summary",
+            summary: "signal trend",
+            severity: "medium",
+            keyDrivers: ["intent"],
+            urgencyWindow: "next_72_hours",
           }),
         };
       },
@@ -79,6 +142,87 @@ describe("growth-agent integration", () => {
     expect(payload.ok).toBe(true);
     expect(payload.metadata.responseSchemaVersion).toBe("1.0.0");
     expect(payload.metadata.correlationId).toBe(corr);
+  });
+
+  it("handles detailed growth-next-action payloads with rich signals and context", async () => {
+    const req = makeRequest("/internal/growth-next-action", detailedGrowthNextActionPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.ok).toBe(true);
+    expect(payload.metadata.correlationId).toBe(corr);
+  });
+
+  it("rejects invalid growth-next-action payloads", async () => {
+    const req = makeRequest("/internal/growth-next-action", invalidGrowthNextActionPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json();
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed growth-signal-summarize payloads", async () => {
+    const req = makeRequest("/internal/growth-signal-summarize", detailedGrowthSignalSummarizePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid growth-signal-summarize payloads", async () => {
+    const req = makeRequest("/internal/growth-signal-summarize", invalidGrowthSignalSummarizePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json();
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed journey-critic payloads", async () => {
+    const req = makeRequest("/internal/journey-critic", detailedJourneyCriticPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid journey-critic payloads", async () => {
+    const req = makeRequest("/internal/journey-critic", invalidJourneyCriticPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json();
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed message-brief payloads", async () => {
+    const req = makeRequest("/internal/message-brief", detailedMessageBriefPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid message-brief payloads", async () => {
+    const req = makeRequest("/internal/message-brief", invalidMessageBriefPayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json();
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("handles detailed outcome-diagnose payloads", async () => {
+    const req = makeRequest("/internal/outcome-diagnose", detailedOutcomeDiagnosePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(200);
+    const payload = await res.json();
+    expect(payload.ok).toBe(true);
+  });
+
+  it("rejects invalid outcome-diagnose payloads", async () => {
+    const req = makeRequest("/internal/outcome-diagnose", invalidOutcomeDiagnosePayload);
+    const res = await worker.fetch(req, makeEnv());
+    expect(res.status).toBe(400);
+    const payload = await res.json();
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
   });
 
   it("returns validation error for malformed correlation id", async () => {
