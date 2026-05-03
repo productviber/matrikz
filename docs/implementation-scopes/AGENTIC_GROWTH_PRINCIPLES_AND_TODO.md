@@ -342,7 +342,7 @@ This phase makes the `SKRIP_POLICY` constants operational (Gap 6). Depends on Ph
 - AI may recommend a `skripPolicy` value from the enum.
 - Policy enforces that the recommended policy does not exceed what `effectiveChannels` allows.
 
-**D3** `[ ]` **Build** tests for each `SKRIP_POLICY` mode through the full proposal → policy → execute path.
+**D3** `[x]` **Build** tests for each `SKRIP_POLICY` mode through the full proposal → policy → execute path.
 
 - Test: `PUSH_ASSIST` with a subject who has push registered → push enqueued alongside email.
 - Test: `PUSH_PRIMARY_WITH_EMAIL_FALLBACK` with no push token → falls back to email only.
@@ -354,7 +354,7 @@ This phase makes the `SKRIP_POLICY` constants operational (Gap 6). Depends on Ph
 
 This phase closes Gap 7. Required before multi-channel push is enabled at any meaningful volume.
 
-**E1** `[ ]` **Build** handler for `APP_UNINSTALLED` or equivalent lifecycle event.
+**E1** `[x]` **Build** handler for `APP_UNINSTALLED` or equivalent lifecycle event.
 
 - Updates `contact_channel_identities.availability_state = 'unavailable'` for all push identities of the subject.
 - Inserts a growth signal: `UNINSTALL_WITH_RECENT_ENGAGEMENT` if last activity was within 30 days.
@@ -377,7 +377,7 @@ This phase closes Gap 7. Required before multi-channel push is enabled at any me
 
 This phase closes Gap 8. It is the most architecturally complex phase and should not start until Phases A–C are stable.
 
-**F1** `[ ]` **Build** `getSubjectAllActiveChannels(env, subjectId)` that merges both identity surfaces.
+**F1** `[x]` **Build** `getSubjectAllActiveChannels(env, subjectId)` that merges both identity surfaces.
 
 - Cold prospect channels: `channel_orchestrator` read path — email, contact_form, social handles.
 - Product user channels: `contact_channel_identities` read path — push, sms, whatsapp, telegram.
@@ -389,7 +389,7 @@ This phase closes Gap 8. It is the most architecturally complex phase and should
 - If yes, prefer the warmer product-user channel and suppress cold outreach.
 - Mirror of existing logic in `handleLeadCaptured` which cancels cold emails on warm lead capture — generalize this to all channel surfaces.
 
-**F3** `[ ]` **Modify** `proposeEligibleAgentActionsFromSignals` to pass the unified channel projection into the AI engine context.
+**F3** `[x]` **Modify** `proposeEligibleAgentActionsFromSignals` to pass the unified channel projection into the AI engine context.
 
 - AI engine can then select the most appropriate channel action given what channels actually exist for the subject.
 - Policy still authorizes the selected channel — AI recommendation does not bypass `getEligibleSkripIdentities()`.

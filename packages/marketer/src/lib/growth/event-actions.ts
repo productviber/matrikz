@@ -266,6 +266,7 @@ export async function proposeEligibleAgentActionsFromSignals(
         recentOutcomeTypes: subjectContext.recentOutcomes.map((o) => o.outcomeType),
         activeSignalCount: subjectContext.activeSignalCount,
         pushRegistered: subjectContext.pushRegistered,
+        activeChannels: subjectContext.activeChannels,
         lifecycleStage: subjectContext.lifecycleStage,
       },
     };

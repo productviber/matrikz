@@ -283,6 +283,118 @@ describe('growth policy', () => {
     expect(policy.effectiveChannels).toContain('push');
   });
 
+  it('activates push_primary_with_email_fallback when push is eligible', async () => {
+    const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
+    env.DB.onQuery(/contact_channel_identities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        external_contact_id: 'lead@acme.com',
+        canonical_id: 'skrip_can_1',
+        channel: 'push',
+        address: 'token_1',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    env.DB.onQuery(/channel_authorities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        campaign_id: null,
+        channel: 'push',
+        authority: 'skrip',
+        rollout_state: 'enabled',
+        feature_flag_key: null,
+      },
+    ]);
+
+    const policy = await evaluateGrowthPolicy(env as any, {
+      subjectId: 'lead@acme.com',
+      action: {
+        type: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        params: { skripPolicy: 'push_primary_with_email_fallback' },
+      },
+      riskLevel: 'low',
+      confidence: 70,
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.effectiveChannels).toEqual(['push', 'email']);
+  });
+
+  it('falls back to email only when push is unavailable for push_primary_with_email_fallback', async () => {
+    const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
+    env.DB.onQuery(/contact_channel_identities/i, () => []);
+
+    const policy = await evaluateGrowthPolicy(env as any, {
+      subjectId: 'lead@acme.com',
+      action: {
+        type: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        params: { skripPolicy: 'push_primary_with_email_fallback' },
+      },
+      riskLevel: 'low',
+      confidence: 70,
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.effectiveChannels).toEqual(['email']);
+  });
+
+  it('activates multi_channel_progressive policy for enroll_sequence with multiple eligible channels', async () => {
+    const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
+    env.DB.onQuery(/contact_channel_identities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        external_contact_id: 'lead@acme.com',
+        canonical_id: 'skrip_can_1',
+        channel: 'push',
+        address: 'token_1',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    env.DB.onQuery(/channel_authorities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        campaign_id: null,
+        channel: 'push',
+        authority: 'skrip',
+        rollout_state: 'enabled',
+        feature_flag_key: null,
+      },
+    ]);
+
+    const policy = await evaluateGrowthPolicy(env as any, {
+      subjectId: 'lead@acme.com',
+      action: {
+        type: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        params: { skripPolicy: 'multi_channel_progressive' },
+      },
+      riskLevel: 'low',
+      confidence: 70,
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.effectiveChannels).toContain('email');
+    expect(policy.effectiveChannels).toContain('push');
+    expect(policy.requiredApproval).toBe(true);
+  });
+
   it('enforces autonomy threshold gate when conversion history is below threshold', async () => {
     const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
     await env.KV_MARKETING.put('growth:autonomy_threshold:send_via_skrip:default', '80');

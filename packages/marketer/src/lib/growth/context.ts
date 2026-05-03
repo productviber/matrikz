@@ -14,6 +14,13 @@ export interface SubjectOutcomeSummary {
   daysSinceExecution: number;
 }
 
+export interface SubjectChannelIdentity {
+  channel: string;
+  registrationState: string;
+  availabilityState: string;
+  consentState: string;
+}
+
 /**
  * Structural context about a subject used to inform the AI engine decision.
  * Contains only what the agent needs to reason — no raw PII blobs.
@@ -29,6 +36,7 @@ export interface SubjectDecisionContext {
   signalTypesSeen: string[];
   lifecycleStage: string | null;
   pushRegistered: boolean;
+  activeChannels: SubjectChannelIdentity[];
   emailEligible: boolean;
   lastActionType: string | null;
   lastActionDaysAgo: number | null;
@@ -48,6 +56,27 @@ export interface SubjectDecisionContext {
  * Intentionally lightweight: no raw email content, no PII blobs.
  * The policy layer enforces the authoritative eligibility checks.
  */
+export async function getSubjectAllActiveChannels(
+  env: Env,
+  tenantId: string | null | undefined,
+  subjectId: string,
+): Promise<SubjectChannelIdentity[]> {
+  const normalTenantId = normalizeTenantId(tenantId);
+  const normalSubjectId = normalizeSubjectId(subjectId);
+
+  return query<SubjectChannelIdentity>(
+    env.DB,
+    `SELECT channel, registration_state AS registrationState, availability_state AS availabilityState, consent_state AS consentState
+       FROM contact_channel_identities
+      WHERE tenant_id = ?
+        AND external_contact_id = ?
+        AND registration_state IN ('registered', 'active')
+        AND availability_state IN ('available', 'reachable')
+        AND consent_state IN ('opted_in', 'subscribed', 'granted')`,
+    [normalTenantId, normalSubjectId],
+  );
+}
+
 export async function loadSubjectContextForDecision(
   env: Env,
   tenantId: string | null | undefined,
@@ -57,7 +86,7 @@ export async function loadSubjectContextForDecision(
   const normalSubjectId = normalizeSubjectId(subjectId);
   const epochNow = now();
 
-  const [recentActions, activeSignals, contact, pushIdentity] = await Promise.all([
+  const [recentActions, activeSignals, contact, activeChannels] = await Promise.all([
     // Last 5 executed/outcome actions with their outcome type
     query<{
       action_id: string;
@@ -70,7 +99,7 @@ export async function loadSubjectContextForDecision(
       env.DB,
       `SELECT aa.action_id, aa.proposed_action, aa.confidence, aa.executed_at, aao.outcome_type, aao.attribution_strength
          FROM agent_actions aa
-         LEFT JOIN agent_action_outcomes aao ON aao.action_id = aa.action_id
+        LEFT JOIN agent_action_outcomes aao ON aao.action_id = aa.action_id
         WHERE aa.tenant_id = ?
           AND aa.subject_id = ?
           AND aa.status IN (?, ?, ?)
@@ -104,20 +133,8 @@ export async function loadSubjectContextForDecision(
       [normalSubjectId],
     ),
 
-    // Push channel eligibility: must be registered, available, and consented
-    queryOne<{ channel: string }>(
-      env.DB,
-      `SELECT channel
-         FROM contact_channel_identities
-        WHERE tenant_id = ?
-          AND contact_id = ?
-          AND channel = 'push'
-          AND registration_state IN ('registered', 'active')
-          AND availability_state IN ('available', 'reachable')
-          AND consent_state IN ('opted_in', 'subscribed', 'granted')
-        LIMIT 1`,
-      [normalTenantId, normalSubjectId],
-    ),
+    // Active channel projection across product-user identities.
+    getSubjectAllActiveChannels(env, tenantId, subjectId),
   ]);
 
   const recentOutcomes: SubjectOutcomeSummary[] = recentActions.map((row) => ({
@@ -132,13 +149,15 @@ export async function loadSubjectContextForDecision(
   }));
 
   const lastAction = recentActions[0] ?? null;
+  const activeChannelIds = activeChannels.map((row) => row.channel);
 
   return {
     recentOutcomes,
     activeSignalCount: activeSignals.length,
     signalTypesSeen: activeSignals.map((s) => s.signal_type),
     lifecycleStage: contact?.status ?? null,
-    pushRegistered: Boolean(pushIdentity),
+    pushRegistered: activeChannelIds.includes('push'),
+    activeChannels,
     emailEligible: true,
     lastActionType: lastAction?.proposed_action ?? null,
     lastActionDaysAgo: lastAction?.executed_at

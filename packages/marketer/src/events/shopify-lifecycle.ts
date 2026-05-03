@@ -15,7 +15,7 @@
 
 import type { Env } from '../types';
 import { KV_PREFIX, TTL, CONTACT_STATUS, CONTACT_SOURCE, EVENT_TYPES } from '../constants';
-import { hashEmail, todayKey } from '../lib/db';
+import { execute, hashEmail, now, todayKey } from '../lib/db';
 import { upsertContact } from '../lib/crm';
 import { enrollInSequences } from '../lib/email';
 import { sendSlackNotification, sendDiscordNotification } from '../lib/notifications';
@@ -162,6 +162,23 @@ export async function handleAppUninstalled(
     previousPlan: 'shopify',
     daysActive: 0,
   }).catch((e) => console.error('[AppUninstalled] Sequence error:', e));
+
+  // 2b. Mark any push identity for this subject as unavailable.
+  try {
+    await execute(
+      env.DB,
+      `UPDATE contact_channel_identities
+          SET registration_state = 'invalid',
+              availability_state = 'unavailable',
+              updated_at = ?
+        WHERE tenant_id = ?
+          AND external_contact_id = ?
+          AND channel = 'push'`,
+      [now(), userId],
+    );
+  } catch (err) {
+    console.warn('[AppUninstalled] Failed to deactivate push identity:', err instanceof Error ? err.message : err);
+  }
 
   // 3. Track daily uninstall counter
   const today = todayKey();
