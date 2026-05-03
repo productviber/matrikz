@@ -24,11 +24,18 @@ id = "8fae6d27403d4ca5be5f901097464901"
 binding = "ANALYTICS"
 service = "visibility-analytics"
 
-# Optional advisory binding. Enable after deploying ai-engine with matching
+# Optional advisory binding. Enable after deploying growth-agent with matching
 # internal growth capabilities; code falls back safely when absent.
-# [[services]]
-# binding = "AI_ENGINE"
-# service = "ai-engine"
+[[services]]
+binding = "AI_ENGINE"
+service = "growth-agent"
+
+# ─── Service Binding to Skrip messaging platform ─────────────────────────────
+# Enables Worker-to-Worker calls without going through the public internet
+# (avoids Cloudflare error 1042 which blocks subrequests to *.workers.dev URLs).
+[[services]]
+binding = "SKRIP_SERVICE"
+service = "message-manufacturer-platform"
 
 # ─── Cron Triggers (process due email sends every 5 minutes) ─────────────────
 [triggers]
@@ -42,6 +49,7 @@ FROM_NAME = "Alex from AXEO"
 ENVIRONMENT = "production"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
+GROWTH_AGENT_TIMEOUT_MS = "3500"
 # When using PAYOUT_PROVIDER = "razorpay", also set:
 #   RAZORPAY_ACCOUNT_NUMBER = "your-razorpay-account-number"  (plain var — not secret)
 
@@ -56,7 +64,9 @@ PAYOUT_PROVIDER = "stub"
 #   WEBHOOK_TOKEN_ROLLOVER
 #   AFFILIATE_AUTH_SECRET
 #   WEBHOOK_SIGNING_SECRET
+#   SKRIP_BASE_URL
 #   EMAIL_API_KEY
+#   SKRIP_SERVICE_TOKEN
 #   SLACK_WEBHOOK_URL
 #   DISCORD_WEBHOOK_URL
 #

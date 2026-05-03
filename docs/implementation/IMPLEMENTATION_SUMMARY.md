@@ -356,10 +356,10 @@ cd packages/marketer && pnpm dev
 Visit `http://localhost:8788/report/example.com` to see marketer calling analytics.
 
 ### 5. Read the Architecture
-Open [ARCHITECTURE.md](ARCHITECTURE.md) to understand every decision.
+Open [ARCHITECTURE.md](../architecture/ARCHITECTURE.md) to understand every decision.
 
 ### 6. Prepare for Deployment
-Follow [DEPLOYMENT.md](DEPLOYMENT.md) to go to production with:
+Follow [DEPLOYMENT.md](../operations/DEPLOYMENT.md) to go to production with:
 - Cloudflare D1 database
 - KV namespaces for caching
 - Worker deployment

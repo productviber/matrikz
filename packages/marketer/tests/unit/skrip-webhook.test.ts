@@ -99,4 +99,49 @@ describe('handleSkripOutcomeWebhook', () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(409);
   });
+
+  it('marks push identity invalid when Skrip reports token_invalid failure', async () => {
+    const env = createMockEnv({
+      SKRIP_WEBHOOK_SIGNING_SECRET: 'skrip-webhook-secret',
+    });
+
+    const payload = {
+      eventId: 'evt_fail_1',
+      eventType: 'message.failed',
+      tenantId: 'tenant_acme',
+      contactId: 'contact_123',
+      campaignId: 'cmp_1',
+      stepId: 'step_1',
+      channel: 'push',
+      messageId: 'msg_fail_1',
+      occurredAt: '2026-05-02T12:00:00.000Z',
+      sourceSystem: 'skrip',
+      correlationId: 'corr_fail_1',
+      reason: 'token_invalid',
+    };
+    const rawBody = JSON.stringify(payload);
+    const timestamp = new Date().toISOString();
+    const nonce = 'nonce_invalid_123';
+    const signature = await computeSkripSignature({
+      method: 'POST',
+      path: '/webhooks/skrip/v1/outcomes',
+      timestamp,
+      nonce,
+      rawBody,
+      secret: env.SKRIP_WEBHOOK_SIGNING_SECRET!,
+    });
+
+    const request = makeRequest('POST', '/webhooks/skrip/v1/outcomes', payload, {
+      [SKRIP_CONFIG.HEADER_TIMESTAMP]: timestamp,
+      [SKRIP_CONFIG.HEADER_NONCE]: nonce,
+      [SKRIP_CONFIG.HEADER_SIGNATURE]: signature,
+    });
+
+    const response = await handleSkripOutcomeWebhook(request, env as any);
+    expect(response.status).toBe(200);
+    const invalidationWrite = env.DB._queries.find((query) =>
+      /UPDATE contact_channel_identities[\s\S]+registration_state = 'invalid'/i.test(query.sql),
+    );
+    expect(invalidationWrite).toBeDefined();
+  });
 });

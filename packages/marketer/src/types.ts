@@ -25,6 +25,10 @@ export interface Env {
   // Optional service binding to ai-engine for structured growth advice
   AI_ENGINE?: Fetcher;
 
+    // Optional service binding to Skrip messaging platform
+    // When present, used instead of SKRIP_BASE_URL to avoid CF error 1042
+    SKRIP_SERVICE?: Fetcher;
+
   // Vars
   FROM_EMAIL: string;
   FROM_NAME: string;
@@ -75,6 +79,12 @@ export interface Env {
   SKRIP_TIMEOUT_MS?: string;
   /** Optional override for ai-engine advisory timeout in milliseconds */
   AI_ENGINE_TIMEOUT_MS?: string;
+  /** Shared secret for growth-agent service authentication */
+  INTERNAL_SECRET?: string;
+  /** Optional rollover secret accepted during rotation window */
+  INTERNAL_SECRET_ROLLOVER?: string;
+  /** Optional override for growth-agent timeout in milliseconds */
+  GROWTH_AGENT_TIMEOUT_MS?: string;
   /** Emergency kill switch for agent executions. Accepts 'true' to block. */
   AGENT_EXECUTION_DISABLED?: string;
   /**
@@ -89,6 +99,11 @@ export interface Env {
   AGENT_TOKEN_SCOPES?: string;
   /** Comma-separated scopes for AGENT_TOKEN_ROLLOVER. */
   AGENT_TOKEN_ROLLOVER_SCOPES?: string;
+  /**
+   * When set to 'true', enables the QA token-mint endpoint
+   * (POST /api/admin/qa/affiliate-token). Must NOT be 'true' in production.
+   */
+  QA_MODE_ENABLED?: string;
 }
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────
@@ -561,6 +576,7 @@ export interface ContactChannelIdentityRow {
   external_contact_id: string;
   canonical_id: string | null;
   channel: string;
+  address: string | null;
   consent_state: string;
   suppression_state: string;
   availability_state: string;
@@ -634,6 +650,33 @@ export interface PushOptInEventRow {
   correlation_id: string;
   metadata_json: string | null;
   occurred_at: number;
+}
+
+export interface PushNotificationRow {
+  notification_id: string;
+  tenant_id: string;
+  contact_id: string | null;
+  campaign_id: string | null;
+  step_id: string | null;
+  channel: string;
+  sent_at: number | null;
+  delivered_at: number | null;
+  clicked_at: number | null;
+  dismissed_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PushNotificationReceiptEventRow {
+  id: number;
+  notification_id: string;
+  receipt_type: string;
+  occurred_at: number;
+  source: string;
+  correlation_id: string | null;
+  receipt_id: string | null;
+  payload_json: string | null;
+  created_at: number;
 }
 
 // ─── Agent-Led Growth Rows ─────────────────────────────────────────────────

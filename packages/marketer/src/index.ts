@@ -56,8 +56,11 @@
  *   GET  /api/admin/outbound/skrip/lineage      — Admin: message lineage by tenant/campaign
  *
  *   POST /api/admin/push/send           — Admin: enqueue push notification for a contact
+ *   POST /api/admin/qa/affiliate-token  — QA only (QA_MODE_ENABLED=true): mint affiliate bearer token
  *   POST /api/push/subscribe            — Capture browser Web Push subscription
  *   DELETE /api/push/unsubscribe        — Record Web Push opt-out
+ *   POST /api/push/receipt              — Capture browser push delivery/click/dismiss receipt
+ *   GET  /api/push/status/:notificationId — Push receipt status projection
  *
  *   POST /webhooks/brevo                — Brevo deliverability webhooks
  *   POST /webhooks/skrip/v1/outcomes    — Skrip normalized outcome webhooks
@@ -122,14 +125,20 @@ import {
   handleSkripAuthorityUpsert,
   handleAdminAgenticSignals,
   handleAdminAgenticPerformance,
+  handleAdminAgenticQuality,
+  handleAgentDecisionTrace,
   handleApproveAgentAction,
+  handleOverrideAgentAction,
   handleAgenticOutcomeExport,
   handleMarkStaleAgentActions,
+  handleAttributeAgentActionOutcomes,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
 import { handleBrevoWebhook, handleBrevoInbound } from './routes/webhooks';
 import { handleSkripOutcomeWebhook } from './routes/webhooks-skrip';
 import { handlePushSubscribe, handlePushUnsubscribe } from './routes/skrip-push';
+import { handlePushReceipt, handlePushStatus } from './routes/push-receipts';
+import { handleQATokenMint } from './routes/qa-token';
 import {
   handleWhatsAppSubscribe, handleWhatsAppUnsubscribe,
   handleSmsSubscribe, handleSmsUnsubscribe,
@@ -158,7 +167,9 @@ import { correlationIdFromRequest, setCorrelationId, clearCorrelationId } from '
 import { captureReputationSnapshot } from './lib/reputation';
 import { dispatchOutboxBatch } from './lib/skrip/dispatcher';
 import { reconcilePendingIdentities } from './lib/skrip/registration';
-import { markStaleAgentActions } from './lib/growth/outcomes';
+import { attributeAgentActionOutcomes, markStaleAgentActions } from './lib/growth/outcomes';
+import { listGrowthSignals } from './lib/growth/signals';
+import { proposeEligibleAgentActionsFromSignals } from './lib/growth/event-actions';
 
 export default {
   /**
@@ -396,6 +407,9 @@ export default {
       if (method === 'POST' && path === '/api/admin/push/send') {
         return handleAdminPushSend(request, env);
       }
+      if (method === 'POST' && path === '/api/admin/qa/affiliate-token') {
+        return handleQATokenMint(request, env);
+      }
       if (method === 'GET' && path === '/api/admin/outbound/skrip/attribution') {
         return handleSkripAttribution(request, env);
       }
@@ -405,15 +419,29 @@ export default {
       if (method === 'GET' && path === '/api/admin/agentic/performance') {
         return handleAdminAgenticPerformance(request, env);
       }
+      if (method === 'GET' && path === '/api/admin/agentic/quality') {
+        return handleAdminAgenticQuality(request, env);
+      }
+      const decisionTraceMatch = path.match(/^\/api\/admin\/agentic\/subjects\/([^/]+)\/decision-trace$/);
+      if (method === 'GET' && decisionTraceMatch) {
+        return handleAgentDecisionTrace(request, env, decisionTraceMatch[1]);
+      }
       if (method === 'POST' && path === '/api/admin/agentic/outcomes/export') {
         return handleAgenticOutcomeExport(request, env);
       }
       if (method === 'POST' && path === '/api/admin/agentic/outcomes/review-stale') {
         return handleMarkStaleAgentActions(request, env);
       }
+      if (method === 'POST' && path === '/api/admin/agentic/outcomes/attribute') {
+        return handleAttributeAgentActionOutcomes(request, env);
+      }
       const approveMatch = path.match(/^\/api\/admin\/agentic\/actions\/([^/]+)\/approve$/);
       if (method === 'POST' && approveMatch) {
         return handleApproveAgentAction(request, env, decodeURIComponent(approveMatch[1]));
+      }
+      const overrideMatch = path.match(/^\/api\/admin\/agentic\/actions\/([^/]+)\/override$/);
+      if (method === 'POST' && overrideMatch) {
+        return handleOverrideAgentAction(request, env, decodeURIComponent(overrideMatch[1]));
       }
       if (method === 'GET' && path === '/api/admin/outbound/ab-stats') {
         return handleAbStats(request, env);
@@ -503,6 +531,12 @@ export default {
       }
       if (method === 'DELETE' && path === '/api/push/unsubscribe') {
         return handlePushUnsubscribe(request, env);
+      }
+      if (method === 'POST' && path === '/api/push/receipt') {
+        return handlePushReceipt(request, env);
+      }
+      if (method === 'GET' && path.startsWith('/api/push/status/')) {
+        return handlePushStatus(request, env);
       }
 
       // ── Multi-Channel Subscriptions (WhatsApp · SMS · Telegram) ──
@@ -599,12 +633,53 @@ export default {
     );
 
     ctx.waitUntil(
-      markStaleAgentActions(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+      markStaleAgentActions(env, PAGINATION.CRON_BATCH_SIZE).then(async (result) => {
         if (result.marked > 0) {
           console.log(`[Cron] Agent outcomes: ${result.marked} stale action(s) marked no_outcome_observed`);
         }
+        // B2: Re-evaluate subjects whose actions went stale without an outcome.
+        // Policy frequency caps prevent redundant proposals — safe to call freely.
+        let reEvaluated = 0;
+        for (const subject of result.subjectsForReview) {
+          try {
+            const signals = await listGrowthSignals(env, {
+              tenantId: subject.tenantId,
+              subjectId: subject.subjectId,
+              includeExpired: false,
+              limit: 10,
+            });
+            if (signals.length > 0) {
+              await proposeEligibleAgentActionsFromSignals(env, signals, {
+                sourceEvent: 'cron.stale_action_review',
+              });
+              reEvaluated++;
+            }
+          } catch (reErr) {
+            console.warn(
+              `[Cron] Re-evaluation failed for ${subject.subjectId}:`,
+              reErr instanceof Error ? reErr.message : reErr,
+            );
+          }
+        }
+        if (reEvaluated > 0) {
+          console.log(`[Cron] Agent outcomes: ${reEvaluated} subject(s) queued for re-evaluation`);
+        }
       }).catch((err) => {
         console.warn('[Cron] Agent outcome review error:', err instanceof Error ? err.message : err);
+      })
+    );
+
+    // Outcome attribution sweep — writes conversion/engagement outcomes from
+    // email and Skrip lineage back into agent_action_outcomes.
+    ctx.waitUntil(
+      attributeAgentActionOutcomes(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+        if (result.attributed > 0) {
+          console.log(
+            `[Cron] Agent attribution: ${result.attributed} attributed (${result.conversionAttributed} conversion, ${result.engagementAttributed} engagement)`,
+          );
+        }
+      }).catch((err) => {
+        console.warn('[Cron] Agent attribution error:', err instanceof Error ? err.message : err);
       })
     );
   },

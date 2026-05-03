@@ -1,0 +1,23 @@
+{
+  "name": "@clodo/growth-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:e2e": "GROWTH_AGENT_URL=https://growth-agent.<subdomain>.workers.dev GROWTH_AGENT_INTERNAL_SECRET=<value> vitest run --config vitest.e2e.config.ts"
+  },
+  "dependencies": {
+    "@clodo/growth-agent-contracts": "workspace:*",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260503.1",
+    "typescript": "^5.8.3",
+    "vitest": "^2.1.8",
+    "wrangler": "^3.0.0"
+  }
+}

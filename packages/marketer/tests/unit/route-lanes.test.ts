@@ -19,6 +19,8 @@ describe('route lane resolver', () => {
     expect(resolveRouteLane('DELETE', '/api/affiliate/gdpr/delete')).toBe('user');
     expect(resolveRouteLane('POST', '/api/affiliate/session')).toBe('user');
     expect(resolveRouteLane('POST', '/api/unsubscribe')).toBe('user');
+    expect(resolveRouteLane('POST', '/api/push/receipt')).toBe('user');
+    expect(resolveRouteLane('GET', '/api/push/status/notif_123')).toBe('user');
   });
 
   it('maps admin routes including dynamic campaign paths', () => {

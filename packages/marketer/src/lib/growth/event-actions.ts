@@ -2,7 +2,6 @@ import type { Env, ProposedAgentAction } from '../../types';
 import {
   AGENT_ACTION_TYPE,
   AGENT_RISK_LEVEL,
-  EVENT_TYPES,
   GROWTH_POLICY,
   GROWTH_SIGNAL_SEVERITY,
   GROWTH_SIGNAL_TYPE,
@@ -10,6 +9,12 @@ import {
 import { createAgentActionProposal, type AgentActionView } from './actions';
 import { evaluateGrowthPolicy } from './policy';
 import type { GrowthSignalView } from './signals';
+import {
+  createAiEngineClient,
+  fallbackGrowthNextAction,
+  type GrowthNextActionRequest,
+} from '../ai-engine/client';
+import { loadSubjectContextForDecision } from './context';
 
 export interface ProposeEligibleAgentActionsOptions {
   sourceEvent?: string;
@@ -24,9 +29,41 @@ function stepId(signalType: string): string {
   return `agent-${signalType.replace(/_/g, '-')}`.slice(0, 80);
 }
 
-function actionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
+/**
+ * Extracts a rich context blob from a signal's evidence for use in AI
+ * requests, Skrip payload context, and action proposals. Avoids losing
+ * domain/grade/funnel data that was present at signal write time.
+ */
+function buildEnrichedSignalContext(signal: GrowthSignalView): Record<string, unknown> {
   const evidence = signalEvidence(signal);
-  const domain = typeof evidence.domain === 'string' ? evidence.domain : undefined;
+  return {
+    signalId: signal.signal_id,
+    signalType: signal.signal_type,
+    signalSeverity: signal.severity,
+    confidence: signal.confidence,
+    ...(typeof evidence.domain === 'string' ? { domain: evidence.domain } : {}),
+    ...(typeof evidence.auditGrade === 'string' ? { auditGrade: evidence.auditGrade } : {}),
+    ...(typeof evidence.auditScore === 'number' ? { auditScore: evidence.auditScore } : {}),
+    ...(typeof evidence.companyName === 'string' ? { companyName: evidence.companyName } : {}),
+    ...(typeof evidence.funnelPosition === 'string' ? { funnelPosition: evidence.funnelPosition } : {}),
+    ...(typeof evidence.lastActivityAt === 'number' ? { lastActivityAt: evidence.lastActivityAt } : {}),
+    ...(typeof evidence.landingPage === 'string' ? { landingPage: evidence.landingPage } : {}),
+  };
+}
+
+/**
+ * Deterministic fallback: maps a single signal to a safe ProposedAgentAction.
+ *
+ * This function is the fail-closed safety path used when the AI engine is
+ * unavailable (not bound, circuit open, or request error). It must never be
+ * removed. The context blob is now enriched with all available evidence so
+ * that downstream execution layers (Skrip, sequence enrollment) receive the
+ * same richness regardless of whether the AI or this fallback produced the
+ * action.
+ */
+export function deterministicFallbackActionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
+  const context = buildEnrichedSignalContext(signal);
+  const domain = typeof context.domain === 'string' ? context.domain : undefined;
 
   switch (signal.signal_type) {
     case GROWTH_SIGNAL_TYPE.SIGNUP_NO_SITE_CONNECTED:
@@ -38,7 +75,9 @@ function actionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
         type: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
         params: {
           triggerEvent: `agentic.${signal.signal_type}`,
-          context: { signalId: signal.signal_id, signalType: signal.signal_type },
+          interventionMode: 'primary',
+          primaryChannel: 'email',
+          context,
         },
         reason: `Lifecycle gap detected: ${signal.signal_type}`,
       };
@@ -50,8 +89,10 @@ function actionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
         params: {
           campaignId: 'agent-led-growth',
           stepId: stepId(signal.signal_type),
+          interventionMode: 'rescue',
+          primaryChannel: 'email',
           ...(domain ? { domain } : {}),
-          context: { signalId: signal.signal_id, signalType: signal.signal_type },
+          context,
         },
         reason: `High-intent channel follow-up candidate: ${signal.signal_type}`,
       };
@@ -59,7 +100,7 @@ function actionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
     case GROWTH_SIGNAL_TYPE.UNINSTALL_WITH_RECENT_ENGAGEMENT:
       return {
         type: AGENT_ACTION_TYPE.ESCALATE_TO_HUMAN,
-        params: { context: { signalId: signal.signal_id, signalType: signal.signal_type } },
+        params: { context },
         reason: 'Recent engagement followed by uninstall needs operator review.',
       };
 
@@ -69,7 +110,7 @@ function actionForSignal(signal: GrowthSignalView): ProposedAgentAction | null {
     case GROWTH_SIGNAL_TYPE.AFFILIATE_CLICK_NO_SIGNUP:
       return {
         type: AGENT_ACTION_TYPE.MANUAL_REVIEW,
-        params: { context: { signalId: signal.signal_id, signalType: signal.signal_type } },
+        params: { context },
         reason: `Conversion intent detected: ${signal.signal_type}`,
       };
 
@@ -86,49 +127,177 @@ function riskForSignal(signal: GrowthSignalView): string {
   return AGENT_RISK_LEVEL.LOW;
 }
 
+/**
+ * Returns the highest-severity risk level across a set of signals for the
+ * same subject. Used when the AI engine reasons over compound signal sets.
+ */
+function dominantRiskForSignals(signals: GrowthSignalView[]): string {
+  const ranks: Record<string, number> = {
+    [AGENT_RISK_LEVEL.CRITICAL]: 4,
+    [AGENT_RISK_LEVEL.HIGH]: 3,
+    [AGENT_RISK_LEVEL.MEDIUM]: 2,
+    [AGENT_RISK_LEVEL.LOW]: 1,
+  };
+  let max: string = AGENT_RISK_LEVEL.LOW;
+  for (const signal of signals) {
+    const risk = riskForSignal(signal);
+    if ((ranks[risk] ?? 0) > (ranks[max] ?? 0)) max = risk;
+  }
+  return max;
+}
+
+/**
+ * Proposes eligible agent actions from a set of growth signals.
+ *
+ * Decision path (in order of precedence):
+ *   1. Signals are grouped by subject so the AI receives the full compound
+ *      picture for a subject, not one signal at a time.
+ *   2. Subject context (history, active signals, channel state) is loaded
+ *      and passed to the AI request.
+ *   3. Policy hints are pre-computed from the deterministic fallback action
+ *      and forwarded as constraints in the AI request.
+ *   4. The AI engine (growthNextAction) is called as the primary decision
+ *      path when the AI_ENGINE binding is present and the circuit is closed.
+ *   5. If the AI engine is unavailable, fallbackGrowthNextAction() is used.
+ *      This is the fail-closed path — it must not be removed.
+ *   6. The AI-proposed action is evaluated through the policy engine.
+ *      The policy result gates execution regardless of how the action was
+ *      proposed.
+ */
 export async function proposeEligibleAgentActionsFromSignals(
   env: Env,
   signals: GrowthSignalView[],
   options: ProposeEligibleAgentActionsOptions = {},
 ): Promise<AgentActionView[]> {
+  if (signals.length === 0) return [];
+
   const created: AgentActionView[] = [];
+  const aiClient = createAiEngineClient(env);
 
+  // ── Group signals by subject so each subject gets one compound AI call ──
+  const bySubject = new Map<string, GrowthSignalView[]>();
   for (const signal of signals) {
-    const proposedAction = actionForSignal(signal);
-    if (!proposedAction) continue;
+    const key = `${signal.tenant_id ?? 'default'}::${signal.subject_id}`;
+    const bucket = bySubject.get(key) ?? [];
+    bucket.push(signal);
+    bySubject.set(key, bucket);
+  }
 
-    const riskLevel = riskForSignal(signal);
+  for (const subjectSignals of bySubject.values()) {
+    const primarySignal = subjectSignals[0];
+    const tenantId = primarySignal.tenant_id;
+    const subjectId = primarySignal.subject_id;
+    const riskLevel = dominantRiskForSignals(subjectSignals);
+    const dominantConfidence = Math.max(...subjectSignals.map((s) => s.confidence));
+
+    // ── Load subject context for AI reasoning (parallel DB reads) ──
+    const subjectContext = await loadSubjectContextForDecision(env, tenantId, subjectId);
+
+    // ── Pre-compute policy hints before the AI call ──
+    // Use the deterministic fallback for the primary signal to get a channel
+    // eligibility snapshot. This prevents the AI proposing actions that policy
+    // will always block. If the hint action itself is null, skip hints.
+    let policyHints: Record<string, unknown> = {};
+    const hintAction = deterministicFallbackActionForSignal(primarySignal);
+    if (hintAction) {
+      const hintPolicy = await evaluateGrowthPolicy(env, {
+        tenantId,
+        subjectId,
+        action: hintAction,
+        riskLevel,
+        confidence: dominantConfidence,
+      });
+      policyHints = {
+        effectiveChannels: hintPolicy.effectiveChannels,
+        cooldownUntil: hintPolicy.cooldownUntil,
+        warnings: hintPolicy.warnings,
+        requiredApproval: hintPolicy.requiredApproval,
+        // Even if the hint policy blocks, the AI may propose a different action
+        // type that passes. We do not short-circuit here.
+        hintBlocked: !hintPolicy.allowed,
+        hintBlockedReasons: hintPolicy.blockedReasons,
+      };
+    }
+
+    // ── Build AI engine request ──
+    const aiRequest: GrowthNextActionRequest = {
+      tenantId,
+      subjectId,
+      signals: subjectSignals.map((s) => ({
+        signalId: s.signal_id,
+        signalType: s.signal_type,
+        severity: s.severity,
+        confidence: s.confidence,
+        evidence: buildEnrichedSignalContext(s),
+        detectedAt: s.detected_at,
+        expiresAt: s.expires_at,
+      })),
+      context: {
+        sourceEvent: options.sourceEvent,
+        timestamp: options.timestamp,
+        subjectContext,
+        policyHints,
+      },
+    };
+
+    // ── Call AI engine or fall back to deterministic ──
+    const aiResult = aiClient.configured
+      ? await aiClient.growthNextAction(aiRequest)
+      : fallbackGrowthNextAction(aiRequest, 'AI_ENGINE binding not configured');
+
+    // ── Evaluate policy against the AI-proposed action ──
     const policyResult = await evaluateGrowthPolicy(env, {
-      tenantId: signal.tenant_id,
-      subjectId: signal.subject_id,
-      action: proposedAction,
-      riskLevel,
-      confidence: signal.confidence,
+      tenantId,
+      subjectId,
+      action: aiResult.action,
+      riskLevel: aiResult.riskLevel ?? riskLevel,
+      confidence: aiResult.confidence,
     });
 
-    created.push(await createAgentActionProposal(env, {
-      tenantId: signal.tenant_id,
-      subjectId: signal.subject_id,
-      signalId: signal.signal_id,
-      action: proposedAction,
-      riskLevel,
-      confidence: signal.confidence,
-      evidence: {
-        ...signalEvidence(signal),
-        signalType: signal.signal_type,
-        signalSeverity: signal.severity,
-        sourceEvent: options.sourceEvent,
+    // ── Combine evidence from all signals for this subject ──
+    const combinedEvidence: Record<string, unknown> = {
+      signalCount: subjectSignals.length,
+      signalTypes: subjectSignals.map((s) => s.signal_type),
+      dominantSeverity: riskLevel,
+      sourceEvent: options.sourceEvent,
+      subjectContext: {
+        lastActionType: subjectContext.lastActionType,
+        lastActionDaysAgo: subjectContext.lastActionDaysAgo,
+        recentOutcomeTypes: subjectContext.recentOutcomes.map((o) => o.outcomeType),
+        activeSignalCount: subjectContext.activeSignalCount,
+        pushRegistered: subjectContext.pushRegistered,
+        lifecycleStage: subjectContext.lifecycleStage,
       },
+    };
+    // Merge primary signal evidence (domain, grade, etc.) without overwriting
+    for (const [k, v] of Object.entries(signalEvidence(primarySignal))) {
+      if (!(k in combinedEvidence)) combinedEvidence[k] = v;
+    }
+
+    created.push(await createAgentActionProposal(env, {
+      tenantId,
+      subjectId,
+      signalId: primarySignal.signal_id,
+      action: aiResult.action,
+      riskLevel: aiResult.riskLevel ?? riskLevel,
+      confidence: aiResult.confidence,
+      evidence: combinedEvidence,
       requestSnapshot: {
         sourceEvent: options.sourceEvent,
         timestamp: options.timestamp,
-        signalId: signal.signal_id,
-        signalType: signal.signal_type,
+        signalId: primarySignal.signal_id,
+        signalTypes: subjectSignals.map((s) => s.signal_type),
+        aiRequestSummary: {
+          signalCount: subjectSignals.length,
+          subjectContextLoaded: true,
+          policyHintsComputed: Boolean(hintAction),
+        },
       },
       aiMetadata: {
-        mode: 'deterministic_event_materializer',
-        capabilityVersion: GROWTH_POLICY.DEFAULT_AGENT_ID,
-        eventType: options.sourceEvent ?? EVENT_TYPES.AUDIT_COMPLETED,
+        ...aiResult.metadata,
+        explanation: aiResult.explanation,
+        fallback: aiResult.metadata.fallback,
+        rawSummary: aiResult.rawSummary,
       },
       policyResult,
     }));

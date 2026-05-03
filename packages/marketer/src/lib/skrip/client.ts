@@ -1,3 +1,6 @@
+function getSkripSigningSecret(env: Env): string | null {
+  return env.SKRIP_SIGNING_SECRET ?? null;
+}
 import type { Env } from '../../types';
 import { KV_PREFIX, SKRIP_CONFIG, TTL } from '../../constants';
 import { getCorrelationId } from '../correlation';
@@ -14,9 +17,6 @@ function getSkripServiceToken(env: Env): string | null {
   return env.SKRIP_SERVICE_TOKEN ?? env.SYSTEM_TOKEN ?? null;
 }
 
-function getSkripSigningSecret(env: Env): string | null {
-  return env.SKRIP_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET ?? null;
-}
 
 function getConfiguredTimeout(env: Env): number {
   const parsed = Number.parseInt(env.SKRIP_TIMEOUT_MS ?? '', 10);
@@ -52,7 +52,7 @@ async function clearFailures(env: Env): Promise<void> {
 async function performRequest<T>(env: Env, options: SkripRequestOptions): Promise<T> {
   const serviceToken = getSkripServiceToken(env);
   const signingSecret = getSkripSigningSecret(env);
-  if (!env.SKRIP_BASE_URL || !serviceToken || !signingSecret) {
+    if (!(env.SKRIP_SERVICE || env.SKRIP_BASE_URL) || !serviceToken) {
     throw new Error('Skrip client is not fully configured');
   }
 
@@ -63,39 +63,51 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
 
   const rawBody = options.body ? JSON.stringify(options.body) : '';
   const path = options.path.startsWith('/') ? options.path : `/${options.path}`;
-  const timestamp = new Date().toISOString();
-  const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const signature = await computeSkripSignature({
-    method: options.method,
-    path,
-    timestamp,
-    nonce,
-    rawBody,
-    secret: signingSecret,
-  });
-
   const timeoutMs = getConfiguredTimeout(env);
-  const url = new URL(path, env.SKRIP_BASE_URL).toString();
+    const url = env.SKRIP_BASE_URL ? new URL(path, env.SKRIP_BASE_URL).toString() : null;
+
+  // Build optional HMAC signature headers only when a dedicated outbound signing
+  // secret is explicitly configured (distinct from the inbound webhook secret).
+  let extraSignatureHeaders: Record<string, string> = {};
+  if (signingSecret) {
+    const timestamp = new Date().toISOString();
+    const nonce = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const signature = await computeSkripSignature({
+      method: options.method,
+      path,
+      timestamp,
+      nonce,
+      rawBody,
+      secret: signingSecret,
+    });
+    extraSignatureHeaders = {
+      [SKRIP_CONFIG.HEADER_TIMESTAMP]: timestamp,
+      [SKRIP_CONFIG.HEADER_NONCE]: nonce,
+      [SKRIP_CONFIG.HEADER_SIGNATURE]: signature,
+    };
+  }
 
   let lastError: Error | null = null;
   for (let attempt = 1; attempt <= SKRIP_CONFIG.MAX_RETRIES; attempt++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(url, {
+      const fetchInit = {
         method: options.method,
         headers: {
           Authorization: `Bearer ${serviceToken}`,
           'Content-Type': 'application/json',
-          [SKRIP_CONFIG.HEADER_TIMESTAMP]: timestamp,
-          [SKRIP_CONFIG.HEADER_NONCE]: nonce,
-          [SKRIP_CONFIG.HEADER_SIGNATURE]: signature,
+          ...extraSignatureHeaders,
           [SKRIP_CONFIG.HEADER_CORRELATION_ID]: getCorrelationId(),
           [SKRIP_CONFIG.HEADER_TENANT_ID]: options.tenantId,
         },
         body: rawBody || undefined,
         signal: controller.signal,
-      });
+      };
+      const response = env.SKRIP_SERVICE
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ? await env.SKRIP_SERVICE.fetch(`https://skrip.internal${path}`, fetchInit as any)
+        : await fetch(url!, fetchInit);
       clearTimeout(timer);
 
       if (!response.ok) {
@@ -117,9 +129,8 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
 
 export function createSkripClient(env: Env) {
   const serviceToken = getSkripServiceToken(env);
-  const signingSecret = getSkripSigningSecret(env);
   return {
-    configured: Boolean(env.SKRIP_BASE_URL && serviceToken && signingSecret),
+      configured: Boolean((env.SKRIP_SERVICE || env.SKRIP_BASE_URL) && serviceToken),
     registerContact: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/v1/contacts/upsert', method: 'POST', body: payload }),
     sendMessage: <T>(tenantId: string, payload: unknown) =>

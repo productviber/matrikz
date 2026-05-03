@@ -39,6 +39,8 @@ const RULES: RouteLaneRule[] = [
   // Skrip push subscription (public user-facing — no auth, rate-limited at handler)
   { method: 'POST', match: (path) => path === '/api/push/subscribe', lane: 'user' },
   { method: 'DELETE', match: (path) => path === '/api/push/unsubscribe', lane: 'user' },
+  { method: 'POST', match: (path) => path === '/api/push/receipt', lane: 'user' },
+  { method: 'GET', match: (path) => path.startsWith('/api/push/status/'), lane: 'user' },
 
   // Skrip multi-channel subscriptions (WhatsApp, SMS, Telegram — user lane)
   { method: 'POST', match: (path) => path === '/api/channels/whatsapp/subscribe', lane: 'user' },

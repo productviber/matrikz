@@ -113,7 +113,7 @@ Then verify the installation:
 pnpm typecheck
 ```
 
-For detailed setup instructions, see [SETUP_INSTRUCTIONS.md](./SETUP_INSTRUCTIONS.md)
+For detailed setup instructions, see [SETUP_INSTRUCTIONS.md](./docs/setup/SETUP_INSTRUCTIONS.md)
 
 ### Installation
 

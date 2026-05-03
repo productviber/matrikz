@@ -42,6 +42,18 @@ function validateOutcomePayload(payload: Partial<SkripOutcomePayload>): string |
   return null;
 }
 
+function isPushTokenInvalidation(payload: SkripOutcomePayload): boolean {
+  if ((payload.channel ?? '').toLowerCase() !== 'push') return false;
+  const eventType = (payload.eventType ?? '').toLowerCase();
+  if (!eventType.includes('failed')) return false;
+  const reason = (payload.reason ?? '').trim().toLowerCase();
+  const metadataReason = typeof payload.metadata?.failureReason === 'string'
+    ? payload.metadata.failureReason.trim().toLowerCase()
+    : '';
+  const combined = `${reason}|${metadataReason}`;
+  return combined.includes('token_invalid') || combined.includes('unregistered');
+}
+
 async function writeOutcomeToDlq(
   env: Env,
   payload: string,
@@ -176,6 +188,20 @@ export async function handleSkripOutcomeWebhook(
           eventId: payload.eventId,
         },
       }).catch(() => { /* Non-critical: lineage write already succeeded. */ });
+    }
+
+    if (isPushTokenInvalidation(payload)) {
+      await execute(
+        env.DB,
+        `UPDATE contact_channel_identities
+            SET registration_state = 'invalid',
+                availability_state = 'unavailable',
+                updated_at = ?
+          WHERE tenant_id = ?
+            AND external_contact_id = ?
+            AND channel = 'push'`,
+        [epoch, payload.tenantId, payload.contactId],
+      );
     }
 
     return ok({ accepted: true, eventId: payload.eventId, processedAt: new Date().toISOString() });

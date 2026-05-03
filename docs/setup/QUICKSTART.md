@@ -271,16 +271,16 @@ pnpm build  # Generates TypeScript declarations
 
 ## Next Steps
 
-1. **Read Architecture**: Open [ARCHITECTURE.md](ARCHITECTURE.md) to understand the design
+1. **Read Architecture**: Open [ARCHITECTURE.md](../architecture/ARCHITECTURE.md) to understand the design
 2. **Explore Workers**: Visit http://localhost:8787 and http://localhost:8788 locally
-3. **Understand Data Flow**: Read about database schema in [DEPLOYMENT.md](DEPLOYMENT.md)
+3. **Understand Data Flow**: Read about database schema in [DEPLOYMENT.md](../operations/DEPLOYMENT.md)
 4. **Make Changes**: Try updating a component in design-system and rebuilding
-5. **Deploy**: Follow [DEPLOYMENT.md](DEPLOYMENT.md) to go to production
+5. **Deploy**: Follow [DEPLOYMENT.md](../operations/DEPLOYMENT.md) to go to production
 
 ## Getting Help
 
-- **Architecture Questions**: See [ARCHITECTURE.md](ARCHITECTURE.md)
-- **Deployment Questions**: See [DEPLOYMENT.md](DEPLOYMENT.md)
+- **Architecture Questions**: See [ARCHITECTURE.md](../architecture/ARCHITECTURE.md)
+- **Deployment Questions**: See [DEPLOYMENT.md](../operations/DEPLOYMENT.md)
 - **Design System**: See [packages/design-system/README.md](packages/design-system/README.md)
 - **Analytics Worker**: See [packages/analytics/README.md](packages/analytics/README.md)
 - **Marketer Worker**: See [packages/marketer/README.md](packages/marketer/README.md)

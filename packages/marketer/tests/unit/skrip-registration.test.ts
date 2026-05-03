@@ -29,7 +29,10 @@ describe('registerContactChannel()', () => {
   it('persists pending row then registers with Skrip and marks registered', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
-        JSON.stringify({ canonicalId: 'skrip_can_1', status: 'created' }),
+        JSON.stringify({
+          ok: true,
+          data: { canonicalId: 'skrip_can_1', isNew: true, confidence: 1, method: 'identifier', mergedFrom: [], identifiersMapped: 1 },
+        }),
         { status: 200 },
       ),
     );
@@ -43,7 +46,7 @@ describe('registerContactChannel()', () => {
 
     expect(result.canonicalId).toBe('skrip_can_1');
     expect(result.registrationState).toBe('registered');
-    expect(result.skripStatus).toBe('created');
+    expect(result.skripStatus).toBe('registered');
     expect(result.localUpdated).toBe(true);
 
     const insertQ = env.DB._queries.find(
@@ -132,7 +135,10 @@ describe('reconcilePendingIdentities()', () => {
 
     mockFetch.mockResolvedValueOnce(
       new Response(
-        JSON.stringify({ canonicalId: 'skrip_can_pending_1', status: 'created' }),
+        JSON.stringify({
+          ok: true,
+          data: { canonicalId: 'skrip_can_pending_1', isNew: false, confidence: 1, method: 'identifier', mergedFrom: [], identifiersMapped: 1 },
+        }),
         { status: 200 },
       ),
     );

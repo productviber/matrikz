@@ -20,6 +20,7 @@ import { getCorrelationId } from '../correlation';
 import { enqueueEligibleSkripChannels } from '../skrip/outbox';
 import { evaluateGrowthPolicy } from './policy';
 import { hashObject, isRecord, normalizeSubjectId, normalizeTenantId, parseJsonObject, stableStringify } from './common';
+import { createAiEngineClient } from '../ai-engine/client';
 
 export interface CreateAgentActionInput {
   agentId?: string | null;
@@ -296,7 +297,36 @@ async function executeSkripSend(env: Env, action: AgentActionView): Promise<Reco
   const stepId = actionParamString(action.proposedAction, 'stepId') ?? `agent-${action.action_id}`;
   const domain = actionParamString(action.proposedAction, 'domain');
   const contextValue = actionParamRecord(action.proposedAction).context;
-  const context = isRecord(contextValue) ? contextValue : { agentActionId: action.action_id };
+  // Merge params context with the stored evidence blob so Skrip manufacturing
+  // receives domain, auditGrade, auditScore, companyName, etc. even when the
+  // AI engine produced the action and forwarded only a subset via params.context.
+  const baseContext = isRecord(contextValue) ? contextValue : {};
+  const context: Record<string, unknown> = {
+    ...action.evidence,
+    ...baseContext,
+    agentActionId: action.action_id,
+  };
+
+  // C3: Optionally attach an AI-generated message brief to the context.
+  // Non-blocking — failure here must not prevent the send from proceeding.
+  const aiClient = createAiEngineClient(env);
+  if (aiClient.configured) {
+    try {
+      const briefResult = await aiClient.messageBrief({
+        tenantId: action.tenant_id,
+        signalType: typeof context.signalType === 'string' ? context.signalType : null,
+        channel: action.proposedAction.params?.primaryChannel ?? 'push',
+        evidence: action.evidence,
+        agentActionId: action.action_id,
+      });
+      if (briefResult.ok && briefResult.data) {
+        context.aiBrief = briefResult.data;
+      }
+    } catch {
+      // Brief is advisory only — swallow error and continue.
+    }
+  }
+
   const enqueued = await enqueueEligibleSkripChannels(env, {
     tenantId: action.tenant_id,
     campaignId,

@@ -127,6 +127,32 @@ async function markDispatched(
       epoch,
     ],
   );
+
+  if (r.channel === 'push') {
+    await execute(
+      env.DB,
+      `INSERT INTO push_notifications
+        (notification_id, tenant_id, contact_id, campaign_id, step_id, channel, sent_at, delivered_at, clicked_at, dismissed_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 'push', ?, NULL, NULL, NULL, ?, ?)
+       ON CONFLICT(notification_id) DO UPDATE SET
+         tenant_id = excluded.tenant_id,
+         contact_id = excluded.contact_id,
+         campaign_id = excluded.campaign_id,
+         step_id = excluded.step_id,
+         sent_at = COALESCE(push_notifications.sent_at, excluded.sent_at),
+         updated_at = excluded.updated_at`,
+      [
+        messageId,
+        r.tenant_id,
+        r.contact_id,
+        r.campaign_id,
+        r.step_id,
+        epoch,
+        epoch,
+        epoch,
+      ],
+    );
+  }
 }
 
 async function markRetrying(env: Env, outboxId: number, attemptCount: number, errorMessage: string): Promise<void> {

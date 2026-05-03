@@ -13,20 +13,44 @@ import { createSkripClient } from './client';
 
 // ── Skrip API types ────────────────────────────────────────────────────────
 
+/** Identifier types accepted by the Skrip /v1/contacts/upsert endpoint. */
+export type SkripIdentifierType =
+  | 'push_endpoint'
+  | 'phone'
+  | 'email'
+  | 'wa_phone'
+  | 'tg_chat_id'
+  | 'device_fingerprint'
+  | 'cookie_id';
+
+/** Maps our internal channel names to the Skrip identifier type. */
+export const CHANNEL_TO_IDENTIFIER_TYPE: Record<string, SkripIdentifierType> = {
+  push: 'push_endpoint',
+  sms: 'phone',
+  email: 'email',
+  whatsapp: 'wa_phone',
+  telegram: 'tg_chat_id',
+};
+
 export interface SkripContactUpsertRequest {
+  tenantId: string;
   externalContactId: string;
-  channel: string;
-  /** Channel-specific address: push token, phone number, Telegram chat id, etc. */
-  address: string;
-  consentState: string;
-  suppressionState: string;
-  profile?: Record<string, unknown>;
-  tags?: string[];
+  identifiers: Array<{ type: SkripIdentifierType; value: string }>;
+  consentState?: string;
+  suppressionState?: string;
 }
 
 export interface SkripContactUpsertResponse {
-  canonicalId: string;
-  status: 'created' | 'updated' | 'unchanged';
+  ok: boolean;
+  requestId?: string;
+  data: {
+    canonicalId: string;
+    isNew: boolean;
+    confidence: number;
+    method: string;
+    mergedFrom: string[];
+    identifiersMapped: number;
+  };
 }
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -54,7 +78,7 @@ export interface RegisterContactChannelInput {
 export interface RegisterContactChannelResult {
   canonicalId: string | null;
   registrationState: 'registered' | 'pending';
-  skripStatus: SkripContactUpsertResponse['status'] | 'local_only';
+  skripStatus: 'registered' | 'local_only';
   localUpdated: boolean;
 }
 
@@ -79,13 +103,14 @@ export async function registerContactChannel(
   await execute(
     env.DB,
     `INSERT INTO contact_channel_identities
-      (tenant_id, external_contact_id, canonical_id, channel, consent_state, suppression_state, availability_state, identity_confidence, registration_state, last_reconciled_at, created_at, updated_at)
-     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?)
+      (tenant_id, external_contact_id, canonical_id, channel, consent_state, suppression_state, availability_state, identity_confidence, registration_state, address, last_reconciled_at, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 'pending', ?, NULL, ?, ?)
      ON CONFLICT(tenant_id, external_contact_id, channel) DO UPDATE SET
        consent_state = excluded.consent_state,
        suppression_state = excluded.suppression_state,
        availability_state = excluded.availability_state,
        identity_confidence = excluded.identity_confidence,
+       address = excluded.address,
        updated_at = excluded.updated_at`,
     [
       tenantId,
@@ -95,6 +120,7 @@ export async function registerContactChannel(
       input.suppressionState ?? 'clear',
       input.availabilityState ?? 'available',
       input.identityConfidence ?? 1.0,
+      input.address,
       epoch,
       epoch,
     ],
@@ -107,21 +133,20 @@ export async function registerContactChannel(
   }
 
   let canonicalId: string | null = null;
-  let skripStatus: SkripContactUpsertResponse['status'] | 'local_only' = 'local_only';
+  let skripStatus: 'registered' | 'local_only' = 'local_only';
 
   try {
+    const identifierType = CHANNEL_TO_IDENTIFIER_TYPE[input.channel] ?? 'push_endpoint';
     const response = await client.registerContact<SkripContactUpsertResponse>(tenantId, {
+      tenantId,
       externalContactId: input.externalContactId,
-      channel: input.channel,
-      address: input.address,
+      identifiers: [{ type: identifierType, value: input.address }],
       consentState: input.consentState ?? 'opted_in',
       suppressionState: input.suppressionState ?? 'clear',
-      profile: input.profile ?? {},
-      tags: input.tags ?? [],
     } satisfies SkripContactUpsertRequest);
 
-    canonicalId = response.canonicalId;
-    skripStatus = response.status;
+    canonicalId = response.data.canonicalId;
+    skripStatus = 'registered';
 
     // Step 3: update with canonical_id and registered state
     await execute(
@@ -129,10 +154,11 @@ export async function registerContactChannel(
       `UPDATE contact_channel_identities
           SET canonical_id = ?,
               registration_state = 'registered',
+              address = ?,
               last_reconciled_at = ?,
               updated_at = ?
         WHERE tenant_id = ? AND external_contact_id = ? AND channel = ?`,
-      [canonicalId, epoch, epoch, tenantId, input.externalContactId, input.channel],
+      [canonicalId, input.address, epoch, epoch, tenantId, input.externalContactId, input.channel],
     );
   } catch (err) {
     console.warn(
@@ -154,6 +180,7 @@ export interface ReconciliationResult {
   scanned: number;
   registered: number;
   failed: number;
+  errors?: string[];
 }
 
 /**
@@ -186,10 +213,12 @@ export async function reconcilePendingIdentities(
 
   for (const row of rows) {
     try {
+      const identifierType = CHANNEL_TO_IDENTIFIER_TYPE[row.channel] ?? 'push_endpoint';
+      const address = row.address ?? row.external_contact_id;
       const response = await client.registerContact<SkripContactUpsertResponse>(row.tenant_id, {
+        tenantId: row.tenant_id,
         externalContactId: row.external_contact_id,
-        channel: row.channel,
-        address: row.external_contact_id, // fallback; real address comes from push token storage
+        identifiers: [{ type: identifierType, value: address }],
         consentState: row.consent_state,
         suppressionState: row.suppression_state,
       } satisfies SkripContactUpsertRequest);
@@ -203,10 +232,15 @@ export async function reconcilePendingIdentities(
                 last_reconciled_at = ?,
                 updated_at = ?
           WHERE id = ?`,
-        [response.canonicalId, epoch, epoch, row.id],
+        [response.data.canonicalId, epoch, epoch, row.id],
       );
       result.registered++;
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[Reconcile] Skrip upsert failed for id=${row.id} ext=${row.external_contact_id} channel=${row.channel}: ${msg}`,
+      );
+      (result.errors ??= []).push(`id=${row.id}: ${msg}`);
       // Mark last_reconciled_at to avoid hammering the same row every sweep
       await execute(
         env.DB,

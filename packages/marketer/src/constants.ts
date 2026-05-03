@@ -237,6 +237,17 @@ export const GROWTH_POLICY = {
   KILL_SWITCH_CAMPAIGN_PREFIX: 'agent:growth:kill:campaign:',
   KILL_SWITCH_CHANNEL_PREFIX: 'agent:growth:kill:channel:',
   DAILY_ACTION_LIMIT: 100,
+  /** Per-action autonomy threshold key prefix: growth:autonomy_threshold:{actionType}:{tenantId} */
+  AUTONOMY_THRESHOLD_PREFIX: 'growth:autonomy_threshold:',
+  /**
+   * Autonomy level KV key prefix. Value is '0'–'3' (string).
+   *   0 = all proposals require operator approval (supervised, safest)
+   *   1 = high-risk requires approval; low-risk auto-executes (default)
+   *   2 = all low/medium risk auto-executes; approval only for multi-channel
+   *   3 = full autonomy within policy guardrails
+   * Default when key is absent: level 1.
+   */
+  AUTONOMY_LEVEL_PREFIX: 'growth:autonomy_level:',
 } as const;
 
 export const AI_ENGINE_CONFIG = {

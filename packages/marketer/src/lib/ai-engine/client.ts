@@ -2,6 +2,7 @@ import type { Env, ProposedAgentAction } from '../../types';
 import { AGENT_ACTION_TYPE, AGENT_RISK_LEVEL, AI_ENGINE_CONFIG, CONTENT_TYPE_JSON, KV_PREFIX, TTL } from '../../constants';
 import { getCorrelationId } from '../correlation';
 import { normalizeTenantId, stableStringify } from '../growth/common';
+import { ACTION_TYPE_WHITELIST } from '@clodo/growth-agent-contracts';
 
 export interface AiEngineMetadata {
   provider: string | null;
@@ -46,8 +47,11 @@ type GrowthCapability =
   | 'outcome-diagnose';
 
 function configuredTimeout(env: Env): number {
-  const parsed = Number.parseInt(env.AI_ENGINE_TIMEOUT_MS ?? '', 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : AI_ENGINE_CONFIG.DEFAULT_TIMEOUT_MS;
+  const raw = env.GROWTH_AGENT_TIMEOUT_MS ?? env.AI_ENGINE_TIMEOUT_MS;
+  const parsed = Number.parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0
+    ? parsed
+    : AI_ENGINE_CONFIG.DEFAULT_TIMEOUT_MS;
 }
 
 async function readCircuitOpenUntil(env: Env): Promise<number> {
@@ -124,7 +128,7 @@ async function requestCapability<T>(
     return { ok: false, error: 'ai-engine circuit breaker is open' };
   }
 
-  const url = `https://ai-engine/internal/${capability}`;
+  const url = `https://growth-agent/internal/${capability}`;
   const timeoutMs = configuredTimeout(env);
   let lastError: Error | null = null;
 
@@ -138,6 +142,9 @@ async function requestCapability<T>(
           'Content-Type': CONTENT_TYPE_JSON,
           'x-correlation-id': getCorrelationId(),
           'x-capability-version': AI_ENGINE_CONFIG.CAPABILITY_VERSION,
+          'x-internal-secret': env.INTERNAL_SECRET ?? '',
+          'x-tenant-id': normalizeTenantId(payload.tenantId as string | null ?? null),
+          'x-idempotency-key': crypto.randomUUID(),
         },
         body: stableStringify(payload),
         signal: controller.signal,
@@ -146,7 +153,21 @@ async function requestCapability<T>(
       clearTimeout(timer);
 
       if (!response.ok) {
-        throw new Error(`ai-engine HTTP ${response.status}: ${await response.text()}`);
+        // Do not count CAPABILITY_DISABLED (503) as a circuit failure
+        const responseText = await response.text();
+        let parsedBody: Record<string, unknown> | null = null;
+        try { parsedBody = JSON.parse(responseText); } catch { /* ignore */ }
+        if (
+          response.status === 503 &&
+          parsedBody !== null &&
+          typeof parsedBody.error === 'object' &&
+          parsedBody.error !== null &&
+          (parsedBody.error as Record<string, unknown>).code === 'CAPABILITY_DISABLED'
+        ) {
+          clearTimeout(timer);
+          return { ok: false, error: 'capability_disabled' };
+        }
+        throw new Error(`ai-engine HTTP ${response.status}: ${responseText}`);
       }
 
       const parsed = await response.json() as T;
@@ -205,7 +226,13 @@ function normalizeGrowthNextActionResponse(
   const actionRecord = typeof response.action === 'object' && response.action !== null
     ? response.action as Record<string, unknown>
     : {};
-  const actionType = typeof actionRecord.type === 'string' ? actionRecord.type : AGENT_ACTION_TYPE.MANUAL_REVIEW;
+  const rawActionType = typeof actionRecord.type === 'string' ? actionRecord.type : AGENT_ACTION_TYPE.MANUAL_REVIEW;
+  const actionType = (ACTION_TYPE_WHITELIST as readonly string[]).includes(rawActionType)
+    ? rawActionType
+    : (() => {
+        console.warn(JSON.stringify({ type: 'action_type_whitelist_miss', received: rawActionType }));
+        return AGENT_ACTION_TYPE.WAIT;
+      })();
   const params = typeof actionRecord.params === 'object' && actionRecord.params !== null && !Array.isArray(actionRecord.params)
     ? actionRecord.params as Record<string, unknown>
     : {};

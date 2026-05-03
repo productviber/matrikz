@@ -9,7 +9,7 @@ import {
   handleAffiliatePortal,
   handleAffiliateStats,
 } from '../../src/routes/affiliate-portal';
-import { createMockEnv, createMockFetcher, makeRequest, type MockEnv } from '../helpers';
+import { createMockEnv, makeRequest, type MockEnv } from '../helpers';
 import { COMMISSION_TIERS } from '../../src/types';
 
 describe('affiliate-portal', () => {
@@ -40,24 +40,18 @@ describe('affiliate-portal', () => {
     });
 
     it('returns 401 for unverified affiliate', async () => {
-      // No cached email, no analytics result
+      // No cached email, no D1 row
       const req = makeRequest('GET', '/api/affiliate/portal?code=aff-123&email=wrong@test.com');
       const res = await handleAffiliatePortal(req, env as any);
       expect(res.status).toBe(401);
     });
 
-    it('verifies affiliate via analytics fallback and caches email', async () => {
+    it('verifies affiliate via KV cache and serves portal data', async () => {
       const code = 'aff-analytics';
       const email = 'owner@test.com';
 
-      env.ANALYTICS = createMockFetcher({
-        '/admin/affiliates': {
-          body: {
-            ok: true,
-            data: { owner_email: email },
-          },
-        },
-      }) as any;
+      // Pre-warm KV (mirrors the state after a successful D1 lookup on first login).
+      await env.KV_MARKETING.put(`affiliate-email:${code}`, email);
 
       const req = makeRequest('GET', `/api/affiliate/portal?code=${code}&email=${email}`);
       const res = await handleAffiliatePortal(req, env as any);

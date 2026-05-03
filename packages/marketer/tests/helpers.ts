@@ -205,6 +205,9 @@ export interface MockEnv {
   SKRIP_DEFAULT_ENABLEMENT?: string;
   SKRIP_TIMEOUT_MS?: string;
   AI_ENGINE_TIMEOUT_MS?: string;
+  INTERNAL_SECRET?: string;
+  INTERNAL_SECRET_ROLLOVER?: string;
+  GROWTH_AGENT_TIMEOUT_MS?: string;
 }
 
 export function createMockEnv(overrides: Partial<MockEnv> = {}): MockEnv {

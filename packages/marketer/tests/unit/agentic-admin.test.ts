@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  handleAgentDecisionTrace,
+  handleAdminAgenticQuality,
   handleAdminAgenticPerformance,
   handleAdminAgenticSignals,
+  handleAttributeAgentActionOutcomes,
+  handleOverrideAgentAction,
   handleApproveAgentAction,
   handleMarkStaleAgentActions,
 } from '../../src/routes/admin/agentic';
@@ -100,5 +104,117 @@ describe('agentic admin operator endpoints', () => {
     expect(response.status).toBe(200);
     expect(body.data.marked).toBe(1);
     expect(env.DB._queries.some((query) => query.sql.includes('agent_action_outcomes'))).toBe(true);
+  });
+
+  it('attributes conversion outcomes from executed actions', async () => {
+    const env = createMockEnv();
+    env.DB.onQuery(/FROM agent_actions a[\s\S]+outcome_type IN \('conversion', 'engagement'\)/i, () => [
+      {
+        action_id: 'act_attr_1',
+        tenant_id: 'default',
+        subject_id: 'lead@acme.com',
+        proposed_action: 'enroll_sequence',
+        created_at: 100,
+        outcome_due_at: 1000,
+      },
+    ]);
+    env.DB.onQuery(/FROM marketing_contacts[\s\S]+converted_at/i, () => [{ converted_at: 200 }]);
+
+    const response = await handleAttributeAgentActionOutcomes(
+      makeRequest('POST', '/api/admin/agentic/outcomes/attribute?limit=10'),
+      env as any,
+    );
+    const body = await response.json() as { data: any };
+
+    expect(response.status).toBe(200);
+    expect(body.data.attributed).toBe(1);
+    expect(body.data.conversionAttributed).toBe(1);
+  });
+
+  it('returns decision trace rows for a subject', async () => {
+    const env = createMockEnv();
+    env.DB.onQuery(/FROM agent_actions a/i, () => [
+      {
+        action_id: 'act_trace_1',
+        signal_id: 'sig_1',
+        proposed_action: 'send_via_skrip',
+        status: 'executed',
+        risk_level: 'medium',
+        confidence: 81,
+        evidence_json: '{}',
+        ai_metadata_json: '{"fallback":false}',
+        policy_result_json: '{"allowed":true}',
+        outcome_json: null,
+        created_at: 10,
+        updated_at: 11,
+        event_count: 3,
+        last_outcome_type: 'engagement',
+        last_outcome_at: 12,
+      },
+    ]);
+
+    const response = await handleAgentDecisionTrace(
+      makeRequest('GET', '/api/admin/agentic/subjects/lead%40acme.com/decision-trace?tenantId=default'),
+      env as any,
+      'lead%40acme.com',
+    );
+    const body = await response.json() as { data: any };
+
+    expect(response.status).toBe(200);
+    expect(body.data.trace[0].action_id).toBe('act_trace_1');
+  });
+
+  it('returns quality rollups with fallback and policy block rates', async () => {
+    const env = createMockEnv();
+    env.DB.onQuery(/COUNT\(\*\) AS count FROM agent_actions WHERE created_at >= \?/i, () => [{ count: 10 }]);
+    env.DB.onQuery(/ai_metadata_json IS NOT NULL/i, () => [{ count: 2 }]);
+    env.DB.onQuery(/status IN \(\?, \?\)/i, () => [{ count: 6 }]);
+    env.DB.onQuery(/status = \?/i, () => [{ count: 1 }]);
+    env.DB.onQuery(/ROUND\(AVG\(confidence\), 2\)/i, () => [{ proposed_action: 'enroll_sequence', avg_confidence: 72, proposals: 7 }]);
+    env.DB.onQuery(/FROM agent_action_outcomes o[\s\S]+o\.outcome_type = 'conversion'/i, () => [{ proposed_action: 'enroll_sequence', conversions: 3 }]);
+
+    const response = await handleAdminAgenticQuality(
+      makeRequest('GET', '/api/admin/agentic/quality?windowDays=14'),
+      env as any,
+    );
+    const body = await response.json() as { data: any };
+
+    expect(response.status).toBe(200);
+    expect(body.data.totalProposals).toBe(10);
+    expect(body.data.fallbackRate).toBe(0.2);
+    expect(body.data.policyBlockRate).toBe(0.1);
+  });
+
+  it('overrides a non-executed action and records override audit events', async () => {
+    const env = createMockEnv();
+    env.DB.onQuery(/SELECT action_id, tenant_id, subject_id, status, risk_level, confidence[\s\S]+WHERE action_id = \?/i, () => [
+      {
+        action_id: 'act_override_1',
+        tenant_id: 'default',
+        subject_id: 'lead@acme.com',
+        status: 'policy_checked',
+        risk_level: 'low',
+        confidence: 80,
+      },
+    ]);
+
+    const response = await handleOverrideAgentAction(
+      makeRequest('POST', '/api/admin/agentic/actions/act_override_1/override', {
+        actor: 'ops@example.com',
+        reason: 'manual correction',
+        action: {
+          type: 'wait',
+          params: { reviewAfterSeconds: 7200 },
+        },
+      }),
+      env as any,
+      'act_override_1',
+    );
+    const body = await response.json() as { data: any };
+
+    expect(response.status).toBe(200);
+    expect(body.data.actionId).toBe('act_override_1');
+    expect(env.DB._queries.some((query) => /UPDATE agent_actions/i.test(query.sql))).toBe(true);
+    expect(env.DB._queries.some((query) => /INSERT INTO agent_action_events/i.test(query.sql))).toBe(true);
   });
 });
