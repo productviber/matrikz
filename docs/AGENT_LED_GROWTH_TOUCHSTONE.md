@@ -407,3 +407,25 @@ Domain apps are the conversion truth engines.
 Maintaining Identity is the substrate across all of them, governed by explicit authority and projections.
 
 This is how we scale product adoption with agent-led growth without collapsing everything into one platform blob and without splitting truth across systems that cannot explain themselves.
+
+## Responsibility Addendum (2026-05-04)
+
+Cross-repo review of Matrikz growth-agent, Visibility Marketing, and Skrip confirms the intended architecture is directionally correct:
+
+- Matrikz growth-agent is the structured decision API.
+- Visibility Marketing is the growth orchestration, policy, and attribution layer.
+- Skrip is the manufacturing, channel identity, and delivery layer.
+
+The current gap is no longer basic authority confusion. The remaining work is integration closure:
+
+1. certify one canonical live-contract staging path across Marketing -> Skrip -> normalized outcomes,
+2. tighten channel-support contracts so unsupported channels are rejected or downgraded explicitly,
+3. simplify execution-lane semantics where one action can currently flow through more than one technical path,
+4. strengthen semantic evaluation and rollout governance on the advisory plane.
+
+Use this rule in all future design reviews:
+
+- decide why now -> Visibility Marketing,
+- recommend the structured next move -> Matrikz growth-agent,
+- manufacture and deliver safely -> Skrip,
+- record product conversion truth -> domain apps or Analytics.

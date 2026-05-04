@@ -11,6 +11,15 @@ import { getCorrelationId } from '../correlation';
 import { isRecord } from './common';
 import type { AgentActionView } from './actions';
 
+/**
+ * Channels that Skrip's strategic manufacturing endpoint can dispatch.
+ * Email is intentionally excluded — it is routed via the outbox path and
+ * handled by the existing email provider stack, not the Skrip manufacturer.
+ * If a channel hint contains only email (or other non-strategic channels),
+ * the strategic request falls back to `push` as the default preference.
+ */
+const SKRIP_STRATEGIC_DISPATCHABLE_CHANNELS = new Set(['push', 'whatsapp', 'telegram', 'sms']);
+
 function actionParamRecord(action: AgentActionView['proposedAction']): Record<string, unknown> {
   return isRecord(action.params) ? action.params : {};
 }
@@ -228,7 +237,11 @@ export function buildSkripStrategicRequest(
   intent: GrowthExecutionIntent,
   briefResult: GrowthMessageBriefResult,
 ): GrowthSkripStrategicRequest {
-  const channelPreferences = intent.channelHints.length > 0 ? intent.channelHints : ['push'];
+  // Strip channels that Skrip strategic manufacturing cannot dispatch (e.g. email).
+  // Email is handled separately via the outbox path; passing it to Skrip would
+  // either cause a 422 (if the only channel) or be silently skipped.
+  const dispatchableHints = intent.channelHints.filter((ch) => SKRIP_STRATEGIC_DISPATCHABLE_CHANNELS.has(ch));
+  const channelPreferences = dispatchableHints.length > 0 ? dispatchableHints : ['push'];
   return {
     tenantId: action.tenant_id,
     subjectId: action.subject_id,

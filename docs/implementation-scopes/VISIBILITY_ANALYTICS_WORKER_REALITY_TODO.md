@@ -54,11 +54,11 @@ Scope: Emit high-integrity product/adoption signals that power marketing agent d
 
 ### Integration
 
-- [ ] Event bus -> marketing /events ingress handler success path (mock service binding).
-- [ ] Retry path with simulated downstream failures and backoff verification.
-- [ ] DLQ persistence + replay idempotency (dedupe by eventId).
-- [ ] Schema drift detection: analytics event schema vs marketing consumer schema contract.
-- [ ] Source gate validation: only `source=visibility-analytics` events forwarded.
+- [x] Event bus -> marketing /events ingress handler success path (mock service binding).
+- [x] Retry path with simulated downstream failures and backoff verification.
+- [x] DLQ persistence + replay idempotency (dedupe by eventId).
+- [x] Schema drift detection: analytics event schema vs marketing consumer schema contract.
+- [x] Source gate validation: only `source=visibility-analytics` events forwarded.
 
 ### Live Staging
 
@@ -70,14 +70,14 @@ Scope: Emit high-integrity product/adoption signals that power marketing agent d
 ## 5. Rollout Gates
 
 - [x] Gate 1: zero unknown/invalid schema events in staging test suite (all events valid in unit tests).
-- [ ] Gate 2: replay path proven idempotent (requires integration test).
+- [x] Gate 2: replay path proven idempotent (eventId-based replay dedupe covered in executable tests).
 - [ ] Gate 3: DLQ growth bounded and observable (requires live monitoring).
 - [ ] Gate 4: context APIs pass redaction policy checks (requires live validation).
 
 ## 6. Definition Of Done
 
-- [ ] Marketing receives stable, schema-validated, replay-safe events (requires integration test + live validation).
-- [ ] Analytics remains product truth authority while growth orchestration stays in marketing (requires service binding test).
+- [ ] Marketing receives stable, schema-validated, replay-safe events (integration tests complete; live validation still pending).
+- [ ] Analytics remains product truth authority while growth orchestration stays in marketing (service binding test coverage complete; live validation still pending).
 - [ ] Downstream agent decisions are traceable to deterministic analytics evidence (requires eventId correlation in telemetry).
 
 ---

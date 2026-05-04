@@ -189,6 +189,15 @@ Determinism: 100%.
 Owner: architecture review.  
 Determinism: 100%.
 
+## 2026-05-04 Ecosystem Alignment Follow-Up
+
+- `[ ]` **Build**: Add a shared live-contract certification gate for Visibility Marketing -> Skrip -> signed outcome roundtrip.
+- `[ ]` **Build**: Add a shared live-contract certification gate for Visibility Marketing -> Matrikz growth-agent capability calls.
+- `[ ]` **Build**: Standardize a cross-system trace field set: `correlationId`, `agentActionId`, `growthCapability`, `promptVersion`, `responseSchemaVersion`, `deliveryMode`, `outcomeType`.
+- `[ ]` **Build**: Define explicit downgrade/rejection rules for unsupported strategic channels so Marketing and Skrip cannot drift silently.
+- `[ ]` **Modify**: Treat Stage 2 closed-loop optimization as a governed release state with documented semantic thresholds, not only schema-valid transport success.
+- `[ ]` **Modify**: Require every repo-level scope doc to state whether it is delivering Stage 1 decision API work, Stage 2 closed-loop optimizer work, or Stage 3 autonomous operator work.
+
 ## Validation Plan
 
 - Architecture decision records for each authority decision.

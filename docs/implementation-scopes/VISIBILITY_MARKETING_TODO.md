@@ -193,3 +193,30 @@ Determinism: 90-95% deterministic, 5-10% AI explanation.
 - ai-engine must expose growth-specific structured capabilities.
 - Skrip must expose stable manufacture/send/status/outcome contracts.
 - Cross-product identity authority and event contracts must be documented and tested.
+
+## 2026-05-04 Ecosystem Review Follow-Up
+
+Cross-repo review confirms Visibility Marketing is the correct home for the growth controller. The main follow-up work is now contract clarity and operational simplification, not a change of ownership.
+
+- `[x]` **Modify**: Normalize and filter unsupported channels before building Skrip strategic requests so `email` is not passed where the strategic contract is non-email only.
+  - Implemented: `SKRIP_STRATEGIC_DISPATCHABLE_CHANNELS` constant + pre-filter in `buildSkripStrategicRequest` (`execution-intent.ts`).
+- `[ ]` **Modify**: Choose and document one canonical `send_via_skrip` execution lane for operator reasoning, incident response, and release certification.
+- `[ ]` **Build**: Promote the live Marketing -> Skrip -> normalized outcome roundtrip to a hard release gate rather than an evidence-only signoff path.
+- `[ ]` **Build**: Expand direct consumption of non-next-action advisory capabilities, starting with `message-brief` and `outcome-diagnose` in production flows.
+- `[ ]` **Modify**: Keep Marketing focused on decision, policy, audit, and attribution; do not let provider- or payload-specific manufacturing logic leak back in.
+
+## Maturity Stage Index
+
+Maturity stages follow the cross-repo model: **Stage 1** = infrastructure complete / tested locally; **Stage 2** = integration live, roundtrip exercised; **Stage 3** = production certified, SLOs observed.
+
+| Phase | Title | Stage |
+|-------|-------|-------|
+| 0 | Finish Current Integration Hardening | Stage 3 — deployed to staging + production |
+| 1 | Deterministic Growth Signal Read Model | Stage 3 — all signal detectors live |
+| 2 | Agent Action Ledger | Stage 3 — tables live, audit trail active |
+| 3 | Non-Deterministic AI Advisory Layer | Stage 2 — ai-engine integration live; semantic eval pending |
+| 4 | Agentic Policy And Execution Rails | Stage 2 — policy gates + execution path live; roundtrip certified |
+| 5 | Skrip Multichannel Execution | Stage 2 — strategic path + outbox path live; roundtrip harness done; staging hard gate pending |
+| 6 | Admin And Operator Controls | Stage 2 — rollout controls and operator tasks live; SLO dashboard pending |
+| 7 | Attribution And Learning Loop | Stage 2 — joins + projections live; learning loop and exports pending |
+| 8 | Email Convergence Decision Gate | Stage 1 — scaffold inert; shadow-mode gate pending |

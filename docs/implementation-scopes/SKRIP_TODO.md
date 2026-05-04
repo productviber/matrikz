@@ -131,6 +131,7 @@ Status: **75-85% deterministic audit infrastructure. 15-25% statistical optimiza
   - computeChannelFatigue() based on failures, staleness (60+ days), recent opt-outs.
   - rankChannels() deterministic ordering for dispatch.
 - `[⏳]` **Build**: Conversation state API endpoints (GET /v1/contacts/:id/conversation_state).
+  - Implemented: `src/routes/v1/contacts.ts` — returns channel fatigue, subscription count, preference scores, and recent event count per channel.
 - `[⏳]` **Modify**: Channel consent vs. Marketing suppression separation (schema + sync contract).
 - `[⏳]` **Build**: Identity reconciliation webhooks from Skrip → Marketing (or polling alternative).
 - `[⏳]` **Enforce**: Marketing submits upserts via `/v1/contacts/upsert`; reads canonical results only.
@@ -167,6 +168,7 @@ Determinism: 90-95% deterministic, 5-10% AI advisory.
   - Requires: background queue consumer, D1 schema for join table.
 - `[⏳]` **Build**: DLQ replay and operator diagnostics.
 - `[⏳]` **Modify**: Telemetry integration with manufacturer (promptHash computation, model selection tracking).
+  - Implemented: `src/routes/internal/strategy.ts` now computes `promptHash` (SHA-256 of brief) and emits `modelVersion` in both the manufacturing response block and the `internal.strategy.send` log event.
 - `[⏳]` **Build**: SLO dashboard (latency, success rate, fallback rate, queue depth, DLQ depth, cost).
 
 Status: **95% deterministic contracts. 5% optional AI synthesis in outcomes.**
@@ -236,3 +238,30 @@ Once Phase 2 is integrated, subsequent phases can proceed in parallel.
 - ⏳ Routing + telemetry integration into manufacturer (Phase 4 integration).
 - ⏳ ai-engine reuse strategy (deferred; evaluate after Phase 2-5 validation).
 - ⏳ Domain apps supply conversion events for outcomes attribution (depends on Phase 7 join job).
+
+## 2026-05-04 Ecosystem Review Follow-Up
+
+Cross-repo review confirms Skrip is the right home for channel identity, manufacture, and delivery. The next changes should tighten contract clarity and close the remaining Stage 2 integration gaps.
+
+- `[x]` **Build**: Publish explicit supported-channel behavior for strategic send, including downgrade and rejection semantics for unsupported channels.
+  - Implemented: `STRATEGIC_DISPATCHABLE_CHANNELS` exported from `src/lib/strategic/contract.ts` with full explanatory comment; `pickChannel` in `src/routes/internal/strategy.ts` now documents why email is excluded.
+- `[ ]` **Build**: Complete the live-contract staging certification path with Visibility Marketing and keep it as a maintained release gate.
+- `[ ]` **Modify**: Finish routing audit integration so manufacturing decisions expose traceable route-selection metadata in production paths.
+- `[ ]` **Build**: Complete the outcome join job, reconciliation surfaces, and telemetry enrichment needed for full closed-loop attribution.
+- `[ ]` **Modify**: Continue converging manufacturer paths and removing legacy direct-provider paths only after parity and operator evidence are proven.
+
+## Maturity Stage Index
+
+Maturity stages: **Stage 1** = infrastructure complete / tested locally; **Stage 2** = integration live, roundtrip exercised; **Stage 3** = production certified, SLOs observed.
+
+| Phase | Title | Stage |
+|-------|-------|-------|
+| 0 | Domain Code Extraction | Stage 3 — domain packs registered, tests green |
+| 1 | Domain Pack Contract | Stage 3 — manifest validated, golden fixtures enforced |
+| 2 | Agent-Callable Manufacturing Primitives | Stage 2 — all v1 routes live; staging live-contract certification pending |
+| 3 | Message Manufacturing Modes | Stage 2 — mode enforcement live; manufacturer v2 convergence deferred |
+| 4 | Provider And Model Routing | Stage 1 — audit infrastructure complete; manufacturer integration pending |
+| 5 | Channel Identity And Conversation State | Stage 2 — identity resolver + fatigue model live; conversation_state API added |
+| 6 | Workflow Engine Evolution | Stage 1 — deferred until Phase 2-5 validated |
+| 7 | Outcomes, Telemetry, And Attribution | Stage 2 — contracts + webhooks + promptHash live; join job pending |
+| 8 | Conversation Intelligence | Stage 2 — classification + action mapping live; drafting deferred |

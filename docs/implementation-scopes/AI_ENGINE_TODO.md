@@ -182,3 +182,13 @@ Determinism: 100% boundary enforcement.
 - Analytics must provide product/adoption context in redacted, stable schemas.
 - Skrip reuse decision must be made before provider abstraction is centralized.
 - Cross-product governance must define model risk levels and approval thresholds.
+
+## 2026-05-04 Ecosystem Review Follow-Up
+
+Current ecosystem judgment: the Matrikz growth-agent is already functioning as the Stage 1 decision API for growth. To move the ecosystem toward a Stage 2 closed-loop optimizer, the advisory plane should improve in the following areas:
+
+- `[ ]` **Build**: Semantic evaluation harnesses for `growth-next-action`, `message-brief`, and `outcome-diagnose` that go beyond schema-valid responses.
+- `[ ]` **Modify**: Make live staging certification part of capability closure for all five growth capabilities, not just unit/integration confidence.
+- `[ ]` **Build**: Add rollout promotion rules for prompt/model/schema changes with explicit shadow-routing or sampled review gates.
+- `[ ]` **Modify**: Ensure downstream callers consume the advisory plane as non-executable guidance only; add explicit docs/tests where needed.
+- `[ ]` **Build**: Add quality views grouped by capability, prompt version, model, and downstream observed outcome so the advisory layer can be judged by effect, not only syntax.

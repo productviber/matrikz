@@ -137,6 +137,19 @@ export function createSkripClient(env: Env) {
       performRequest<T>(env, { tenantId, path: '/v1/messages/send', method: 'POST', body: payload }),
     sendBulk: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/v1/messages/bulk', method: 'POST', body: payload }),
+    /**
+     * Strategic send — preferred execution lane for agent-directed channel delivery.
+     *
+     * Submits a full `GrowthSkripStrategicRequest` to Skrip's `POST /internal/strategy/send`
+     * endpoint. Skrip's strategic manufacturer selects the channel, assembles contact context,
+     * manufactures the message payload, and enqueues dispatch in one atomic step.
+     *
+     * Caller must only pass channels supported by Skrip's manufacturing pipeline
+     * (push, whatsapp, telegram, sms). Email must be routed via `enqueueEligibleSkripChannels`
+     * (the outbox path) instead.
+     *
+     * Falls back to `enqueueEligibleSkripChannels` if this call throws (see actions.ts).
+     */
     strategicSend: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/internal/strategy/send', method: 'POST', body: payload }),
     getMessageStatus: <T>(tenantId: string, messageId: string) =>
