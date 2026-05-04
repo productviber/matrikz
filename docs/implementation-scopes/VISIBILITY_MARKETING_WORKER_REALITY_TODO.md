@@ -168,3 +168,30 @@ Staging version: 28810905-587d-425d-87e5-44f9a52f8736
 	- small enabled cohort dispatch/failure thresholds
 5. Close rollout gates with evidence:
 	- Gate 2 (eligible identities), Gate 3 (block-rate drop), Gate 4 (signed outcomes), Gate 5 (compliance regression)
+
+---
+
+## 9. Quick Evidence Snapshot (Fast Path)
+
+To avoid waiting a full 24h window, we captured immediate staging evidence from D1 and smoke tests.
+
+- Policy block distribution (last 7d):
+	- `total_skrip_actions_7d = 73`
+	- `rejected_7d = 73`
+	- `no_eligible_block_7d = 73`
+	- Interpretation: current blocker is fully concentrated in `no_eligible_skrip_channel`.
+
+- Signed outcome ingestion proxy (last 24h):
+	- `outcomes_processed_24h = 1`
+	- `dlq_failed_24h = 0`
+	- Proxy ingestion success (processed / (processed + dlq)): `100%` on observed sample.
+
+- Staging smoke validation:
+	- `7/7` endpoints passing on `https://visibility-marketing-staging.wetechfounders.workers.dev`
+
+### Fast Acceptance (Provisional)
+
+Use this provisional gate to keep momentum:
+1. Accept Gate 4 as provisional if `dlq_failed_24h = 0` and smoke remains `7/7` for two consecutive runs.
+2. Prioritize Gate 3 remediation by increasing eligible channel identities (tenant defaults + channel authority) before additional long-window measurement.
+3. Reconfirm with a formal 24h window once first enabled cohort traffic is active.
