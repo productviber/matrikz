@@ -13,6 +13,7 @@ This section is the canonical closure record for the Productviber deployment and
 - Workspace path `d:/coding/matrikz` is **not** a git working tree (no `.git` present).
 - Canonical remote verified reachable: `https://github.com/productviber/matrikz.git`.
 - Active release repository used for commit/push: `d:/coding/matrikz-productviber` on branch `master` with `origin` pointing to Productviber.
+- Release commit published: `fe4ca5a` on `master`.
 
 ### B. Security and configuration closure
 
