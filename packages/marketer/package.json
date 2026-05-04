@@ -24,7 +24,7 @@
     "ci": "pnpm run typecheck && pnpm run test && pnpm run build"
   },
   "dependencies": {
-    "@clodo/growth-agent-contracts": "workspace:*"
+    "@matrikz/growth-agent-contracts": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.0.0",

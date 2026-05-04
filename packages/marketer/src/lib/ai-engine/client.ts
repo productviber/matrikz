@@ -2,7 +2,7 @@ import type { Env, ProposedAgentAction } from '../../types';
 import { AGENT_ACTION_TYPE, AGENT_RISK_LEVEL, AI_ENGINE_CONFIG, CONTENT_TYPE_JSON, KV_PREFIX, TTL } from '../../constants';
 import { getCorrelationId } from '../correlation';
 import { normalizeTenantId, stableStringify } from '../growth/common';
-import { ACTION_TYPE_WHITELIST } from '@clodo/growth-agent-contracts';
+import { ACTION_TYPE_WHITELIST } from '@matrikz/growth-agent-contracts';
 
 export interface AiEngineMetadata {
   provider: string | null;
