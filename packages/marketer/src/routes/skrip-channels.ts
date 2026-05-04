@@ -34,10 +34,18 @@ interface ChannelSubscribeBody {
   tenantId?: string | null;
   browserSessionId?: string | null;
   metadata?: Record<string, unknown> | null;
+  /** Consent provenance — optional but recommended for audit trail. */
+  consentMeta?: {
+    source?: string | null;       // e.g. 'landing_page', 'checkout_widget'
+    campaign?: string | null;     // campaign slug or ID
+    step?: string | null;         // journey step name
+    landingRoute?: string | null; // URL path where consent was captured
+  } | null;
 }
 
 interface ChannelUnsubscribeBody {
-  address?: string | null;
+  /** Address to revoke — required to prevent accidental broad revocation. */
+  address: string;
   contactId?: string | null;
   tenantId?: string | null;
   browserSessionId?: string | null;
@@ -100,11 +108,18 @@ async function handleChannelSubscribe(
   const epoch = now();
   const address = body.address.trim();
 
-  // 1. Log the funnel event
+  // Merge consent provenance into the metadata blob for audit trail.
+  const mergedMeta = {
+    ...(body.metadata ?? {}),
+    ...(body.consentMeta ? { consentMeta: body.consentMeta } : {}),
+  };
+  const metaJson = Object.keys(mergedMeta).length > 0 ? JSON.stringify(mergedMeta) : null;
+
+  // 1. Log the funnel event (idempotent: IGNORE duplicate for same contact+session)
   try {
     await execute(
       env.DB,
-      `INSERT INTO push_opt_in_events
+      `INSERT OR IGNORE INTO push_opt_in_events
         (tenant_id, contact_id, browser_session_id, event_type, correlation_id, metadata_json, occurred_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
@@ -113,7 +128,7 @@ async function handleChannelSubscribe(
         browserSessionId,
         `${channel}.subscribed`,
         correlationId,
-        body.metadata ? JSON.stringify(body.metadata) : null,
+        metaJson,
         epoch,
       ],
     );
@@ -167,17 +182,25 @@ async function handleChannelUnsubscribe(
     return badRequest('Invalid JSON body');
   }
 
+  // Require address for parity with subscribe — prevents broad accidental revocations.
+  if (!body.address || typeof body.address !== 'string') {
+    return badRequest('Missing required field: address');
+  }
+  const addressError = validateAddress(channel, body.address);
+  if (addressError) return badRequest(addressError);
+
   const tenantId = body.tenantId ?? SKRIP_CONFIG.DEFAULT_TENANT_ID;
   const contactId = body.contactId ?? null;
   const browserSessionId = body.browserSessionId ?? null;
   const correlationId = getCorrelationId();
   const epoch = now();
+  const address = body.address.trim();
 
   // Log the opt-out event
   try {
     await execute(
       env.DB,
-      `INSERT INTO push_opt_in_events
+      `INSERT OR IGNORE INTO push_opt_in_events
         (tenant_id, contact_id, browser_session_id, event_type, correlation_id, occurred_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [tenantId, contactId, browserSessionId, `${channel}.unsubscribed`, correlationId, epoch],
@@ -194,7 +217,7 @@ async function handleChannelUnsubscribe(
         tenantId,
         externalContactId: contactId,
         channel,
-        address: body.address?.trim() ?? '',
+        address,
         consentState: 'revoked',
         suppressionState: 'suppressed',
         availabilityState: 'unavailable',

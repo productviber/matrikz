@@ -31,6 +31,14 @@ interface PushSubscribeBody {
   tenantId?: string | null;
   browserSessionId?: string | null;
   metadata?: Record<string, unknown> | null;
+  /** Consent provenance — required for audit trail but treated as optional for
+   *  graceful backwards-compatibility with existing integrations. */
+  consentMeta?: {
+    source?: string | null;      // e.g. 'email_link', 'embedded_widget'
+    campaign?: string | null;    // campaign slug or ID
+    step?: string | null;        // journey step name
+    landingRoute?: string | null; // URL path where consent was captured
+  } | null;
 }
 
 function validateSubscribeBody(body: Partial<PushSubscribeBody>): string | null {
@@ -61,12 +69,21 @@ export async function handlePushSubscribe(
   const browserSessionId = body.browserSessionId ?? null;
   const correlationId = getCorrelationId();
   const epoch = now();
+  const consentMeta = body.consentMeta ?? null;
 
-  // 1. Log the funnel event
+  // Merge consent provenance into the metadata blob so it is persisted with
+  // the opt-in event without changing the table schema.
+  const mergedMeta = {
+    ...(body.metadata ?? {}),
+    ...(consentMeta ? { consentMeta } : {}),
+  };
+  const metaJson = Object.keys(mergedMeta).length > 0 ? JSON.stringify(mergedMeta) : null;
+
+  // 1. Log the funnel event (idempotent: IGNORE duplicate for same contact+session)
   try {
     await execute(
       env.DB,
-      `INSERT INTO push_opt_in_events
+      `INSERT OR IGNORE INTO push_opt_in_events
         (tenant_id, contact_id, browser_session_id, event_type, correlation_id, metadata_json, occurred_at)
        VALUES (?, ?, ?, 'subscribed', ?, ?, ?)`,
       [
@@ -74,7 +91,7 @@ export async function handlePushSubscribe(
         contactId,
         browserSessionId,
         correlationId,
-        body.metadata ? JSON.stringify(body.metadata) : null,
+        metaJson,
         epoch,
       ],
     );
@@ -127,11 +144,11 @@ export async function handlePushUnsubscribe(
   const epoch = now();
   const correlationId = getCorrelationId();
 
-  // Log unsubscribe event
+  // Log unsubscribe event (idempotent write)
   try {
     await execute(
       env.DB,
-      `INSERT INTO push_opt_in_events
+      `INSERT OR IGNORE INTO push_opt_in_events
         (tenant_id, contact_id, browser_session_id, event_type, correlation_id, metadata_json, occurred_at)
        VALUES (?, ?, ?, 'unsubscribed', ?, NULL, ?)`,
       [tenantId, contactId, body.browserSessionId ?? null, correlationId, epoch],

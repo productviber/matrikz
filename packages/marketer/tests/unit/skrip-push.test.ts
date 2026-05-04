@@ -42,7 +42,7 @@ describe('handlePushSubscribe()', () => {
     expect(body.data.registered).toBe(true);
 
     const insertQ = env.DB._queries.find((q) =>
-      q.sql.includes('INSERT INTO push_opt_in_events') && q.params.includes('lead@acme.com'),
+      q.sql.includes('INSERT OR IGNORE INTO push_opt_in_events') && q.params.includes('lead@acme.com'),
     );
     expect(insertQ).toBeDefined();
     expect(insertQ?.sql).toContain('subscribed');
@@ -107,7 +107,7 @@ describe('handlePushUnsubscribe()', () => {
     expect(res.status).toBe(200);
 
     const insertQ = env.DB._queries.find((q) =>
-      q.sql.includes('INSERT INTO push_opt_in_events') && q.params.includes('lead@acme.com'),
+      q.sql.includes('INSERT OR IGNORE INTO push_opt_in_events') && q.params.includes('lead@acme.com'),
     );
     expect(insertQ).toBeDefined();
     expect(insertQ?.sql).toContain('unsubscribed');

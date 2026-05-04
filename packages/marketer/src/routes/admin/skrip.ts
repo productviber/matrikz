@@ -3,10 +3,11 @@ import { ok, serverError, badRequest, created } from '../../lib/response';
 import { execute, query, queryOne, now } from '../../lib/db';
 import { createSkripClient } from '../../lib/skrip/client';
 import { getSkripFlagSnapshot } from '../../lib/skrip/flags';
-import { runDispatcherSweep } from '../../lib/skrip/dispatcher';
+import { runDispatcherSweep, replayDeadLetterBatch } from '../../lib/skrip/dispatcher';
 import { reconcilePendingIdentities } from '../../lib/skrip/registration';
 import { enqueueEligibleSkripChannels } from '../../lib/skrip/outbox';
-import { SKRIP_AUTHORITY, SKRIP_CHANNEL, SKRIP_ROLLOUT_STATE } from '../../constants';
+import { resolveSkripExecutionDecision } from '../../lib/skrip/router';
+import { GROWTH_POLICY, KV_PREFIX, SKRIP_AUTHORITY, SKRIP_CHANNEL, SKRIP_ROLLOUT_STATE } from '../../constants';
 
 const ALLOWED_CHANNELS = new Set<string>(Object.values(SKRIP_CHANNEL));
 const ALLOWED_AUTHORITIES = new Set<string>(Object.values(SKRIP_AUTHORITY));
@@ -555,3 +556,235 @@ export async function handleSkripAttribution(
     return serverError('Failed to load Skrip attribution data');
   }
 }
+
+// ── C1: Operator Flag API ──────────────────────────────────────────────────
+
+  /**
+   * POST /api/admin/skrip/flags
+   *
+   * Set a Skrip KV feature flag for a given scope. Flags gate the effective
+   * enablement of a channel without modifying channel_authorities.
+   *
+   * Body: { key: string, value: boolean, ttlSecs?: number }
+   *   key format: "tenant:<tenantId>" | "tenant:<tenantId>:campaign:<campaignId>" |
+   *               "tenant:<tenantId>:channel:<channel>"
+   */
+  export async function handleSkripFlagSet(
+    request: Request,
+    env: Env,
+  ): Promise<Response> {
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return badRequest('Invalid JSON body'); }
+
+    const key = typeof body.key === 'string' ? body.key.trim() : '';
+    if (!key) return badRequest('key is required');
+    // Validate key structure to prevent arbitrary KV pollution
+    const VALID_KEY = /^tenant:[^:]+(:campaign:[^:]+)?(:channel:[^:]+)?$/;
+    if (!VALID_KEY.test(key)) {
+      return badRequest('key must match tenant:<id> | tenant:<id>:campaign:<id> | tenant:<id>:channel:<channel>');
+    }
+
+    if (typeof body.value !== 'boolean') return badRequest('value must be a boolean');
+    const ttlSecs = typeof body.ttlSecs === 'number' && body.ttlSecs > 0 ? Math.floor(body.ttlSecs) : undefined;
+
+    const kvKey = `${KV_PREFIX.SKRIP_FLAG}${key}`;
+    const kvValue = String(body.value);
+    const putOptions = ttlSecs ? { expirationTtl: ttlSecs } : undefined;
+    try {
+      await env.KV_MARKETING.put(kvKey, kvValue, putOptions);
+      return ok({ key: kvKey, value: body.value, ttlSecs: ttlSecs ?? null, set: true });
+    } catch (err) {
+      console.error('[Admin] handleSkripFlagSet error:', err);
+      return serverError('Failed to set Skrip flag');
+    }
+  }
+
+  // ── C2: Combined Policy State Read ────────────────────────────────────────
+
+  /**
+   * GET /api/admin/skrip/policy-state
+   *
+   * Returns the combined authority row + KV flag snapshot + effective enabled
+   * state for a given tenant/campaign/channel combination. Useful for
+   * diagnosing why proposals are blocked or channels are not enrolling.
+   *
+   * Query params: tenantId, campaignId (optional), channel (required)
+   */
+  export async function handleSkripPolicyState(
+    request: Request,
+    env: Env,
+  ): Promise<Response> {
+    try {
+      const url = new URL(request.url);
+      const tenantId = url.searchParams.get('tenantId') ?? 'default';
+      const campaignId = url.searchParams.get('campaignId') ?? null;
+      const channel = url.searchParams.get('channel') ?? '';
+
+      if (!channel) return badRequest('channel query param is required');
+      if (!ALLOWED_CHANNELS.has(channel)) {
+        return badRequest('channel must be one of: email, push, sms, whatsapp, telegram');
+      }
+
+      const [authority, flags, decision] = await Promise.all([
+        queryOne<{
+          authority: string;
+          rollout_state: string;
+          feature_flag_key: string | null;
+        }>(
+          env.DB,
+          `SELECT authority, rollout_state, feature_flag_key
+             FROM channel_authorities
+            WHERE tenant_id = ?
+              AND channel = ?
+              AND (campaign_id = ? OR campaign_id IS NULL)
+            ORDER BY CASE WHEN campaign_id IS NOT NULL THEN 1 ELSE 2 END ASC
+            LIMIT 1`,
+          [tenantId, channel, campaignId],
+        ),
+        getSkripFlagSnapshot(env, tenantId, campaignId, channel),
+        resolveSkripExecutionDecision(env, tenantId, campaignId, channel),
+      ]);
+
+      // Surface global / tenant / channel kill-switch state
+      const [globalKillSwitch, tenantKillSwitch, channelKillSwitch] = await Promise.all([
+        env.KV_MARKETING.get(GROWTH_POLICY.KILL_SWITCH_GLOBAL_KEY),
+        env.KV_MARKETING.get(`${GROWTH_POLICY.KILL_SWITCH_TENANT_PREFIX}${tenantId}`),
+        env.KV_MARKETING.get(`${GROWTH_POLICY.KILL_SWITCH_CHANNEL_PREFIX}${tenantId}:${channel}`),
+      ]);
+
+      return ok({
+        tenantId,
+        campaignId,
+        channel,
+        authority: authority ?? null,
+        flags,
+        decision: {
+          authority: decision.authority,
+          rolloutState: decision.rolloutState,
+          useSkrip: decision.useSkrip,
+          dryRun: decision.dryRun,
+          effectiveEnabled: flags.effectiveEnabled,
+        },
+        killSwitches: {
+          global: globalKillSwitch === 'true',
+          tenant: tenantKillSwitch === 'true',
+          channel: channelKillSwitch === 'true',
+        },
+        summary: {
+          blockedBy: [
+            ...(globalKillSwitch === 'true' ? ['global_kill_switch'] : []),
+            ...(tenantKillSwitch === 'true' ? ['tenant_kill_switch'] : []),
+            ...(channelKillSwitch === 'true' ? ['channel_kill_switch'] : []),
+            ...(!flags.effectiveEnabled ? ['flag_not_enabled'] : []),
+            ...(authority?.rollout_state === 'disabled' ? ['authority_disabled'] : []),
+            ...(authority?.rollout_state === 'rollback' ? ['authority_rollback'] : []),
+            ...(!authority ? ['no_authority_row'] : []),
+          ],
+          canDispatch: flags.effectiveEnabled && decision.useSkrip,
+          isDryRun: decision.dryRun,
+        },
+      });
+    } catch (err) {
+      console.error('[Admin] handleSkripPolicyState error:', err);
+      return serverError('Failed to load Skrip policy state');
+    }
+  }
+
+  // ── C4: Kill-Switch Drill ──────────────────────────────────────────────────
+
+  /**
+   * POST /api/admin/skrip/killswitch/drill
+   *
+   * Validates kill-switch mechanism readiness without side effects.
+   * Reports the current state of global/tenant/campaign/channel kill switches
+   * and verifies the KV read path is operational.
+   *
+   * Body: { scope: 'global' | 'tenant' | 'campaign' | 'channel', tenantId?, campaignId?, channel? }
+   */
+  export async function handleKillSwitchDrill(
+    request: Request,
+    env: Env,
+  ): Promise<Response> {
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return badRequest('Invalid JSON body'); }
+
+    const scope = typeof body.scope === 'string' ? body.scope.trim() : 'global';
+    const VALID_SCOPES = new Set(['global', 'tenant', 'campaign', 'channel']);
+    if (!VALID_SCOPES.has(scope)) {
+      return badRequest('scope must be one of: global, tenant, campaign, channel');
+    }
+
+    const tenantId = typeof body.tenantId === 'string' ? body.tenantId.trim() : 'default';
+    const campaignId = typeof body.campaignId === 'string' ? body.campaignId.trim() : null;
+    const channel = typeof body.channel === 'string' ? body.channel.trim() : null;
+
+    try {
+      const [globalState, tenantState, campaignState, channelState] = await Promise.all([
+        env.KV_MARKETING.get(GROWTH_POLICY.KILL_SWITCH_GLOBAL_KEY),
+        env.KV_MARKETING.get(`${GROWTH_POLICY.KILL_SWITCH_TENANT_PREFIX}${tenantId}`),
+        campaignId
+          ? env.KV_MARKETING.get(`${GROWTH_POLICY.KILL_SWITCH_CAMPAIGN_PREFIX}${tenantId}:${campaignId}`)
+          : Promise.resolve(null),
+        channel
+          ? env.KV_MARKETING.get(`${GROWTH_POLICY.KILL_SWITCH_CHANNEL_PREFIX}${tenantId}:${channel}`)
+          : Promise.resolve(null),
+      ]);
+
+      const readPathOk = true; // If we reached here, KV reads are working
+      const drillResult = {
+        scope,
+        kvReadPath: readPathOk ? 'ok' : 'error',
+        switches: {
+          global: { key: GROWTH_POLICY.KILL_SWITCH_GLOBAL_KEY, active: globalState === 'true', value: globalState },
+          tenant: { key: `${GROWTH_POLICY.KILL_SWITCH_TENANT_PREFIX}${tenantId}`, active: tenantState === 'true', value: tenantState },
+          campaign: campaignId
+            ? { key: `${GROWTH_POLICY.KILL_SWITCH_CAMPAIGN_PREFIX}${tenantId}:${campaignId}`, active: campaignState === 'true', value: campaignState }
+            : null,
+          channel: channel
+            ? { key: `${GROWTH_POLICY.KILL_SWITCH_CHANNEL_PREFIX}${tenantId}:${channel}`, active: channelState === 'true', value: channelState }
+            : null,
+        },
+        anyActive: [globalState, tenantState, campaignState, channelState].some((v) => v === 'true'),
+        drillPassed: true,
+        note: 'Drill is read-only. To activate a kill switch, use KV_MARKETING.put() directly or via the wrangler CLI.',
+      };
+
+      return ok(drillResult);
+    } catch (err) {
+      console.error('[Admin] handleKillSwitchDrill error:', err);
+      return serverError('Kill-switch drill failed — KV read path may be unavailable');
+    }
+  }
+
+  // ── D1: Dead-Letter Replay ─────────────────────────────────────────────────
+
+  /**
+   * POST /api/admin/skrip/dlq/replay
+   *
+   * Re-enqueue retryable rows from channel_outcome_dead_letter back into
+   * channel_execution_outbox so the next dispatcher sweep can retry them.
+   * Non-retryable rows and already-replayed rows are skipped.
+   *
+   * Body: { limit?: number (max 100), tenantId?: string }
+   */
+  export async function handleDlqReplay(
+    request: Request,
+    env: Env,
+  ): Promise<Response> {
+    let body: Record<string, unknown>;
+    try { body = await request.json() as Record<string, unknown>; } catch { return badRequest('Invalid JSON body'); }
+
+    const limit = typeof body.limit === 'number' ? Math.min(Math.floor(body.limit), 100) : 25;
+    const tenantId = typeof body.tenantId === 'string' && body.tenantId.trim() ? body.tenantId.trim() : null;
+
+    try {
+      const result = await replayDeadLetterBatch(env, { limit, tenantId });
+      return ok({
+        message: `DLQ replay complete: ${result.replayed} re-enqueued, ${result.skipped} skipped`,
+        ...result,
+      });
+    } catch (err) {
+      console.error('[Admin] handleDlqReplay error:', err);
+      return serverError('Failed to replay dead-letter queue');
+    }
+  }

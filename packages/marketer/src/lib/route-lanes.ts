@@ -60,6 +60,10 @@ const RULES: RouteLaneRule[] = [
     lane: 'agentic',
   },
 
+  // Identity token (admin lane: mint; system lane: verify)
+  { method: 'POST', match: (path) => path === '/api/identity/mint', lane: 'admin' },
+  { method: 'POST', match: (path) => path === '/api/identity/verify', lane: 'system' },
+
   // Admin surfaces
   { method: 'GET', match: (path) => path === '/api/health', lane: 'admin' },
   { method: 'POST', match: (path) => path === '/api/affiliate/approve', lane: 'admin' },

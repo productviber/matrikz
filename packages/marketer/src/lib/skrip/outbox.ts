@@ -19,6 +19,8 @@ export interface SkripOutboxEnqueueInput {
   domain?: string | null;
   context?: Record<string, unknown>;
   scheduleAt?: number;
+  /** Originating agent action ID for lineage tracing (D3 linkage). */
+  agentActionId?: string | null;
 }
 
 export interface SkripOutboxEnqueueResult {
@@ -90,8 +92,8 @@ export async function enqueueEligibleSkripChannels(
     await execute(
       env.DB,
       `INSERT OR IGNORE INTO channel_execution_outbox
-        (tenant_id, campaign_id, journey_id, step_id, contact_id, channel, schedule_slot, idempotency_key, payload_json, status, attempt_count, next_attempt_at, last_error_code, last_error_message, correlation_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?, ?, ?)`,
+        (tenant_id, campaign_id, journey_id, step_id, contact_id, channel, schedule_slot, idempotency_key, payload_json, status, attempt_count, next_attempt_at, last_error_code, last_error_message, correlation_id, agent_action_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, NULL, NULL, ?, ?, ?, ?)`,
       [
         tenantId,
         input.campaignId,
@@ -125,6 +127,7 @@ export async function enqueueEligibleSkripChannels(
         status,
         scheduleAt,
         idempotencyKey,
+        input.agentActionId ?? null,
         epoch,
         epoch,
       ],

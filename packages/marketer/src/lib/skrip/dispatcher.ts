@@ -170,6 +170,16 @@ async function markRetrying(env: Env, outboxId: number, attemptCount: number, er
       WHERE id = ?`,
     [SKRIP_OUTBOX_STATUS.RETRYING, attemptCount + 1, nextAttempt, errorMessage.slice(0, 500), epoch, outboxId],
   );
+  // Structured retry telemetry for observability dashboards.
+  const event = attemptCount === 0 ? 'dispatcher.first_failure' : 'dispatcher.retry_attempt';
+  console.log(JSON.stringify({
+    event,
+    outbox_id: outboxId,
+    attempt: attemptCount + 1,
+    next_attempt_at: nextAttempt,
+    error: errorMessage.slice(0, 200),
+    ts: epoch,
+  }));
 }
 
 async function sendToDeadLetter(env: Env, row: ChannelExecutionOutboxRow, errorMessage: string): Promise<void> {
@@ -196,6 +206,17 @@ async function sendToDeadLetter(env: Env, row: ChannelExecutionOutboxRow, errorM
       epoch,
     ],
   );
+  // Structured terminal-failure telemetry.
+  console.log(JSON.stringify({
+    event: 'dispatcher.terminal_failure',
+    outbox_id: row.id,
+    tenant_id: row.tenant_id,
+    channel: row.channel,
+    idempotency_key: row.idempotency_key,
+    attempt_count: row.attempt_count,
+    error: errorMessage.slice(0, 200),
+    ts: epoch,
+  }));
 }
 
 // ── Main Dispatcher ────────────────────────────────────────────────────────
@@ -289,4 +310,106 @@ export async function runDispatcherSweep(
   }
 
   return dispatchOutboxBatch(env, batchSize);
+}
+
+// ── Dead-Letter Replay ─────────────────────────────────────────────────────
+
+export interface DlqReplayResult {
+  scanned: number;
+  replayed: number;
+  skipped: number;
+  errors: string[];
+}
+
+/**
+ * Replay retryable rows from channel_outcome_dead_letter back into
+ * channel_execution_outbox as 'pending' so the next dispatcher sweep picks
+ * them up. Non-retryable rows (retryable=0) are never touched.
+ *
+ * Idempotent: rows already replayed (replayed_at IS NOT NULL) are skipped.
+ */
+export async function replayDeadLetterBatch(
+  env: Env,
+  options: { limit?: number; tenantId?: string | null } = {},
+): Promise<DlqReplayResult> {
+  const limit = Math.min(options.limit ?? 25, 100);
+  const result: DlqReplayResult = { scanned: 0, replayed: 0, skipped: 0, errors: [] };
+
+  const rows = await query<{
+    id: number;
+    tenant_id: string | null;
+    event_id: string;
+    event_type: string;
+    payload_json: string;
+  }>(
+    env.DB,
+    `SELECT id, tenant_id, event_id, event_type, payload_json
+       FROM channel_outcome_dead_letter
+      WHERE retryable = 1
+        AND replayed_at IS NULL
+        ${options.tenantId ? 'AND tenant_id = ?' : ''}
+      ORDER BY first_failed_at ASC
+      LIMIT ?`,
+    options.tenantId ? [options.tenantId, limit] : [limit],
+  );
+
+  result.scanned = rows.length;
+  const epoch = now();
+
+  for (const dlq of rows) {
+    // Only replay dispatch.failed rows — they have a valid outbox payload
+    if (dlq.event_type !== 'dispatch.failed') {
+      result.skipped++;
+      continue;
+    }
+
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(dlq.payload_json) as Record<string, unknown>;
+    } catch {
+      result.skipped++;
+      result.errors.push(`DLQ row ${dlq.id}: malformed payload`);
+      continue;
+    }
+
+    // Re-insert into outbox with a fresh idempotency key suffix to allow replay
+    const replayKey = `${dlq.event_id}:replay:${epoch}`;
+    try {
+      await execute(
+        env.DB,
+        `INSERT OR IGNORE INTO channel_execution_outbox
+          (tenant_id, campaign_id, journey_id, step_id, contact_id, channel, schedule_slot,
+           idempotency_key, payload_json, status, attempt_count, next_attempt_at,
+           last_error_code, last_error_message, correlation_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, NULL, NULL, ?, ?, ?)`,
+        [
+          dlq.tenant_id ?? SKRIP_CONFIG.DEFAULT_TENANT_ID,
+          (payload.campaignId as string) ?? 'replay',
+          (payload.journeyId as string | null) ?? null,
+          (payload.stepId as string) ?? 'replay',
+          ((payload.contact as Record<string, unknown>)?.externalContactId as string) ?? 'unknown',
+          (payload.channel as string) ?? 'push',
+          (payload.schedule as Record<string, string>)?.scheduleSlot ?? new Date(epoch * 1000).toISOString().slice(0, 16) + 'Z',
+          replayKey,
+          dlq.payload_json,
+          epoch,
+          getCorrelationId(),
+          epoch,
+          epoch,
+        ],
+      );
+      // Mark the DLQ row as replayed
+      await execute(
+        env.DB,
+        `UPDATE channel_outcome_dead_letter SET replayed_at = ? WHERE id = ?`,
+        [epoch, dlq.id],
+      );
+      result.replayed++;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      result.errors.push(`DLQ row ${dlq.id}: ${msg}`);
+    }
+  }
+
+  return result;
 }

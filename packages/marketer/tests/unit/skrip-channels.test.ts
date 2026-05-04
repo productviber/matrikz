@@ -128,7 +128,7 @@ describe('handleSmsSubscribe', () => {
 describe('handleSmsUnsubscribe', () => {
   it('returns 200', async () => {
     const env = makeEnvWithInsertHandler();
-    const req = makeDeleteRequest({ contactId: 'c2' });
+    const req = makeDeleteRequest({ contactId: 'c2', address: '+447700900123' });
     const res = await handleSmsUnsubscribe(req, env as any);
     expect(res.status).toBe(200);
     const body = await res.json() as any;

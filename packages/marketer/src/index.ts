@@ -76,7 +76,10 @@ import {
   ROUTE,
   MESSAGES,
   RATE_LIMIT,
-} from './constants'; import { routeEvent } from './events/router';
+  KV_PREFIX,
+  TTL,
+} from './constants';
+import { routeEvent } from './events/router';
 import { handleHealthCheck, handleDetailedHealth } from './routes/health';
 import { handleAgenticRoute } from './routes/agentic';
 import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-portal';
@@ -123,6 +126,10 @@ import {
   handleSkripAttribution,
   handleSkripOptInFunnel,
   handleSkripAuthorityUpsert,
+    handleSkripFlagSet,
+    handleSkripPolicyState,
+    handleKillSwitchDrill,
+    handleDlqReplay,
   handleAdminAgenticSignals,
   handleAdminAgenticPerformance,
   handleAdminAgenticQuality,
@@ -145,6 +152,7 @@ import {
   handleTelegramSubscribe, handleTelegramUnsubscribe,
 } from './routes/skrip-channels';
 import { handleSetAffiliatePayoutDetails, handleGetAffiliatePayoutDetails } from './routes/affiliate-payout-setup';
+import { handleIdentityTokenMint, handleIdentityTokenVerify } from './routes/identity-token';
 import { corsPreflightResponse, notFound, tooManyRequests, badRequest } from './lib/response';
 import {
   accessDenied,
@@ -413,6 +421,18 @@ export default {
       if (method === 'GET' && path === '/api/admin/outbound/skrip/attribution') {
         return handleSkripAttribution(request, env);
       }
+      if (method === 'POST' && path === '/api/admin/skrip/flags') {
+        return handleSkripFlagSet(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/skrip/policy-state') {
+        return handleSkripPolicyState(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/skrip/killswitch/drill') {
+        return handleKillSwitchDrill(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/skrip/dlq/replay') {
+        return handleDlqReplay(request, env);
+      }
       if (method === 'GET' && path === '/api/admin/agentic/signals') {
         return handleAdminAgenticSignals(request, env);
       }
@@ -525,7 +545,30 @@ export default {
         return handleSkripOutcomeWebhook(request, env);
       }
 
-      // ── Push Subscription ──
+      // ── Identity Token (admin lane: mint; system lane: verify) ──
+      if (method === 'POST' && path === '/api/identity/mint') {
+        return handleIdentityTokenMint(request, env);
+      }
+      if (method === 'POST' && path === '/api/identity/verify') {
+        return handleIdentityTokenVerify(request, env);
+      }
+
+      // ── Push Subscription (rate-limited per IP) ──
+      if (
+        (method === 'POST' && path === '/api/push/subscribe') ||
+        (method === 'DELETE' && path === '/api/push/unsubscribe') ||
+        (method === 'POST' && path === '/api/channels/whatsapp/subscribe') ||
+        (method === 'DELETE' && path === '/api/channels/whatsapp/unsubscribe') ||
+        (method === 'POST' && path === '/api/channels/sms/subscribe') ||
+        (method === 'DELETE' && path === '/api/channels/sms/unsubscribe') ||
+        (method === 'POST' && path === '/api/channels/telegram/subscribe') ||
+        (method === 'DELETE' && path === '/api/channels/telegram/unsubscribe')
+      ) {
+        const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+        const rl = await checkRateLimit(env, `subscribe:${ip}`, RATE_LIMIT.SUBSCRIBE_MAX, RATE_LIMIT.SUBSCRIBE_WINDOW_SECS);
+        if (!rl.allowed) return tooManyRequests(MESSAGES.errors.rateLimitExceeded);
+      }
+
       if (method === 'POST' && path === '/api/push/subscribe') {
         return handlePushSubscribe(request, env);
       }
@@ -680,6 +723,26 @@ export default {
         }
       }).catch((err) => {
         console.warn('[Cron] Agent attribution error:', err instanceof Error ? err.message : err);
+
+          // Write cron execution snapshot to KV for 24h trend monitoring / alerting
+          ctx.waitUntil(
+            (async () => {
+              try {
+                const cronSnapshot = JSON.stringify({
+                  runAt: Math.floor(Date.now() / 1000),
+                  runAtIso: new Date(event.scheduledTime).toISOString(),
+                  scheduledTime: event.scheduledTime,
+                });
+                const today = new Date(event.scheduledTime).toISOString().slice(0, 10);
+                await Promise.all([
+                  env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}latest`, cronSnapshot),
+                  env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}${today}`, cronSnapshot, { expirationTtl: TTL.DAYS_90 }),
+                ]);
+              } catch (snapshotErr) {
+                console.warn('[Cron] Snapshot KV write failed:', snapshotErr instanceof Error ? snapshotErr.message : snapshotErr);
+              }
+            })()
+          );
       })
     );
   },

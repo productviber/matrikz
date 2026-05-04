@@ -409,6 +409,13 @@ export const KV_PREFIX = {
   AI_ENGINE_FAILURE: 'ai-engine:failure:',
   /** Daily fallback rate counter for ai-engine advisory calls */
   AI_ENGINE_FALLBACK_RATE: 'ai-engine:fallback-rate:',
+  /**
+   * Cron execution summary snapshot — latest run stats written after each
+   * cron invocation for operational trend checks.
+   * Key: `cron:snapshot:latest` (overwritten each run).
+   * Key: `cron:snapshot:YYYY-MM-DD` (daily archive, TTL 90 days).
+   */
+  CRON_SNAPSHOT: 'cron:snapshot:',
 } as const;
 
 // ─── Payout Providers ──────────────────────────────────────────────────────
@@ -573,6 +580,9 @@ export const RATE_LIMIT = {
   /** GDPR export/delete — 3 per day per code */
   GDPR_MAX: 3,
   GDPR_WINDOW_SECS: 86_400,
+  /** Public subscribe endpoints — 20 per hour per IP to prevent abuse */
+  SUBSCRIBE_MAX: 20,
+  SUBSCRIBE_WINDOW_SECS: 3600,
 } as const;
 
 // ─── Event Security ────────────────────────────────────────────────────────
@@ -582,6 +592,36 @@ export const EVENT_SECURITY = {
   MAX_SKEW_SECS: 300,
   /** TTL for dedupe keys used for replay protection. */
   REPLAY_TTL_SECS: 900,
+} as const;
+
+// ─── Recipient Identity Token ───────────────────────────────────────────────
+
+/**
+ * HMAC-signed token configuration for outbound link tracking.
+ * Tokens encode {contactId, tenantId, purpose, expiresAt} and are signed
+ * using WEBHOOK_SIGNING_SECRET so recipients can self-identify on click
+ * without requiring login.
+ */
+export const IDENTITY_TOKEN = {
+  /** Default TTL for recipient tokens in seconds (7 days) */
+  DEFAULT_TTL_SECS: 7 * 24 * 60 * 60,
+  /** Separator character used inside the token payload string */
+  SEPARATOR: '|',
+  /** Allowed purpose values */
+  PURPOSE: {
+    SUBSCRIBE: 'subscribe',
+    UNSUBSCRIBE: 'unsubscribe',
+    VERIFY: 'verify',
+    REDIRECT: 'redirect',
+  },
+  /** Structured reason codes for failed verification */
+  REJECT_REASON: {
+    MISSING_SECRET: 'signing_secret_not_configured',
+    MALFORMED: 'token_malformed',
+    EXPIRED: 'token_expired',
+    TAMPERED: 'token_tampered',
+    ALREADY_USED: 'token_already_used',
+  },
 } as const;
 
 // ─── Service Binding Header ─────────────────────────────────────────────────
