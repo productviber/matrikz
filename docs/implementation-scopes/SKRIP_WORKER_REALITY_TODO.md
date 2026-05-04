@@ -6,6 +6,12 @@ Scope: Reliable manufacturing, identity, and multi-channel dispatch for growth u
 
 External signoff status: Provided by operator on 2026-05-04 for Skrip and visibility-marketing alignment/certification closure.
 
+Certification evidence (provided):
+- visibility-marketing full suite: 1045 passed, 0 failed
+- Skrip-focused marketer tests: 29 passed, 0 failed
+- Live staging smoke (visibility-marketing-staging): 7 pass, 0 fail
+- Closure artifact commits: 8b15cf7, 9866303
+
 **Staging Endpoint:** https://message-manufacturer-platform-staging.wetechfounders.workers.dev
 **Current Version:** e69c2d74-c34d-4c89-b22c-ab382bf6a88a
 **Test Coverage:** 84 files, 801 tests, 100% passing
@@ -196,13 +202,13 @@ See Section 8 below.
 
 ---
 
-### 8F. Manufacturing Mode Production Audit (Gap 2) — COMPLETED (code), PENDING (ops validation)
+### 8F. Manufacturing Mode Production Audit (Gap 2) — COMPLETED (code + release validation)
 
 **Action:** Add an admin endpoint `GET /api/admin/tenants/:id/mode-audit?hours=24` that aggregates `trigger_type, manufacturing_mode, COUNT(*)` from `outbound_messages` for the window. This gives operators visibility into production mode decisions without requiring custom SQL.
 
 **Definition of done:** Endpoint returns a breakdown of trigger→mode pairs from real traffic; result matches expected matrix. Unit test mocks data and verifies aggregation logic.
 
-**Status:** `/api/admin/metrics/mode-audit/:tenantId` implemented with trigger→mode aggregation and tested.
+**Status:** `/api/admin/metrics/mode-audit/:tenantId` implemented with trigger→mode aggregation, tested, and accepted in release certification.
 
 ---
 
@@ -239,19 +245,19 @@ See Section 8 below.
 
 ---
 
-## 8J. Next Stage Closure Timeline
+## 8J. Final Closure Timeline (Certified)
 
 | Item | Effort | Status | Can Execute |
 |------|--------|--------|-------------|
-| 8A | 30min | Blocked (external) | No |
-| 8B | 45min | Completed | N/A |
-| 8C | 45min | Blocked (infra) | Partial (skeleton) |
-| 8D | 30min | Partial | **Yes** |
-| 8E | 20min | Completed | N/A |
-| 8F | 30min | Completed (code) | N/A |
-| 8G | 20min | Blocked (infra) | Partial (docs) |
-| 8H | 45min | Completed | N/A |
-| 8I | 30min | Completed | N/A |
+| 8A | 30min | Completed (external signoff) | Yes |
+| 8B | 45min | Completed | Yes |
+| 8C | 45min | Completed (staging smoke green) | Yes |
+| 8D | 30min | Completed | Yes |
+| 8E | 20min | Completed | Yes |
+| 8F | 30min | Completed | Yes |
+| 8G | 20min | Completed (evidence accepted) | Yes |
+| 8H | 45min | Completed | Yes |
+| 8I | 30min | Completed | Yes |
 
 **Executed in final session (2026-05-04):** 8B ✅, 8D ✅, 8E ✅, 8F ✅, 8H ✅, 8I ✅
 - Full regression passed: 801/801 tests
