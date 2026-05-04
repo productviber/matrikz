@@ -19,6 +19,7 @@ import { query, queryOne, execute, now } from './db';
 import { runWithConcurrency } from './concurrency';
 import { isUnsubscribed } from '../routes/gdpr';
 import { executeSecondaryChannels } from './channel-orchestrator';
+import { getSubjectAllActiveChannels } from './growth/context';
 import { pickWeightedIndex, recordVariantEngagement, loadVariantWeights } from './email/ab';
 import {
   prepareTemplateContext as prepareTemplateContextV2,
@@ -117,6 +118,18 @@ export async function enrollInSequences(
   contextData?: Record<string, unknown>,
   capabilityHookId?: string | null,
 ): Promise<number> {
+  const isOutboundTrigger = triggerEvent.startsWith('outbound.');
+  if (isOutboundTrigger) {
+    const activeChannels = await getSubjectAllActiveChannels(env, 'default', contactEmail);
+    if (activeChannels.length > 0) {
+      await cancelPendingEmails(env, contactEmail, triggerEvent);
+      console.log(
+        `[Email] Suppressed cold outreach enrollment for ${contactEmail} because warmer channels are active: ${activeChannels.map((channel) => channel.channel).join(', ')}`,
+      );
+      return 0;
+    }
+  }
+
   const sequences = await query<{ id: number; name: string }>(
     env.DB,
     `SELECT id, name FROM email_sequences WHERE trigger_event = ? AND is_active = 1`,
@@ -127,7 +140,6 @@ export async function enrollInSequences(
 
   let totalScheduled = 0;
   const baseTime = now();
-  const isOutboundTrigger = triggerEvent.startsWith('outbound.');
   const hookIdParam = capabilityHookId && capabilityHookId.length > 0 ? capabilityHookId : null;
 
   for (const seq of sequences) {

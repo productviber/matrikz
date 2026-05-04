@@ -92,6 +92,23 @@ describe('registerContactChannel()', () => {
     expect(result.canonicalId).toBeNull();
     expect(result.localUpdated).toBe(true);
   });
+
+  it('moves invalid identities back to pending during re-registration attempts', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response('Service Unavailable', { status: 503 }),
+    );
+
+    await registerContactChannel(env as any, {
+      externalContactId: 'lead@acme.com',
+      channel: 'push',
+      address: '{"endpoint":"https://fcm.googleapis.com/fcm/send/tok"}',
+    });
+
+    const insertQ = env.DB._queries.find(
+      (q) => q.sql.includes('INSERT INTO contact_channel_identities'),
+    );
+    expect(insertQ?.sql).toContain("WHEN contact_channel_identities.registration_state = 'invalid' THEN 'pending'");
+  });
 });
 
 // ── reconcilePendingIdentities() ───────────────────────────────────────────

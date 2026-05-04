@@ -190,6 +190,32 @@ describe('handleProspectDiscovered()', () => {
       expect(insertSends.length).toBe(3);
     });
 
+    it('suppresses cold outreach when a warmer product-user channel is already active', async () => {
+      env.DB.clearHandlers();
+      env.DB.onQuery(/SELECT.*marketing_contacts.*WHERE email/, () => []);
+      env.DB.onQuery(/SELECT.*email_sequences.*trigger_event/, () => [
+        { id: 10, name: 'Cold Outreach v1', trigger_event: 'outbound.prospect_discovered', is_active: 1 },
+      ]);
+      env.DB.onQuery(/FROM contact_channel_identities/i, () => [
+        {
+          channel: 'push',
+          registrationState: 'registered',
+          availabilityState: 'available',
+          consentState: 'opted_in',
+        },
+      ]);
+
+      await handleProspectDiscovered(env as any, baseProspect, timestamp);
+
+      const insertSends = env.DB._queries.filter((q: any) =>
+        q.sql.includes('INSERT INTO email_sends')
+      );
+      expect(insertSends.length).toBe(0);
+      expect(
+        env.DB._queries.some((q: any) => q.sql.includes("UPDATE email_sends SET status = 'cancelled'"))
+      ).toBe(true);
+    });
+
     it('does NOT enroll prospects with score < 40', async () => {
       await handleProspectDiscovered(
         env as any,

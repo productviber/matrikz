@@ -5,6 +5,7 @@ import {
   GROWTH_POLICY,
   GROWTH_SIGNAL_SEVERITY,
   GROWTH_SIGNAL_TYPE,
+  SKRIP_POLICY,
 } from '../../constants';
 import { createAgentActionProposal, type AgentActionView } from './actions';
 import { evaluateGrowthPolicy } from './policy';
@@ -146,6 +147,39 @@ function dominantRiskForSignals(signals: GrowthSignalView[]): string {
   return max;
 }
 
+function normalizeRequestedSkripPolicy(value: unknown): string {
+  if (typeof value !== 'string') return SKRIP_POLICY.EMAIL_ONLY;
+  const normalized = value.trim().toLowerCase();
+  return Object.values(SKRIP_POLICY).includes(normalized as (typeof SKRIP_POLICY)[keyof typeof SKRIP_POLICY])
+    ? normalized
+    : SKRIP_POLICY.EMAIL_ONLY;
+}
+
+function clampSkripPolicyForChannels(action: ProposedAgentAction, effectiveChannels: string[]): ProposedAgentAction {
+  if (action.type !== AGENT_ACTION_TYPE.ENROLL_SEQUENCE) return action;
+
+  const requestedPolicy = normalizeRequestedSkripPolicy(action.params?.skripPolicy);
+  const hasPush = effectiveChannels.includes('push');
+  const hasAdditionalSkripChannel = effectiveChannels.some((channel) => channel !== 'email');
+
+  let skripPolicy: string = SKRIP_POLICY.EMAIL_ONLY;
+  if (requestedPolicy === SKRIP_POLICY.PUSH_ASSIST && hasPush) {
+    skripPolicy = SKRIP_POLICY.PUSH_ASSIST;
+  } else if (requestedPolicy === SKRIP_POLICY.PUSH_PRIMARY_WITH_EMAIL_FALLBACK && hasPush) {
+    skripPolicy = SKRIP_POLICY.PUSH_PRIMARY_WITH_EMAIL_FALLBACK;
+  } else if (requestedPolicy === SKRIP_POLICY.MULTI_CHANNEL_PROGRESSIVE && hasAdditionalSkripChannel) {
+    skripPolicy = SKRIP_POLICY.MULTI_CHANNEL_PROGRESSIVE;
+  }
+
+  return {
+    ...action,
+    params: {
+      ...(action.params ?? {}),
+      skripPolicy,
+    },
+  };
+}
+
 /**
  * Proposes eligible agent actions from a set of growth signals.
  *
@@ -246,13 +280,24 @@ export async function proposeEligibleAgentActionsFromSignals(
       : fallbackGrowthNextAction(aiRequest, 'AI_ENGINE binding not configured');
 
     // ── Evaluate policy against the AI-proposed action ──
-    const policyResult = await evaluateGrowthPolicy(env, {
+    const initialPolicyResult = await evaluateGrowthPolicy(env, {
       tenantId,
       subjectId,
       action: aiResult.action,
       riskLevel: aiResult.riskLevel ?? riskLevel,
       confidence: aiResult.confidence,
     });
+
+    const normalizedAction = clampSkripPolicyForChannels(aiResult.action, initialPolicyResult.effectiveChannels ?? []);
+    const policyResult = normalizedAction === aiResult.action
+      ? initialPolicyResult
+      : await evaluateGrowthPolicy(env, {
+        tenantId,
+        subjectId,
+        action: normalizedAction,
+        riskLevel: aiResult.riskLevel ?? riskLevel,
+        confidence: aiResult.confidence,
+      });
 
     // ── Combine evidence from all signals for this subject ──
     const combinedEvidence: Record<string, unknown> = {
@@ -279,7 +324,7 @@ export async function proposeEligibleAgentActionsFromSignals(
       tenantId,
       subjectId,
       signalId: primarySignal.signal_id,
-      action: aiResult.action,
+      action: normalizedAction,
       riskLevel: aiResult.riskLevel ?? riskLevel,
       confidence: aiResult.confidence,
       evidence: combinedEvidence,

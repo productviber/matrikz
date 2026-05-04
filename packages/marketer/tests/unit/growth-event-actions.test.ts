@@ -246,6 +246,75 @@ describe('growth event action materializer', () => {
     );
     expect(aiMetaParam).toBeDefined();
   });
+
+  it('clamps AI-recommended skripPolicy to email_only when no warm channel is actually eligible', async () => {
+    const aiResponse = {
+      action: {
+        type: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        params: {
+          triggerEvent: 'agentic.pricing_visit_no_signup',
+          interventionMode: 'primary',
+          primaryChannel: 'email',
+          skripPolicy: 'multi_channel_progressive',
+          context: { signalId: 'sig_price_1', signalType: 'pricing_visit_no_signup' },
+        },
+        reason: 'AI recommends a multi-channel follow-up.',
+      },
+      riskLevel: 'low',
+      confidence: 78,
+      explanation: 'Use the warmest reachable path available.',
+      metadata: {
+        provider: 'openai',
+        model: 'gpt-4o',
+        capability: 'growth-next-action',
+        promptVersion: '2026-05-02',
+        responseSchemaVersion: 'growth-action-v1',
+        latencyMs: 310,
+        tokenEstimate: 140,
+        costEstimate: 0.0008,
+        fallback: false,
+      },
+      rawSummary: { signalCount: 1 },
+    };
+
+    const env = createMockEnv({
+      AI_ENGINE: createMockFetcher({
+        '/internal/growth-next-action': { body: aiResponse },
+      }) as any,
+    });
+
+    env.DB.onQuery(/LEFT JOIN agent_action_outcomes/i, () => []);
+    env.DB.onQuery(/FROM growth_signals/i, () => []);
+    env.DB.onQuery(/FROM marketing_contacts/i, () => []);
+    env.DB.onQuery(/FROM contact_channel_identities/i, () => []);
+    env.DB.onQuery(/SELECT created_at\s+FROM agent_actions/i, () => []);
+    env.DB.onQuery(/SELECT COUNT\(\*\) AS count/i, () => [{ count: 0 }]);
+    env.DB.onQuery(/FROM suppression_list/i, () => []);
+    env.DB.onQuery(/SELECT \* FROM agent_actions WHERE idempotency_key/i, () => [
+      actionRow({
+        proposed_action: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        proposed_action_json: JSON.stringify({
+          ...aiResponse.action,
+          params: {
+            ...aiResponse.action.params,
+            skripPolicy: 'email_only',
+          },
+        }),
+        confidence: 78,
+        ai_metadata_json: JSON.stringify({ ...aiResponse.metadata, explanation: aiResponse.explanation, fallback: false }),
+      }),
+    ]);
+
+    const created = await proposeEligibleAgentActionsFromSignals(env as any, [signalRow({ subject_id: 'prospect@acme.com' })], {});
+
+    expect(created).toHaveLength(1);
+    expect(created[0].proposedAction.params?.skripPolicy).toBe('email_only');
+    const insert = env.DB._queries.find((q) => q.sql.includes('INSERT INTO agent_actions'));
+    const storedAction = insert?.params.find(
+      (p): p is string => typeof p === 'string' && p.includes('skripPolicy'),
+    );
+    expect(storedAction).toContain('"skripPolicy":"email_only"');
+  });
 });
 
 describe('deterministicFallbackActionForSignal', () => {

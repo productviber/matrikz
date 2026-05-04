@@ -110,6 +110,10 @@ export async function registerContactChannel(
        suppression_state = excluded.suppression_state,
        availability_state = excluded.availability_state,
        identity_confidence = excluded.identity_confidence,
+       registration_state = CASE
+         WHEN contact_channel_identities.registration_state = 'invalid' THEN 'pending'
+         ELSE contact_channel_identities.registration_state
+       END,
        address = excluded.address,
        updated_at = excluded.updated_at`,
     [
