@@ -3,6 +3,9 @@ param([string]$Url = 'https://visibility-marketing-dev.wetechfounders.workers.de
   [string]$SystemToken = '')
 
 if ([string]::IsNullOrWhiteSpace($SystemToken)) {
+  $SystemToken = $env:SYSTEM_TOKEN
+}
+if ([string]::IsNullOrWhiteSpace($SystemToken)) {
   $SystemToken = $Token
 }
 
@@ -33,7 +36,19 @@ try {
   $r = Invoke-RestMethod "$Url/api/identity/verify" -Method POST -H @{"Content-Type"="application/json";"x-system-token"="$SystemToken"} -Body "{`"token`":`"$tok`"}" -EA 0 -UseBasicParsing
   if ($r.ok) { $p++ } else { $f++ }
   Write-Host "$(if ($r.ok) {'✓'} else {'✗'})" -ForegroundColor $(if ($r.ok) {'Green'} else {'Red'})
-} catch { Write-Host "✗" -ForegroundColor Red; $f++ }
+} catch {
+  Write-Host "✗" -ForegroundColor Red
+  try {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    $bodyReader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
+    $errorBody = $bodyReader.ReadToEnd()
+    Write-Host "Verify failed with status $statusCode. Body: $errorBody" -ForegroundColor Yellow
+    Write-Host "Hint: /api/identity/verify requires a valid SYSTEM_TOKEN. Pass -SystemToken or set SYSTEM_TOKEN env var." -ForegroundColor Yellow
+  } catch {
+    Write-Host "Verify failed; no HTTP body available. Ensure SYSTEM_TOKEN is valid for staging." -ForegroundColor Yellow
+  }
+  $f++
+}
 
 # 4. Flags
 Write-Host "[4] Flags" -ForegroundColor Cyan

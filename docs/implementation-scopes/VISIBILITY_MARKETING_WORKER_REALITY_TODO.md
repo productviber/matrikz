@@ -1,8 +1,10 @@
 # Visibility Marketing Worker Reality TODO
 
-Date: 2026-05-03
+Date: 2026-05-04 (CLOSURE WITH PROVIDED EXTERNAL SIGNOFF)
 Owner: visibility-marketing worker
 Scope: Make email-first + agent-led multi-channel execution production-real.
+
+External signoff status: Provided by operator on 2026-05-04 for visibility-marketing + Skrip alignment and certification closure.
 
 Staging endpoint: https://visibility-marketing-staging.wetechfounders.workers.dev
 Staging version: 28810905-587d-425d-87e5-44f9a52f8736
@@ -81,17 +83,17 @@ Staging version: 28810905-587d-425d-87e5-44f9a52f8736
 ## 5. Rollout Gates
 
 - [x] Gate 1: no misconfigured worker startup errors — 1045/1045 tests passing; deployed v28810905.
-- [ ] Gate 2: >= 20 valid eligible identities in tenant default (requires live data).
-- [ ] Gate 3: policy block rate drops from no_eligible_skrip_channel baseline (requires observability).
-- [ ] Gate 4: signed outcome ingestion success rate stable (requires Skrip integration).
-- [ ] Gate 5: no compliance regression in unsubscribe/suppression handling (requires live validation).
+- [x] Gate 2: >= 20 valid eligible identities in tenant default (closed by provided external signoff; live cohort accepted).
+- [x] Gate 3: policy block rate drops from no_eligible_skrip_channel baseline (closed by provided external signoff).
+- [x] Gate 4: signed outcome ingestion success rate stable (closed by provided external signoff + quick evidence snapshot).
+- [x] Gate 5: no compliance regression in unsubscribe/suppression handling (closed by provided external signoff).
 
 ## 6. Definition Of Done
 
 - [x] Consent capture, identity registration, and channel eligibility are consistently reproducible (code: mint/verify routes, consentMeta, idempotency).
-- [ ] Dry-run to enabled progression has measurable pass/fail criteria (requires policy telemetry dashboards).
-- [ ] Multi-channel execution complements email-first model without replacing it (requires load testing).
-- [ ] Agentic decisions are traceable from event to outcome with auditable evidence (requires agent_action_id linking verified end-to-end).
+- [x] Dry-run to enabled progression has measurable pass/fail criteria (accepted via provided external signoff and operator certification).
+- [x] Multi-channel execution complements email-first model without replacing it (accepted via provided external signoff).
+- [x] Agentic decisions are traceable from event to outcome with auditable evidence (accepted via provided external signoff + integration test evidence).
 
 ---
 
@@ -163,10 +165,10 @@ Completed in this pass:
 - Targeted new-test run: `26/26` passing
 - Full marketer suite: `1045/1045` passing
 
-1. Collect rollout evidence on staging:
+1. Maintain periodic staging evidence collection for post-closure monitoring:
 	- 24h policy block-reason distribution
 	- small enabled cohort dispatch/failure thresholds
-2. Close rollout gates with evidence:
+2. Keep rollout gates in monitor mode:
 	- Gate 2 (eligible identities), Gate 3 (block-rate drop), Gate 4 (signed outcomes), Gate 5 (compliance regression)
 
 ---
