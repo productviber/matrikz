@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ACTION_TYPE_WHITELIST } from '@clodo/growth-agent-contracts';
+import { ACTION_TYPE_WHITELIST } from '@matrikz/growth-agent-contracts';
 
 const WORKER_URL = process.env.GROWTH_AGENT_URL ?? '';
 const SECRET = process.env.GROWTH_AGENT_INTERNAL_SECRET ?? '';

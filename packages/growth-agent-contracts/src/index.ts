@@ -14,6 +14,13 @@ export const ACTION_TYPE_WHITELIST = [
   "escalate",
   "offer",
   "nudge",
+  "manual_review",
+  "enroll_sequence",
+  "send_via_skrip",
+  "pause_campaign",
+  "start_campaign",
+  "pause_contact",
+  "escalate_to_human",
 ] as const;
 
 export const ERROR_CODES = [

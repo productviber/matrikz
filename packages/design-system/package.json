@@ -13,7 +13,8 @@
     "dist"
   ],
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "echo \"No tests for design-system\" && exit 0"
   },
   "dependencies": {
     "react": "^18.2.0",
