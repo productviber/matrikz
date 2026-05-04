@@ -75,6 +75,46 @@ This resolved Cloudflare API deploy failure `code: 10144` (service binding envir
 
 Release note authored as `RELEASE_NOTES_2026-05-04.md` and committed with this delivery.
 
+### H. Operational Revalidation Pass (2026-05-04, post-release)
+
+After release commits were published, a second explicit operational revalidation pass was executed.
+
+#### H1. Test verification rerun
+
+- Command: `npm run verify` in `d:/coding/matrikz`
+- Result: PASS
+  - `@matrikz/growth-agent`: 57 tests passed
+  - `@matrikz/growth-agent-contracts`: no tests (passWithNoTests)
+  - `@matrikz/visibility-marketing`: 20 tests passed
+
+#### H2. Deployment confirmations
+
+Fresh deployment confirmations captured for both workers.
+
+| Worker | Environment | URL | Version ID |
+|---|---|---|---|
+| growth-agent | development | `https://growth-agent-dev.wetechfounders.workers.dev` | `b5d055ee-6c8b-40bb-8ed9-0a9f22cbd7ce` |
+| growth-agent | staging | `https://growth-agent-staging.wetechfounders.workers.dev` | `237b2e5c-e088-4c3b-a855-dfee56cecc8e` |
+| growth-agent | production | `https://growth-agent-production.wetechfounders.workers.dev` | `2f67acd9-2fb4-45b1-a95b-bf3c9ecc1ad7` |
+| visibility-marketing | development | `https://visibility-marketing-dev.wetechfounders.workers.dev` | `21a1f054-7b20-46e8-a789-43b147c11851` |
+| visibility-marketing | staging | `https://visibility-marketing-staging.wetechfounders.workers.dev` | `f4c85c5c-d047-421d-b926-fe6a87126bbe` |
+| visibility-marketing | production | `https://visibility-marketing-production.wetechfounders.workers.dev` | `ca29fa44-6bf2-4a80-84c0-ae2145410c72` |
+
+#### H3. Live smoke checks after revalidation deploy
+
+- growth-agent:
+  - `/health`: passed on dev/staging/production
+  - `/internal/capabilities`: passed on dev/staging/production with valid auth/correlation headers
+- visibility-marketing:
+  - `POST /`: successful envelope responses across all environments
+  - route reasons:
+    - dev/staging: `upstream_non_2xx`
+    - production: `capability_disabled` (expected under current production capability flags)
+
+#### H4. Productviber workspace install note
+
+In the Productviber clone, dependency installation via pnpm is currently blocked by workspace-package mismatch (`@clodo/growth-agent-contracts@workspace:*` expected by `packages/marketer`), while this delivery uses `@matrikz/growth-agent-contracts` in the transplanted package set. This does not impact deployed runtime validation above, which was executed directly against live Cloudflare environments.
+
 ## Closure Addendum (2026-05-04)
 
 Investigation was completed in `d:/coding/matrikz` to identify remaining blockers.

@@ -50,3 +50,19 @@ All six target deployments are active:
 
 - Standardize bootstrap/install flow for the full Productviber monorepo workspace package set if local verification is required in a fresh clone.
 - Keep production capability flags disabled until go-live approval.
+
+## Post-Release Revalidation
+
+An additional end-to-end revalidation pass was completed after release publication.
+
+- Test gate rerun in source workspace:
+  - `npm run verify` passed
+  - growth-agent: 57 tests passed
+  - visibility-marketing: 20 tests passed
+- Deploy gate rerun:
+  - growth-agent dev/staging/production deployed
+  - visibility-marketing dev/staging/production deployed
+- Runtime smoke gate rerun:
+  - growth-agent `/health` passed in all environments
+  - growth-agent `/internal/capabilities` passed in all environments
+  - visibility-marketing `POST /` returned valid envelopes in all environments
