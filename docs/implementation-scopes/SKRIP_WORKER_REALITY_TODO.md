@@ -128,21 +128,29 @@ See Section 8 below.
 
 ## 8. Remaining Gaps — Concrete Closure Actions
 
-### 8A. Marketing Certification (Gap 2 / Gate 1)
+### 8A. Marketing Certification (Gap 2 / Gate 1) — BLOCKED (external)
 
 **Action:** Produce a curl runbook with exact request shapes (signed and unsigned) for the staging endpoint. Ask the marketing team to execute it against `https://message-manufacturer-platform-staging.wetechfounders.workers.dev` and confirm responses match the published fixtures. Document sign-off.
 
 **Definition of done:** Marketing team engineer runs the runbook, observes correct responses, and marks the certification complete in writing.
 
-### 8B. Outcome Webhook Roundtrip Test (Integration gap)
+**Status:** Awaiting external team execution. Runbook template can be drafted but requires coordinated testing.
+
+---
+
+### 8B. Outcome Webhook Roundtrip Test (Integration gap) — IN PROGRESS
 
 **Action:** Add an integration test that drives the full loop: POST to `/v1/messages/send` → mock queue consumer calls channel provider → mock provider POSTs to `/api/outcomes/:channel` → verify final status in `outbound_messages`. No staging credentials needed — mock at the provider boundary.
 
-**Definition of done:** One new test file covering the webhook-in leg for at least push and one other channel, passing in CI.
+**Definition of done:** One new test file `packages/skrip/tests/unit/integration.outcomes-webhook.test.ts` covering push + SMS webhook roundtrip, 4+ tests passing in CI.
 
-### 8C. Live Staging Smoke Script (Live Staging gaps)
+**Plan:** Mock the provider HTTP client; inject webhook callback; verify `outbound_messages` status updated.
 
-**Action:** Extend `scripts/e2e-smoke.ps1` (or create `scripts/staging-smoke-full.ps1`) with:
+---
+
+### 8C. Live Staging Smoke Script (Live Staging gaps) — BLOCKED (infra)
+
+**Action:** Extend or create `scripts/staging-smoke-full.ps1` with:
 1. Upsert a test contact via `/v1/contacts/upsert`.
 2. Send a push message via `/v1/messages/send`.
 3. Call `/api/admin/tenants/:id/slo` and assert `push.queueDepth >= 1`.
@@ -151,26 +159,87 @@ See Section 8 below.
 
 **Definition of done:** Script exits 0 on staging environment, all assertions pass.
 
-### 8D. SLO Endpoint Performance (Lagging aggregate risk)
+**Status:** Requires staging deployment with live channel credentials (push VAPID, SMS provider key, etc.). Can create script skeleton but requires infra setup.
+
+---
+
+### 8D. SLO Endpoint Performance (Lagging aggregate risk) — IN PROGRESS
 
 **Action:** Update `/api/admin/tenants/:id/slo` to read from `bucket_hourly_metrics` for send/fail counts (already populated by analytics pipeline) and keep the `outbound_messages` scan only as a fallback or for queue depth only. Add an index on `outbound_messages(tenant_id, status, queued_at)` if not present.
 
-**Definition of done:** SLO endpoint query plan uses index range scans, not full table scans; response time < 200ms on a tenant with 10k+ messages.
+**Definition of done:** SLO endpoint query plan uses index range scans, not full table scans; response time < 200ms on a tenant with 10k+ messages. Unit test verifies metric reads from `bucket_hourly_metrics` table.
 
-### 8E. Strategic Signing Default Hardened (Security gap)
+**Plan:** Modify SLO handler to prefer bucket-level metrics; add index migration if needed.
+
+---
+
+### 8E. Strategic Signing Default Hardened (Security gap) — IN PROGRESS
 
 **Action:** Change the default in `src/lib/config/runtime.ts` to enforce signing when `ENVIRONMENT !== "local"`. Explicit opt-out required for non-local environments. Update staging and production `wrangler.toml` vars accordingly.
 
-**Definition of done:** A staging request without `X-Skrip-Signature` returns 422 without any additional config.
+**Definition of done:** A staging request without `X-Skrip-Signature` returns 422 without any additional config. Unit test verifies default behavior.
 
-### 8F. Manufacturing Mode Production Audit (Gap 2)
+**Plan:** Set enforcement flag default to `true` for non-local; update env var documentation.
+
+---
+
+### 8F. Manufacturing Mode Production Audit (Gap 2) — IN PROGRESS
 
 **Action:** Add an admin endpoint `GET /api/admin/tenants/:id/mode-audit?hours=24` that aggregates `trigger_type, manufacturing_mode, COUNT(*)` from `outbound_messages` for the window. This gives operators visibility into production mode decisions without requiring custom SQL.
 
-**Definition of done:** Endpoint returns a breakdown of trigger→mode pairs from real traffic; result matches expected matrix.
+**Definition of done:** Endpoint returns a breakdown of trigger→mode pairs from real traffic; result matches expected matrix. Unit test mocks data and verifies aggregation logic.
 
-### 8G. Gate 4 — Webhook Error Rate (Pending gate)
+**Plan:** New route handler in admin/audit.ts; aggregation query on outbound_messages.
+
+---
+
+### 8G. Gate 4 — Webhook Error Rate (Pending gate) — BLOCKED (infra)
 
 **Action:** After running the staging smoke script (8C), query Cloudflare Workers analytics (via `wrangler tail --env staging`) for any `status=401` or `status=403` responses on `/api/outcomes/*`. Target: zero verification failures on correctly signed test requests.
 
 **Definition of done:** Smoke run produces zero webhook verification errors; result documented in release checklist.
+
+**Status:** Requires live staging traffic and access to CF analytics API. Can document expected query patterns.
+
+---
+
+### 8H. Circuit Breaker Enforcement (Critical gap — not in original Section 8)
+
+**Action:** Update the dispatch path to consult `circuitState` before attempting send. If circuit is open/degraded, either:
+1. Fail fast with structured error (safe but loses retries)
+2. Fall back to fallback provider (preferred if available)
+3. Queue for manual fallback batch (preferred)
+
+**Definition of done:** Dispatch handler checks circuit state; degraded channels fail gracefully with actionable telemetry.
+
+**Plan:** Modify dispatcher to read circuit state before channel send attempt.
+
+---
+
+### 8I. Admin Rate Limiting (Medium gap — not in original Section 8)
+
+**Action:** Add rate limiting to admin operator endpoints (e.g., 10 DLQ replay requests/min per token). Use KV-backed token bucket per admin auth principal.
+
+**Definition of done:** DLQ replay endpoint returns 429 after 10th call in a minute; telemetry logged.
+
+**Plan:** Middleware for admin routes; KV key = admin token hash; bucket refill on each request.
+
+---
+
+## 8J. Next Stage Closure Timeline
+
+| Item | Effort | Status | Can Execute |
+|------|--------|--------|-------------|
+| 8A | 30min | Blocked (external) | No |
+| 8B | 45min | In Progress | **Yes** |
+| 8C | 45min | Blocked (infra) | Partial (skeleton) |
+| 8D | 30min | In Progress | **Yes** |
+| 8E | 20min | In Progress | **Yes** |
+| 8F | 30min | In Progress | **Yes** |
+| 8G | 20min | Blocked (infra) | Partial (docs) |
+| 8H | 45min | In Progress | **Yes** |
+| 8I | 30min | In Progress | **Yes** |
+
+**Executable in this session:** 8B, 8D, 8E, 8F, 8H, 8I (180min / 3hr)
+
+**Blocked or partial:** 8A (external), 8C (infra), 8G (infra)

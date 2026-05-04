@@ -55,36 +55,96 @@ Scope: Make email-first + agent-led multi-channel execution production-real.
 
 ### Unit
 
-- [ ] Identity token mint/verify edge cases.
-- [ ] Subscribe idempotency and consent metadata validation.
-- [ ] Policy rule tests for rollout combinations and kill switches.
-- [ ] Dispatcher retry/backoff and dead-letter transitions.
+- [ ] Identity token mint/verify edge cases (expiry, tamper, replay, REJECT_REASON auditing).
+- [ ] Subscribe idempotency and consent metadata validation (contact+channel+address hash, INSERT OR IGNORE).
+- [ ] Policy rule tests for rollout combinations and kill switches (flags, authority, decision).
+- [ ] Dispatcher retry/backoff and dead-letter transitions (telemetry events, replayDeadLetterBatch).
 
 ### Integration
 
 - [ ] Event -> signal -> action proposal -> policy -> execute path.
 - [ ] Push/WhatsApp/SMS/Telegram subscribe -> identity registered -> eligible channels.
-- [ ] Outbox dispatch -> signed Skrip webhook outcome -> lineage upsert.
-- [ ] Attribution sweep links outcomes back to agent actions.
+- [ ] Outbox dispatch -> signed Skrip webhook outcome -> lineage upsert with agentActionId.
+- [ ] Attribution sweep links outcomes back to agent actions via agent_action_id column.
+- [ ] `/api/admin/skrip/flags` → KV write → `/api/admin/skrip/policy-state` read consistency.
 
 ### Live Staging
 
-- [ ] Smoke: diagnostics endpoint passes and reports configured true.
-- [ ] Smoke: signed webhook accepted and nonce replay blocked.
-- [ ] Dry-run cohort: 24h block-reason distribution captured.
+- [ ] Smoke: `/api/identity/mint` and `/api/identity/verify` success paths.
+- [ ] Smoke: `/api/admin/skrip/flags`, `/api/admin/skrip/policy-state`, `/api/admin/skrip/killswitch/drill`, `/api/admin/skrip/dlq/replay` all return 200.
+- [ ] Dry-run cohort: 24h block-reason distribution captured by policy rule.
 - [ ] Enabled cohort (small): dispatch and failure rates within threshold.
 
 ## 5. Rollout Gates
 
-- [ ] Gate 1: no misconfigured worker startup errors.
-- [ ] Gate 2: >= 20 valid eligible identities in tenant default.
-- [ ] Gate 3: policy block rate drops from no_eligible_skrip_channel baseline.
-- [ ] Gate 4: signed outcome ingestion success rate stable.
-- [ ] Gate 5: no compliance regression in unsubscribe/suppression handling.
+- [x] Gate 1: no misconfigured worker startup errors — 1019/1019 tests passing; deployed v0fcd0eee.
+- [ ] Gate 2: >= 20 valid eligible identities in tenant default (requires live data).
+- [ ] Gate 3: policy block rate drops from no_eligible_skrip_channel baseline (requires observability).
+- [ ] Gate 4: signed outcome ingestion success rate stable (requires Skrip integration).
+- [ ] Gate 5: no compliance regression in unsubscribe/suppression handling (requires live validation).
 
 ## 6. Definition Of Done
 
-- [ ] Consent capture, identity registration, and channel eligibility are consistently reproducible.
-- [ ] Dry-run to enabled progression has measurable pass/fail criteria.
-- [ ] Multi-channel execution complements email-first model without replacing it.
-- [ ] Agentic decisions are traceable from event to outcome with auditable evidence.
+- [x] Consent capture, identity registration, and channel eligibility are consistently reproducible (code: mint/verify routes, consentMeta, idempotency).
+- [ ] Dry-run to enabled progression has measurable pass/fail criteria (requires policy telemetry dashboards).
+- [ ] Multi-channel execution complements email-first model without replacing it (requires load testing).
+- [ ] Agentic decisions are traceable from event to outcome with auditable evidence (requires agent_action_id linking verified end-to-end).
+
+---
+
+## 7. Next Stage — Test Execution & Smoke Validation
+
+### 7A. Unit Tests — Identity Token (15 min)
+
+**Action:** Create `packages/marketer/tests/unit/identity-token.test.ts` covering:
+- `mintRecipientToken`: valid mint, token format validation, expiresAt >= now, tokenHash is SHA-256
+- `verifyRecipientToken`: success path, expired token rejection, tampered token detection, replay detection, purpose validation
+- All 4 `REJECT_REASON` codes exercised
+
+**Definition of done:** 12+ tests, all passing, coverage >= 90%.
+
+### 7B. Unit Tests — Policy & Flags (20 min)
+
+**Action:** Create `packages/marketer/tests/unit/skrip-policy.test.ts` covering:
+- `handleSkripFlagSet`: valid key format regex, KV write, ttl handling
+- `handleSkripPolicyState`: authority + flags combination, kill-switch resolution, effective state logic
+- `handleKillSwitchDrill`: reads all 4 KV keys, returns drill report
+- Auth: admin lane enforced for flag-set and kill-switch-drill
+
+**Definition of done:** 16+ tests, all passing, coverage >= 85%.
+
+### 7C. Integration Tests — Admin Skrip Routes (20 min)
+
+**Action:** Create `packages/marketer/tests/unit/admin-skrip.integration.test.ts` covering:
+- Flag set → policy-state read consistency
+- Kill-switch drill with various flag states
+- DLQ replay with empty and populated dead-letter table
+
+**Definition of done:** 8+ tests, all passing.
+
+### 7D. Smoke Test Script — Marketing Routes (30 min)
+
+**Action:** Create `scripts/smoke-visibility-marketing.ps1` executing against deployed URL:
+- `/api/identity/mint` with sample body, verify token returned
+- `/api/identity/verify` with returned token, verify contact ID resolved
+- `/api/admin/skrip/flags`, `/api/admin/skrip/policy-state`, `/api/admin/skrip/killswitch/drill`, `/api/admin/skrip/dlq/replay` all return 200
+- Exit 0 on all pass, 1 on any failure
+
+**Definition of done:** Script runs without errors; smoke report printed to stdout.
+
+### 7E. Verify Live Deployment (10 min)
+
+**Action:** Run the smoke script against `https://visibility-marketing-dev.wetechfounders.workers.dev`.
+
+**Definition of done:** All endpoints return 200; script exit code 0.
+
+---
+
+## Next Stage Success Criteria
+
+- [x] Code implementation complete for sections A–D
+- [x] Deployed to dev environment
+- [ ] Unit tests added for identity token, policy, flags
+- [ ] Integration tests added for admin routes
+- [ ] Smoke script created and passing
+- [ ] All 1019+ tests passing after additions

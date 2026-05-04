@@ -146,3 +146,87 @@ The following items cannot be completed in the local codebase — they require i
 | Alerting rules | Wire `slo_breach_warning` and `llm_quota_exceeded` events to PagerDuty/Grafana alerts | Platform / Observability |
 
 **All code-layer work is complete and fully tested (77/77 passing). Remaining items are operational/infrastructure concerns.**
+
+---
+
+## 8. Next Stage — Operational Prerequisites
+
+The following items cannot be completed without external infrastructure. Document prerequisites and blocking items:
+
+### 8A. Staging Deployment Prerequisites
+
+**Blocking items:**
+- CF staging environment with `WORKERS_AI` binding
+- `INTERNAL_SECRET` set in wrangler staging environment
+- Real AI model access (e.g., `@cf/meta/llama-2-7b-chat-fp16`)
+
+**Action:** Confirm staging environment setup with platform team. Once ready, run:
+```powershell
+cd packages/matrikz-growth-agent
+$env:CLOUDFLARE_API_TOKEN='...'
+corepack pnpm exec wrangler deploy --env staging
+```
+
+**Definition of done:** Worker deployed; health check returns 200; `/internal/capabilities` lists all 5 capabilities.
+
+### 8B. Correlation Log Tracing Prerequisites
+
+**Blocking items:**
+- Cloudflare Logpush configured to forward matrikz-growth-agent logs to Datadog/Grafana
+- Ingestion pipeline expecting structured JSON with `correlationId` field
+
+**Action:** Coordinate with observability team. Provide sample log event:
+```json
+{
+  "timestamp": "2026-05-04T10:00:00Z",
+  "correlationId": "req_abc123",
+  "capability": "growth-next-action",
+  "latencyBucket": "<=100ms",
+  "fallback": false,
+  "provider": "workers-ai",
+  "model": "@cf/meta/llama-2-7b-chat-fp16"
+}
+```
+
+**Definition of done:** Sample log ingested; Grafana dashboard created with correlation traces.
+
+### 8C. Alerting Rules Prerequisites
+
+**Blocking items:**
+- Log aggregation platform with alert rule API
+- Incident response contact list
+
+**Action:** Define alert thresholds:
+```
+- fallback_rate > 15% in 5min → page on-call
+- latency_p99 > 1000ms warm / 3500ms cold → warning
+- llm_quota_exceeded in any hour → page DevOps
+- slo_breach_warning rate spike → investigate
+```
+
+**Definition of done:** Alerts configured and tested with synthetic data.
+
+### 8D. Live Staging Smoke Checklist
+
+**Prerequisites:**
+- Staging worker deployed
+- Marketing worker can reach matrikz-growth-agent via binding
+- Test tenant ID created with valid config
+
+**Checklist:**
+- [ ] POST `/internal/capabilities` → returns all 5 capability paths
+- [ ] POST `/internal/growth-next-action` with valid request → 200 with schema-valid response
+- [ ] Same request sent twice with same idempotency key → both return 200 (no 409)
+- [ ] Timeout test: request with 100ms timeout → 503 `TIMEOUT_OR_TRANSPORT` received within 150ms
+- [ ] Fallback test: invalid AI model name → 503 with deterministic fallback envelope
+- [ ] Correlation test: response includes same `correlationId` as request
+
+**Definition of done:** All 6 checks passing.
+
+---
+
+## Matrikz Closure Status
+
+✅ **Code:** 77/77 tests passing, all sections A–D complete, 5 capabilities implemented
+
+⏳ **Operations:** Awaiting infrastructure setup (staging deployment, log ingestion, alerting)
