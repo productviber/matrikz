@@ -61,13 +61,13 @@ export class FailOpenBudgetGuard implements TenantBudgetGuard {
 }
 
 export class NullBudgetGuard implements TenantBudgetGuard {
-  consume(): { allowed: boolean; remaining: number } {
+  consume(_tenantId: string, _capability: CapabilityName): { allowed: boolean; remaining: number } {
     return { allowed: true, remaining: Number.MAX_SAFE_INTEGER };
   }
 }
 
 export class ExhaustedBudgetGuard implements TenantBudgetGuard {
-  consume(): { allowed: boolean; remaining: number } {
+  consume(_tenantId: string, _capability: CapabilityName): { allowed: boolean; remaining: number } {
     return { allowed: false, remaining: 0 };
   }
 }

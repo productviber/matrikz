@@ -1,5 +1,5 @@
 {
-  "name": "@matrikz/growth-agent",
+  "name": "@matrikz/visibility-marketing",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,7 @@
     "@matrikz/growth-agent-contracts": "file:../growth-agent-contracts"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260503.1",
-    "miniflare": "3.20250718.3",
+    "@cloudflare/workers-types": "^4.20260502.0",
     "typescript": "^5.8.3",
     "vitest": "^2.1.8"
   }

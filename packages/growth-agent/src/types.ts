@@ -14,7 +14,7 @@ import {
   type OutcomeDiagnoseResponse,
   type Metadata,
   type ActionType,
-} from "@clodo/growth-agent-contracts";
+} from "@matrikz/growth-agent-contracts";
 import { CAPABILITY_ENV_FLAGS, DEFAULTS, ROUTE_REASONS } from "./constants";
 
 export type {
@@ -39,8 +39,7 @@ export type RouteReason = (typeof ROUTE_REASONS)[keyof typeof ROUTE_REASONS];
 
 export interface GrowthAgentEnv {
   INTERNAL_SECRET?: string;
-  /** Optional rollover secret — accepted in parallel during the rotation window. */
-  INTERNAL_SECRET_ROLLOVER?: string;
+  INTERNAL_SECRET_PREVIOUS?: string;
   INTERNAL_SECRET_ROTATION_WINDOW_HOURS?: string;
   APP_VERSION?: string;
   RESPONSE_SCHEMA_VERSION?: string;
@@ -49,6 +48,7 @@ export interface GrowthAgentEnv {
   AI_TIMEOUT_MS?: string;
   AI_MAX_RETRIES?: string;
   AI_OUTPUT_REPAIR_ATTEMPTS?: string;
+  FEATURE_FLAGS_JSON?: string;
   BUDGET_PER_TENANT_PER_MIN?: string;
   RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN?: string;
   CAPABILITY_GROWTH_NEXT_ACTION_ENABLED?: string;
@@ -116,39 +116,92 @@ export interface RuntimeConfig {
 }
 
 export function getRuntimeConfig(env: GrowthAgentEnv): RuntimeConfig {
-  const parsedFlags = parseFeatureFlags(env);
+  const parsedFlags = parseFeatureFlags(env.FEATURE_FLAGS_JSON);
+
   return {
     appVersion: env.APP_VERSION ?? DEFAULTS.appVersion,
     requestSchemaVersion: env.REQUEST_SCHEMA_VERSION ?? DEFAULTS.requestSchemaVersion,
     responseSchemaVersion: env.RESPONSE_SCHEMA_VERSION ?? DEFAULTS.responseSchemaVersion,
     model: env.AI_MODEL ?? "@cf/meta/llama-3.1-8b-instruct",
-    timeoutMs: parsePositiveInt(env.AI_TIMEOUT_MS, DEFAULTS.timeoutMs),
-    maxRetries: parsePositiveInt(env.AI_MAX_RETRIES, DEFAULTS.maxRetries),
-    outputRepairAttempts: parsePositiveInt(env.AI_OUTPUT_REPAIR_ATTEMPTS, DEFAULTS.outputRepairAttempts),
-    budgetPerTenantPerMinute: parsePositiveInt(env.BUDGET_PER_TENANT_PER_MIN, DEFAULTS.budgetPerTenantPerMinute),
-    rateLimitPerTenantCapabilityPerMinute: parsePositiveInt(
+    timeoutMs: toInt(env.AI_TIMEOUT_MS, DEFAULTS.timeoutMs),
+    maxRetries: toInt(env.AI_MAX_RETRIES, DEFAULTS.maxRetries),
+    outputRepairAttempts: toInt(env.AI_OUTPUT_REPAIR_ATTEMPTS, DEFAULTS.outputRepairAttempts),
+    budgetPerTenantPerMinute: toInt(
+      env.BUDGET_PER_TENANT_PER_MIN,
+      DEFAULTS.budgetPerTenantPerMinute,
+    ),
+    rateLimitPerTenantCapabilityPerMinute: toInt(
       env.RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN,
       DEFAULTS.rateLimitPerTenantCapabilityPerMinute,
     ),
-    secretRotationWindowHours: parsePositiveInt(
+    secretRotationWindowHours: toInt(
       env.INTERNAL_SECRET_ROTATION_WINDOW_HOURS,
       DEFAULTS.secretRotationWindowHours,
     ),
-    featureFlags: parsedFlags,
+    featureFlags: {
+      "growth-next-action": resolveCapabilityEnabled(
+        env,
+        "growth-next-action",
+        parsedFlags["growth-next-action"],
+      ),
+      "growth-signal-summarize": resolveCapabilityEnabled(
+        env,
+        "growth-signal-summarize",
+        parsedFlags["growth-signal-summarize"],
+      ),
+      "journey-critic": resolveCapabilityEnabled(env, "journey-critic", parsedFlags["journey-critic"]),
+      "message-brief": resolveCapabilityEnabled(env, "message-brief", parsedFlags["message-brief"]),
+      "outcome-diagnose": resolveCapabilityEnabled(
+        env,
+        "outcome-diagnose",
+        parsedFlags["outcome-diagnose"],
+      ),
+    },
   };
 }
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function resolveCapabilityEnabled(
+  env: GrowthAgentEnv,
+  capability: CapabilityName,
+  fallbackFlag: boolean | undefined,
+): boolean {
+  const envName = CAPABILITY_ENV_FLAGS[capability];
+  const raw = env[envName];
+  if (typeof raw === "string") {
+    return raw.toLowerCase() === "true";
+  }
+  return fallbackFlag ?? false;
 }
 
-function parseFeatureFlags(env: GrowthAgentEnv): Record<CapabilityName, boolean> {
-  return {
-    "growth-next-action": env[CAPABILITY_ENV_FLAGS["growth-next-action"]] === "true",
-    "growth-signal-summarize": env[CAPABILITY_ENV_FLAGS["growth-signal-summarize"]] === "true",
-    "journey-critic": env[CAPABILITY_ENV_FLAGS["journey-critic"]] === "true",
-    "message-brief": env[CAPABILITY_ENV_FLAGS["message-brief"]] === "true",
-    "outcome-diagnose": env[CAPABILITY_ENV_FLAGS["outcome-diagnose"]] === "true",
-  };
+function toInt(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const n = Number.parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function parseFeatureFlags(raw: string | undefined): Partial<Record<CapabilityName, boolean>> {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      "growth-next-action": toBool(parsed["growth-next-action"]),
+      "growth-signal-summarize": toBool(parsed["growth-signal-summarize"]),
+      "journey-critic": toBool(parsed["journey-critic"]),
+      "message-brief": toBool(parsed["message-brief"]),
+      "outcome-diagnose": toBool(parsed["outcome-diagnose"]),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function toBool(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return undefined;
 }

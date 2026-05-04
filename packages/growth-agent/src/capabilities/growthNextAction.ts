@@ -3,7 +3,7 @@ import {
   GrowthNextActionResponseSchema,
   type GrowthNextActionRequest,
   type GrowthNextActionResponse,
-} from "@clodo/growth-agent-contracts";
+} from "@matrikz/growth-agent-contracts";
 import { DEFAULTS, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
 import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
@@ -12,24 +12,12 @@ const CAPABILITY: CapabilityName = "growth-next-action";
 
 export const PROMPT_REGISTRY = {
   current: {
-    version: "growth-next-action-1.1.0",
+    version: "growth-next-action-1.0.0",
     systemPrompt: [
-      "You are a growth decisioning assistant. Analyze contact signals and return the optimal next action.",
-      "",
-      "Respond with ONLY a valid JSON object — no markdown, no code fences, no prose outside the JSON.",
-      "",
-      "Required JSON structure (field names and enum values are exact):",
-      '{ "action": { "type": "<one of: wait | manual_review | enroll_sequence | send_via_skrip | pause_campaign | start_campaign | pause_contact | escalate_to_human>", "params": { "subjectId": "<same as input subjectId>" }, "reason": "<short phrase — why this action>" }, "riskLevel": "<one of: low | medium | high | critical>", "confidence": <number 0.0-1.0>, "explanation": "<1-2 sentences in the outputLocale language>", "rawSummary": "<brief signal interpretation>" }',
-      "",
-      "Example output for a contact with high engagement signals:",
-      '{"action":{"type":"enroll_sequence","params":{"sequenceId":"onboarding","subjectId":"c_123"},"reason":"high engagement signals suggest readiness"},"riskLevel":"low","confidence":0.87,"explanation":"Contact shows strong intent and is ready for onboarding sequence.","rawSummary":"High engagement, lifecycle_stage=qualified, no churn risk."}',
-      "",
-      "Rules:",
-      "- action.type MUST be exactly one of the 8 enum values listed above.",
-      "- riskLevel MUST be exactly one of: low, medium, high, critical.",
-      "- confidence MUST be a decimal number between 0.0 and 1.0.",
-      "- explanation and rawSummary MUST be in the language specified by outputLocale in the input.",
-      "- action.params MUST include at minimum the subjectId field from the input.",
+      "You are a growth decisioning assistant.",
+      "Return strict JSON only.",
+      "Structured fields stay in English constants.",
+      "Free-text explanation fields must follow outputLocale.",
     ].join("\n"),
     outputSchema: GrowthNextActionResponseSchema,
   },
@@ -97,14 +85,14 @@ export function deterministicFallback(
     },
     riskLevel: "low",
     confidence: 0.2,
-    explanation: "Deterministic fallback selected for safe continuity.",
+    explanation: "Deterministic fallback selected.",
     rawSummary: "Predictive route unavailable.",
   };
 }
 
-function clampConfidence(response: GrowthNextActionResponse): GrowthNextActionResponse {
+function clampConfidence(input: GrowthNextActionResponse): GrowthNextActionResponse {
   return {
-    ...response,
-    confidence: Math.max(0, Math.min(1, response.confidence)),
+    ...input,
+    confidence: Math.min(1, Math.max(0, input.confidence)),
   };
 }

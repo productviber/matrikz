@@ -2,7 +2,7 @@ import {
   JourneyCriticRequestSchema,
   JourneyCriticResponseSchema,
   type JourneyCriticResponse,
-} from "@clodo/growth-agent-contracts";
+} from "@matrikz/growth-agent-contracts";
 import { DEFAULTS, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
 import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
@@ -12,26 +12,32 @@ const CAPABILITY: CapabilityName = "journey-critic";
 export const PROMPT_REGISTRY = {
   current: {
     version: "journey-critic-1.0.0",
-    systemPrompt: [
-      "You are a customer journey critic.",
-      "Return strict JSON only.",
-      "Free-text fields must follow outputLocale.",
-    ].join("\n"),
+    systemPrompt: "Return strict JSON only. Localize free-text fields to outputLocale.",
     outputSchema: JourneyCriticResponseSchema,
   },
-  previous: [],
+  previous: [
+    {
+      version: "journey-critic-0.9.0",
+      systemPrompt: "Legacy prompt kept for shadow compare.",
+      outputSchema: JourneyCriticResponseSchema,
+    },
+  ],
 } as const;
+
+export interface JourneyCriticDeps {
+  llm: LlmAdapter;
+  config: RuntimeConfig;
+}
 
 export async function handleJourneyCritic(
   input: unknown,
-  deps: { llm: LlmAdapter; config: RuntimeConfig },
+  deps: JourneyCriticDeps,
 ): Promise<{ data: JourneyCriticResponse; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   const parsedInput = JourneyCriticRequestSchema.safeParse(input);
   if (!parsedInput.success) {
     throw new Error("VALIDATION_ERROR");
   }
 
-  const locale = parsedInput.data.outputLocale ?? "en";
   const result = await generateStructured(
     deps.llm,
     {
@@ -42,7 +48,7 @@ export async function handleJourneyCritic(
       maxRetries: deps.config.maxRetries,
       outputRepairAttempts: deps.config.outputRepairAttempts,
       systemPrompt: PROMPT_REGISTRY.current.systemPrompt,
-      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale }),
+      userPrompt: JSON.stringify(parsedInput.data),
     },
     (value: unknown): value is JourneyCriticResponse =>
       PROMPT_REGISTRY.current.outputSchema.safeParse(value).success,

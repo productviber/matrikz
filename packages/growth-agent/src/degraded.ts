@@ -84,7 +84,7 @@ function fallbackMessageBrief(input: MessageBriefRequest, reason: string): Messa
 function fallbackOutcomeDiagnose(reason: string): OutcomeDiagnoseResponse {
   return {
     diagnosis: "Deterministic diagnosis fallback.",
-    likelyCauses: ["insufficient_observation_window"],
-    recommendedNextExperiments: [reason],
+    likelyCauses: [reason],
+    recommendedNextExperiments: ["extend_observation_window"],
   };
 }

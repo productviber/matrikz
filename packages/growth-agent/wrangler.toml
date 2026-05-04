@@ -6,43 +6,95 @@ compatibility_date = "2026-05-03"
 APP_VERSION = "0.1.0"
 RESPONSE_SCHEMA_VERSION = "1.0.0"
 REQUEST_SCHEMA_VERSION = "1.0.0"
-AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-AI_TIMEOUT_MS = "8000"
+ENVIRONMENT = "production"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+AI_TIMEOUT_MS = "3500"
 AI_MAX_RETRIES = "1"
 AI_OUTPUT_REPAIR_ATTEMPTS = "1"
+FEATURE_FLAGS_JSON = "{\"growth-next-action\":false,\"growth-signal-summarize\":false,\"journey-critic\":false,\"message-brief\":false,\"outcome-diagnose\":false}"
 BUDGET_PER_TENANT_PER_MIN = "120"
 RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN = "180"
 INTERNAL_SECRET_ROTATION_WINDOW_HOURS = "24"
-# All capabilities off by default — enable per-environment after deployment validation
 CAPABILITY_GROWTH_NEXT_ACTION_ENABLED = "false"
 CAPABILITY_GROWTH_SIGNAL_SUMMARIZE_ENABLED = "false"
 CAPABILITY_JOURNEY_CRITIC_ENABLED = "false"
 CAPABILITY_MESSAGE_BRIEF_ENABLED = "false"
 CAPABILITY_OUTCOME_DIAGNOSE_ENABLED = "false"
 
-# Secrets (set via `wrangler secret put` — never in vars):
-#   INTERNAL_SECRET
-#   INTERNAL_SECRET_ROLLOVER     (optional; active only during rotation window)
-
 [ai]
+binding = "WORKERS_AI"
+
+[env.development]
+name = "growth-agent-dev"
+
+[env.development.ai]
 binding = "WORKERS_AI"
 
 [env.development.vars]
 APP_VERSION = "0.1.0"
 RESPONSE_SCHEMA_VERSION = "1.0.0"
 REQUEST_SCHEMA_VERSION = "1.0.0"
-AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-AI_TIMEOUT_MS = "60000"
+ENVIRONMENT = "development"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+AI_TIMEOUT_MS = "3500"
 AI_MAX_RETRIES = "1"
 AI_OUTPUT_REPAIR_ATTEMPTS = "1"
+FEATURE_FLAGS_JSON = "{\"growth-next-action\":true,\"growth-signal-summarize\":true,\"journey-critic\":true,\"message-brief\":true,\"outcome-diagnose\":true}"
 BUDGET_PER_TENANT_PER_MIN = "120"
 RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN = "180"
 INTERNAL_SECRET_ROTATION_WINDOW_HOURS = "24"
 CAPABILITY_GROWTH_NEXT_ACTION_ENABLED = "true"
+CAPABILITY_GROWTH_SIGNAL_SUMMARIZE_ENABLED = "true"
+CAPABILITY_JOURNEY_CRITIC_ENABLED = "true"
+CAPABILITY_MESSAGE_BRIEF_ENABLED = "true"
+CAPABILITY_OUTCOME_DIAGNOSE_ENABLED = "true"
+
+[env.staging]
+name = "growth-agent-staging"
+
+[env.staging.ai]
+binding = "WORKERS_AI"
+
+[env.staging.vars]
+APP_VERSION = "0.1.0"
+RESPONSE_SCHEMA_VERSION = "1.0.0"
+REQUEST_SCHEMA_VERSION = "1.0.0"
+ENVIRONMENT = "staging"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+AI_TIMEOUT_MS = "3500"
+AI_MAX_RETRIES = "1"
+AI_OUTPUT_REPAIR_ATTEMPTS = "1"
+FEATURE_FLAGS_JSON = "{\"growth-next-action\":true,\"growth-signal-summarize\":true,\"journey-critic\":true,\"message-brief\":true,\"outcome-diagnose\":true}"
+BUDGET_PER_TENANT_PER_MIN = "120"
+RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN = "180"
+INTERNAL_SECRET_ROTATION_WINDOW_HOURS = "24"
+CAPABILITY_GROWTH_NEXT_ACTION_ENABLED = "true"
+CAPABILITY_GROWTH_SIGNAL_SUMMARIZE_ENABLED = "true"
+CAPABILITY_JOURNEY_CRITIC_ENABLED = "true"
+CAPABILITY_MESSAGE_BRIEF_ENABLED = "true"
+CAPABILITY_OUTCOME_DIAGNOSE_ENABLED = "true"
+
+[env.production]
+name = "growth-agent-production"
+
+[env.production.ai]
+binding = "WORKERS_AI"
+
+[env.production.vars]
+APP_VERSION = "0.1.0"
+RESPONSE_SCHEMA_VERSION = "1.0.0"
+REQUEST_SCHEMA_VERSION = "1.0.0"
+ENVIRONMENT = "production"
+AI_MODEL = "@cf/meta/llama-3.1-8b-instruct"
+AI_TIMEOUT_MS = "3500"
+AI_MAX_RETRIES = "1"
+AI_OUTPUT_REPAIR_ATTEMPTS = "1"
+FEATURE_FLAGS_JSON = "{\"growth-next-action\":false,\"growth-signal-summarize\":false,\"journey-critic\":false,\"message-brief\":false,\"outcome-diagnose\":false}"
+BUDGET_PER_TENANT_PER_MIN = "120"
+RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN = "180"
+INTERNAL_SECRET_ROTATION_WINDOW_HOURS = "24"
+CAPABILITY_GROWTH_NEXT_ACTION_ENABLED = "false"
 CAPABILITY_GROWTH_SIGNAL_SUMMARIZE_ENABLED = "false"
 CAPABILITY_JOURNEY_CRITIC_ENABLED = "false"
 CAPABILITY_MESSAGE_BRIEF_ENABLED = "false"
 CAPABILITY_OUTCOME_DIAGNOSE_ENABLED = "false"
-
-[env.development.ai]
-binding = "WORKERS_AI"

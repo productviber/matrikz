@@ -51,8 +51,8 @@ describe("growth-signal-summarize", () => {
       },
     });
 
-    await expect(handleGrowthSignalSummarize(invalidGrowthSignalSummarizePayload, { llm, config })).rejects.toThrow(
-      "VALIDATION_ERROR",
-    );
+    await expect(
+      handleGrowthSignalSummarize(invalidGrowthSignalSummarizePayload, { llm, config }),
+    ).rejects.toThrow("VALIDATION_ERROR");
   });
 });

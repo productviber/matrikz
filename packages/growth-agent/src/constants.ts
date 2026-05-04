@@ -1,4 +1,4 @@
-import { ACTION_TYPE_WHITELIST, SIGNAL_TYPE_ENUM } from "@clodo/growth-agent-contracts";
+import { ACTION_TYPE_WHITELIST, SIGNAL_TYPE_ENUM } from "@matrikz/growth-agent-contracts";
 
 export const API_PREFIX = "/internal";
 
@@ -75,6 +75,14 @@ export const SLO_TARGETS = {
   maxFallbackRatePct: 15,
   rolloutGateWindowMinutes: 30,
 } as const;
+
+// Hard cap on inbound request body size (bytes). Keeps Workers memory bounded
+// and eliminates prompt-injection via oversized payloads.
+export const MAX_PAYLOAD_BYTES = 32_768; // 32 KB
+
+// Sorted latency boundaries used to bucket requests into histogram slots.
+// Aligned with SLO_TARGETS.latencyP99Ms thresholds for easy comparison.
+export const LATENCY_HISTOGRAM_BUCKETS = [50, 100, 250, 500, 800, 1500, 3000, 3500] as const;
 
 export const MODEL_COST_PER_1K_TOKENS_USD: Record<string, number> = {
   "@cf/meta/llama-3.1-8b-instruct": 0,

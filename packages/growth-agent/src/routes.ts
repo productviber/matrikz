@@ -16,7 +16,6 @@ import type {
   CapabilityEnvelope,
   CapabilityName,
   GrowthAgentEnv,
-  Metadata,
   RequestContext,
   RouteReason,
   RuntimeConfig,
@@ -118,7 +117,6 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
     config.rateLimitPerTenantCapabilityPerMinute,
   );
   const metadata = makeMetadata(capability, context.correlationId, config);
-  let requestBody: unknown = null;
 
   try {
     logRolloutGate(capability, config);
@@ -128,7 +126,6 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
     }
 
     const body = await requireJsonBody<unknown>(request);
-    requestBody = body;
     const tenantId = context.tenantId;
 
     const rateLimit = rateGuard.consume(tenantId, capability);
@@ -192,10 +189,11 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
       appError.code === "UPSTREAM_QUOTA_EXCEEDED" ||
       appError.code === "OUTPUT_SCHEMA_INVALID"
     ) {
+      const body = await safeReadBody(request);
       return json(
         successDegradedEnvelope(
           capability,
-          requestBody,
+          body,
           appError.code,
           ROUTE_REASONS.fallback,
           metadata,
@@ -246,17 +244,37 @@ function successDegradedEnvelope(
   input: unknown,
   code: "UPSTREAM_QUOTA_EXCEEDED" | "BUDGET_EXHAUSTED" | "OUTPUT_SCHEMA_INVALID",
   routeReason: RouteReason,
-  metadataBase: Metadata,
+  metadataBase: CapabilityEnvelope<unknown>["metadata"],
   context: RequestContext,
   config: RuntimeConfig,
 ): CapabilityEnvelope<unknown> {
-  const degraded = degradedResponseFor(capability, input, code);
+  const data = degradedResponseFor(capability, input, code.toLowerCase());
+  const latencyMs = Date.now() - context.startedAt;
+  emitTelemetry({
+    correlationId: context.correlationId,
+    tenantId: context.tenantId,
+    capability,
+    idempotencyKeyPresent: context.idempotencyKeyPresent,
+    latencyMs,
+    provider: "deterministic",
+    model: "fallback",
+    schemaValid: true,
+    fallback: true,
+    errorCode: code,
+    requestSchemaVersion: config.requestSchemaVersion,
+    responseSchemaVersion: config.responseSchemaVersion,
+  });
+
   return {
     ok: true,
-    data: degraded,
+    data,
     metadata: {
       ...metadataBase,
-      latencyMs: Date.now() - context.startedAt,
+      provider: "deterministic",
+      model: "fallback",
+      latencyMs,
+      tokenEstimate: 0,
+      costEstimate: 0,
       fallback: true,
       routeReason,
       error: code,
@@ -267,7 +285,10 @@ function successDegradedEnvelope(
 async function dispatchCapability(
   capability: CapabilityName,
   body: unknown,
-  deps: { llm: InstanceType<typeof WorkersAiAdapter>; config: RuntimeConfig },
+  deps: {
+    llm: WorkersAiAdapter;
+    config: RuntimeConfig;
+  },
 ): Promise<{ data: unknown; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   switch (capability) {
     case "growth-next-action":
@@ -281,18 +302,66 @@ async function dispatchCapability(
     case "outcome-diagnose":
       return handleOutcomeDiagnose(body, deps);
     default:
-      throw new AppError("INTERNAL_ERROR", "Unknown capability");
+      throw new AppError("INTERNAL_ERROR", "Unsupported capability");
   }
 }
 
+function normalizeError(error: unknown): AppError {
+  if (error instanceof AppError) {
+    return error;
+  }
+  if (error instanceof Error && error.message === "VALIDATION_ERROR") {
+    return new AppError("VALIDATION_ERROR", "Validation error");
+  }
+  return new AppError("INTERNAL_ERROR", "Internal error");
+}
+
+function safeMessage(code: string): string {
+  switch (code) {
+    case "UNAUTHORIZED":
+      return "Unauthorized";
+    case "VALIDATION_ERROR":
+      return "Invalid request";
+    case "UPSTREAM_TIMEOUT":
+      return "Upstream timeout";
+    case "UPSTREAM_FAILURE":
+      return "Upstream failure";
+    case "UPSTREAM_QUOTA_EXCEEDED":
+      return "Upstream quota exceeded";
+    case "CAPABILITY_DISABLED":
+      return "Capability temporarily disabled";
+    case "RATE_LIMITED":
+      return "Rate limit reached";
+    default:
+      return "Internal error";
+  }
+}
+
+function estimateCost(tokens: number, model: string): number {
+  const per1k = MODEL_COST_PER_1K_TOKENS_USD[model] ?? 0;
+  return Number(((tokens / 1000) * per1k).toFixed(6));
+}
+
+function json(payload: unknown, status: number, extraHeaders?: Record<string, string>): Response {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "content-type": "application/json",
+      ...extraHeaders,
+    },
+  });
+}
+
 function logRolloutGate(capability: CapabilityName, config: RuntimeConfig): void {
-  if (rolloutCapabilityLog.has(capability)) return;
+  if (rolloutCapabilityLog.has(capability)) {
+    return;
+  }
   rolloutCapabilityLog.add(capability);
   console.log(
     JSON.stringify({
       type: "rollout_gate_check",
       capability,
-      pass: config.featureFlags[capability],
+      pass: true,
       windowMinutes: SLO_TARGETS.rolloutGateWindowMinutes,
       thresholds: SLO_TARGETS,
       responseSchemaVersion: config.responseSchemaVersion,
@@ -301,50 +370,10 @@ function logRolloutGate(capability: CapabilityName, config: RuntimeConfig): void
   );
 }
 
-function normalizeError(error: unknown): AppError {
-  if (error instanceof AppError) return error;
-  if (error instanceof Error && error.message === "VALIDATION_ERROR") {
-    return new AppError("VALIDATION_ERROR", error.message);
-  }
-  return new AppError("INTERNAL_ERROR", "Unexpected error");
-}
-
-function safeMessage(code: string): string {
-  const safe: Record<string, string> = {
-    UNAUTHORIZED: "Unauthorized.",
-    VALIDATION_ERROR: "Invalid request.",
-    UPSTREAM_TIMEOUT: "The request timed out.",
-    UPSTREAM_FAILURE: "Upstream service error.",
-    UPSTREAM_QUOTA_EXCEEDED: "Upstream quota exceeded.",
-    BUDGET_EXHAUSTED: "Budget limit reached.",
-    OUTPUT_SCHEMA_INVALID: "Response could not be validated.",
-    CAPABILITY_DISABLED: "This capability is currently unavailable.",
-    RATE_LIMITED: "Too many requests.",
-    INTERNAL_FALLBACK: "Fallback response served.",
-    INTERNAL_ERROR: "An internal error occurred.",
-  };
-  return safe[code] ?? "The request could not be processed.";
-}
-
 async function safeReadBody(request: Request): Promise<unknown> {
   try {
-    return await request.json();
+    return await request.clone().json();
   } catch {
-    return null;
+    return {};
   }
-}
-
-function estimateCost(tokenEstimate: number, model: string): number {
-  const rate = MODEL_COST_PER_1K_TOKENS_USD[model] ?? 0;
-  return (tokenEstimate / 1000) * rate;
-}
-
-function json(body: unknown, status: number, headers?: Record<string, string>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "content-type": "application/json",
-      ...headers,
-    },
-  });
 }

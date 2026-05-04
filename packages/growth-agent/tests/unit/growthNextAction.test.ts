@@ -28,7 +28,7 @@ describe("growth-next-action", () => {
   it("returns model result when valid", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {
-        action: { type: "send_via_skrip", params: {}, reason: "high intent" },
+        action: { type: "send_message", params: {}, reason: "high intent" },
         riskLevel: "low",
         confidence: 0.83,
         explanation: "Act now",
@@ -39,13 +39,13 @@ describe("growth-next-action", () => {
     const result = await handleGrowthNextAction(detailedGrowthNextActionPayload, { llm, config });
 
     expect(result.fallback).toBe(false);
-    expect(result.data.action.type).toBe("send_via_skrip");
+    expect(result.data.action.type).toBe("send_message");
   });
 
   it("throws validation error for malformed input", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {
-        action: { type: "send_via_skrip", params: {}, reason: "high intent" },
+        action: { type: "send_message", params: {}, reason: "high intent" },
         riskLevel: "low",
         confidence: 0.83,
         explanation: "Act now",
@@ -53,16 +53,16 @@ describe("growth-next-action", () => {
       },
     });
 
-    await expect(handleGrowthNextAction(invalidGrowthNextActionPayload, { llm, config })).rejects.toThrow(
-      "VALIDATION_ERROR",
-    );
+    await expect(
+      handleGrowthNextAction(invalidGrowthNextActionPayload, { llm, config }),
+    ).rejects.toThrow("VALIDATION_ERROR");
   });
 
   it("throws upstream failure when LLM output is invalid", async () => {
     const llm = mockWorkersAiInvalidOutput();
 
     await expect(handleGrowthNextAction(detailedGrowthNextActionPayload, { llm, config })).rejects.toThrow(
-      "invalid_output",
+      "LLM generation failed",
     );
   });
 });

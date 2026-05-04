@@ -1,41 +1,6 @@
-﻿# Dependencies
-node_modules
-*.pnp
-pnpm-lock.yaml
-package-lock.json
-
-# Build outputs
-dist
-build
-coverage
-**/coverage/
-*.tsbuildinfo
-.env.local
-.env.*.local
-
-# IDE
-.vscode
-.idea
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-npm-debug.log*
-pnpm-debug.log*
-
-# Wrangler
-.wrangler
-worker_imports
-
-# Environment
-.env
-.env.production
-.dev.vars
+# Local secrets for Wrangler / Cloudflare
 **/.dev.vars
+**/.dev.vars.*
 
+# Keep optional examples tracked if created later
+!**/.dev.vars.example

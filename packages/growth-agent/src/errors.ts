@@ -1,5 +1,5 @@
 import { ROUTE_REASONS } from "./constants";
-import type { ErrorEnvelope } from "@clodo/growth-agent-contracts";
+import type { ErrorEnvelope } from "@matrikz/growth-agent-contracts";
 import type { CapabilityName, ErrorCode, Metadata, RuntimeConfig } from "./types";
 
 const ERROR_POLICY: Record<ErrorCode, { status: number; retryable: boolean }> = {

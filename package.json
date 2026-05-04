@@ -1,25 +1,13 @@
 {
-  "name": "visibility-platform",
-  "version": "1.0.0",
-  "type": "module",
+  "name": "matrikz",
   "private": true,
-  "description": "Full-stack monolithic workers for Visibility Cockpit platform",
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "dev": "pnpm -r dev",
-    "build": "pnpm -r build",
-    "typecheck": "pnpm -r typecheck",
-    "deploy": "pnpm -r deploy",
-    "clean": "pnpm -r clean && rm -rf node_modules pnpm-lock.yaml",
-    "secrets:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/setup-secrets.ps1"
-  },
-  "devDependencies": {
-    "pnpm": "^10.30.0",
-    "typescript": "^5.3.0"
-  },
-  "pnpm": {
-    "overrides": {
-      "react": "^18.2.0",
-      "react-dom": "^18.2.0"
-    }
+    "typecheck": "npm run --workspaces typecheck",
+    "test": "npm run --workspaces test",
+    "verify": "npm run typecheck && npm test"
   }
 }

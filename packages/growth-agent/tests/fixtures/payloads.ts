@@ -4,7 +4,7 @@ import type {
   JourneyCriticRequest,
   MessageBriefRequest,
   OutcomeDiagnoseRequest,
-} from "@clodo/growth-agent-contracts";
+} from "@matrikz/growth-agent-contracts";
 
 export const detailedGrowthNextActionPayload: GrowthNextActionRequest = {
   tenantId: "tenant-1",

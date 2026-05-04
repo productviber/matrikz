@@ -8,16 +8,12 @@ export const CAPABILITY_NAMES = [
   "outcome-diagnose",
 ] as const;
 
-// Must match AGENT_ACTION_TYPE in packages/marketer/src/constants.ts exactly.
 export const ACTION_TYPE_WHITELIST = [
+  "send_message",
   "wait",
-  "manual_review",
-  "enroll_sequence",
-  "send_via_skrip",
-  "pause_campaign",
-  "start_campaign",
-  "pause_contact",
-  "escalate_to_human",
+  "escalate",
+  "offer",
+  "nudge",
 ] as const;
 
 export const ERROR_CODES = [
@@ -35,13 +31,7 @@ export const ERROR_CODES = [
 ] as const;
 
 export const SEMVER_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
-
-/**
- * Correlation ID format: base36-timestamp + hyphen + base36-random (4+ chars).
- * Matches the output of getCorrelationId() in packages/marketer/src/lib/correlation.ts:
- *   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
- */
-export const CORRELATION_ID_REGEX = /^[a-z0-9]+-[a-z0-9]{4,}$/;
+export const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const SIGNAL_TYPE_ENUM = [
   "intent",

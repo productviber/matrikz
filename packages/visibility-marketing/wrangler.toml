@@ -1,0 +1,44 @@
+name = "visibility-marketing"
+main = "src/index.ts"
+compatibility_date = "2026-05-03"
+
+[[services]]
+binding = "GROWTH_AGENT"
+service = "growth-agent-production"
+
+[vars]
+GROWTH_AGENT_TIMEOUT_MS = "1800"
+ENVIRONMENT = "production"
+
+[env.development]
+name = "visibility-marketing-dev"
+
+[[env.development.services]]
+binding = "GROWTH_AGENT"
+service = "growth-agent-dev"
+
+[env.development.vars]
+GROWTH_AGENT_TIMEOUT_MS = "1800"
+ENVIRONMENT = "development"
+
+[env.staging]
+name = "visibility-marketing-staging"
+
+[[env.staging.services]]
+binding = "GROWTH_AGENT"
+service = "growth-agent-staging"
+
+[env.staging.vars]
+GROWTH_AGENT_TIMEOUT_MS = "1800"
+ENVIRONMENT = "staging"
+
+[env.production]
+name = "visibility-marketing-production"
+
+[[env.production.services]]
+binding = "GROWTH_AGENT"
+service = "growth-agent-production"
+
+[env.production.vars]
+GROWTH_AGENT_TIMEOUT_MS = "1800"
+ENVIRONMENT = "production"
