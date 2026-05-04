@@ -4,6 +4,9 @@ Date: 2026-05-03
 Owner: visibility-marketing worker
 Scope: Make email-first + agent-led multi-channel execution production-real.
 
+Staging endpoint: https://visibility-marketing-staging.wetechfounders.workers.dev
+Staging version: 28810905-587d-425d-87e5-44f9a52f8736
+
 ## 1. Verified Existing Capability (Do Not Rebuild)
 
 - [x] Event ingress from analytics service binding and trusted source checks.
@@ -70,8 +73,8 @@ Scope: Make email-first + agent-led multi-channel execution production-real.
 
 ### Live Staging
 
-- [ ] Smoke: `/api/identity/mint` and `/api/identity/verify` success paths.
-- [ ] Smoke: `/api/admin/skrip/flags`, `/api/admin/skrip/policy-state`, `/api/admin/skrip/killswitch/drill`, `/api/admin/skrip/dlq/replay` all return 200.
+- [x] Smoke: `/api/identity/mint` and `/api/identity/verify` success paths.
+- [x] Smoke: `/api/admin/skrip/flags`, `/api/admin/skrip/policy-state`, `/api/admin/skrip/killswitch/drill`, `/api/admin/skrip/dlq/replay` all return 200.
 - [ ] Dry-run cohort: 24h block-reason distribution captured by policy rule.
 - [ ] Enabled cohort (small): dispatch and failure rates within threshold.
 
@@ -146,5 +149,22 @@ Scope: Make email-first + agent-led multi-channel execution production-real.
 - [x] Deployed to dev environment
 - [ ] Unit tests added for identity token, policy, flags
 - [ ] Integration tests added for admin routes
-- [ ] Smoke script created and passing
+- [x] Smoke script created and passing
 - [ ] All 1019+ tests passing after additions
+
+---
+
+## 8. Next Activities (Remaining)
+
+1. Add and stabilize unit tests:
+	- `packages/marketer/tests/unit/identity-token.test.ts`
+	- `packages/marketer/tests/unit/skrip-policy.test.ts`
+2. Add integration test for admin Skrip route consistency:
+	- `packages/marketer/tests/unit/admin-skrip.integration.test.ts`
+3. Run full marketer test suite and keep baseline green:
+	- Target: 1019+ tests passing with new additions
+4. Collect rollout evidence on staging:
+	- 24h policy block-reason distribution
+	- small enabled cohort dispatch/failure thresholds
+5. Close rollout gates with evidence:
+	- Gate 2 (eligible identities), Gate 3 (block-rate drop), Gate 4 (signed outcomes), Gate 5 (compliance regression)

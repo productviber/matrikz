@@ -1,5 +1,10 @@
 param([string]$Url = 'https://visibility-marketing-dev.wetechfounders.workers.dev',
-      [string]$Token = 'tss2T_rXGS5-xEY4E6q6GogNa-sLx8DLvikdTTpjGPk')
+  [string]$Token = 'tss2T_rXGS5-xEY4E6q6GogNa-sLx8DLvikdTTpjGPk',
+  [string]$SystemToken = '')
+
+if ([string]::IsNullOrWhiteSpace($SystemToken)) {
+  $SystemToken = $Token
+}
 
 $p = 0; $f = 0
 
@@ -25,7 +30,7 @@ try {
 # 3. Verify
 Write-Host "[3] Verify" -ForegroundColor Cyan
 try {
-  $r = Invoke-RestMethod "$Url/api/identity/verify" -Method POST -H @{"Content-Type"="application/json"} -Body "{`"token`":`"$tok`"}" -EA 0 -UseBasicParsing
+  $r = Invoke-RestMethod "$Url/api/identity/verify" -Method POST -H @{"Content-Type"="application/json";"x-system-token"="$SystemToken"} -Body "{`"token`":`"$tok`"}" -EA 0 -UseBasicParsing
   if ($r.ok) { $p++ } else { $f++ }
   Write-Host "$(if ($r.ok) {'✓'} else {'✗'})" -ForegroundColor $(if ($r.ok) {'Green'} else {'Red'})
 } catch { Write-Host "✗" -ForegroundColor Red; $f++ }
@@ -41,7 +46,7 @@ try {
 # 5. Policy
 Write-Host "[5] Policy" -ForegroundColor Cyan
 try {
-  $r = Invoke-RestMethod "$Url/api/admin/skrip/policy-state?tenantId=default" -H @{Authorization="Bearer $Token"} -EA 0 -UseBasicParsing
+  $r = Invoke-RestMethod "$Url/api/admin/skrip/policy-state?tenantId=default&channel=push" -H @{Authorization="Bearer $Token"} -EA 0 -UseBasicParsing
   if ($r.ok) { $p++ } else { $f++ }
   Write-Host "$(if ($r.ok) {'✓'} else {'✗'})" -ForegroundColor $(if ($r.ok) {'Green'} else {'Red'})
 } catch { Write-Host "✗" -ForegroundColor Red; $f++ }

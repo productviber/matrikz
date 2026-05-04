@@ -110,6 +110,42 @@ service = "growth-agent"
 binding = "SKRIP_SERVICE"
 service = "message-manufacturer-platform"
 
+# ─── Staging Environment ────────────────────────────────────────────────────
+[env.staging]
+name = "visibility-marketing-staging"
+
+[env.staging.vars]
+ENVIRONMENT = "staging"
+FROM_EMAIL = "product@clodo.dev"
+FROM_NAME = "AXEO (Staging)"
+EMAIL_PROVIDER = "brevo"
+ALLOWED_ORIGIN = "https://visibility.clodo.dev"
+PAYOUT_PROVIDER = "stub"
+GROWTH_AGENT_TIMEOUT_MS = "12000"
+
+[[env.staging.kv_namespaces]]
+binding = "KV_MARKETING"
+id = "8fae6d27403d4ca5be5f901097464901"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "visibility-marketing-db"
+database_id = "00bb447b-f813-4f00-929b-b709f64f8872"
+migrations_dir = "migrations"
+
+[[env.staging.services]]
+binding = "ANALYTICS"
+service = "visibility-analytics"
+
+[[env.staging.services]]
+binding = "AI_ENGINE"
+service = "growth-agent"
+
+[[env.staging.services]]
+binding = "SKRIP_SERVICE"
+service = "message-manufacturer-platform"
+
+
 # ─── Build Configuration ────────────────────────────────────────────────────
 [build]
 command = "npx vite build"
