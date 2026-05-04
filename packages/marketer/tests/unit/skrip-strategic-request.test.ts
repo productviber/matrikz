@@ -80,7 +80,66 @@ describe('Skrip strategic request generation', () => {
       'forbiddenClaims',
       'complianceTags',
     ]);
-    expect(request.channelPreferences).toEqual(['email', 'push']);
+    // email is filtered out — only dispatchable channels (push/whatsapp/telegram/sms) are sent
+    expect(request.channelPreferences).toEqual(['push']);
     expect(request.brief.fallbackTemplateKey).toBe('agentic-skrip-followup');
+  });
+
+  it('falls back to [push] when all effective channels are email-only (non-dispatchable)', () => {
+    const emailOnlyAction = {
+      action_id: 'act_email',
+      idempotency_key: 'tenant:subject:signal:none:0:email',
+      correlation_id: 'corr_email',
+      agent_id: null,
+      tenant_id: 'tenant-1',
+      subject_id: 'subject-1',
+      signal_id: 'signal-1',
+      proposed_action: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+      proposedAction: {
+        type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+        params: {},
+        reason: 'Email-only outreach',
+      },
+      proposed_action_json: '{}',
+      status: 'approved',
+      risk_level: 'low',
+      confidence: 80,
+      evidence_json: '{}',
+      input_hash: 'h',
+      output_hash: 'h',
+      policy_result_json: JSON.stringify({ allowed: true, effectiveChannels: ['email'], blockedReasons: [] }),
+      policyResult: { allowed: true, effectiveChannels: ['email'], blockedReasons: [] },
+      ai_metadata_json: '{}',
+      aiMetadata: {},
+      created_at: 1,
+      updated_at: 1,
+      approved_at: 1,
+      executed_at: 1,
+      outcome_due_at: 1,
+      outcome_json: null,
+    } as unknown as AgentActionView;
+
+    const emailIntent = buildGrowthExecutionIntent(emailOnlyAction);
+    const emailBriefResult = {
+      brief: {
+        objective: 'email outreach',
+        channel: 'email',
+        locale: 'en',
+        headline: 'Quick check-in',
+        bodyIntent: 'Send a short email follow-up',
+        cta: 'Reply here',
+        tone: 'helpful',
+        personalizationHints: [] as string[],
+        offerContext: {},
+        fallbackTemplateKey: 'agentic-email-followup',
+      },
+      source: 'deterministic',
+      degradedReason: null,
+      metadata: null,
+    } as const;
+
+    const emailRequest = buildSkripStrategicRequest(emailOnlyAction, emailIntent, emailBriefResult);
+    // email is not dispatchable via strategic send; falls back to push
+    expect(emailRequest.channelPreferences).toEqual(['push']);
   });
 });
