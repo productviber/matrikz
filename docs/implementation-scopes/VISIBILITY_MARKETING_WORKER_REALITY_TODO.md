@@ -80,7 +80,7 @@ Staging version: 28810905-587d-425d-87e5-44f9a52f8736
 
 ## 5. Rollout Gates
 
-- [x] Gate 1: no misconfigured worker startup errors — 1019/1019 tests passing; deployed v0fcd0eee.
+- [x] Gate 1: no misconfigured worker startup errors — 1045/1045 tests passing; deployed v28810905.
 - [ ] Gate 2: >= 20 valid eligible identities in tenant default (requires live data).
 - [ ] Gate 3: policy block rate drops from no_eligible_skrip_channel baseline (requires observability).
 - [ ] Gate 4: signed outcome ingestion success rate stable (requires Skrip integration).
@@ -147,26 +147,26 @@ Staging version: 28810905-587d-425d-87e5-44f9a52f8736
 
 - [x] Code implementation complete for sections A–D
 - [x] Deployed to dev environment
-- [ ] Unit tests added for identity token, policy, flags
-- [ ] Integration tests added for admin routes
+- [x] Unit tests added for identity token, policy, flags
+- [x] Integration tests added for admin routes
 - [x] Smoke script created and passing
-- [ ] All 1019+ tests passing after additions
+- [x] All 1019+ tests passing after additions (1045/1045)
 
 ---
 
 ## 8. Next Activities (Remaining)
 
-1. Add and stabilize unit tests:
-	- `packages/marketer/tests/unit/identity-token.test.ts`
-	- `packages/marketer/tests/unit/skrip-policy.test.ts`
-2. Add integration test for admin Skrip route consistency:
-	- `packages/marketer/tests/unit/admin-skrip.integration.test.ts`
-3. Run full marketer test suite and keep baseline green:
-	- Target: 1019+ tests passing with new additions
-4. Collect rollout evidence on staging:
+Completed in this pass:
+- `packages/marketer/tests/unit/identity-token.test.ts` (12 tests)
+- `packages/marketer/tests/unit/skrip-policy.test.ts` (8 tests)
+- `packages/marketer/tests/unit/admin-skrip.integration.test.ts` (6 tests)
+- Targeted new-test run: `26/26` passing
+- Full marketer suite: `1045/1045` passing
+
+1. Collect rollout evidence on staging:
 	- 24h policy block-reason distribution
 	- small enabled cohort dispatch/failure thresholds
-5. Close rollout gates with evidence:
+2. Close rollout gates with evidence:
 	- Gate 2 (eligible identities), Gate 3 (block-rate drop), Gate 4 (signed outcomes), Gate 5 (compliance regression)
 
 ---
