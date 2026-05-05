@@ -8,19 +8,18 @@ export const CAPABILITY_NAMES = [
   "outcome-diagnose",
 ] as const;
 
+// Tier-1 intent vocabulary — what the agent decides.
+// Channel resolution (Tier 2) is handled by the dispatcher via ChannelPolicy.
+// Previously matched AGENT_ACTION_TYPE in packages/marketer/src/constants.ts;
+// the dispatcher now translates intent → channel before forwarding to the marketer.
 export const ACTION_TYPE_WHITELIST = [
-  "send_message",
-  "wait",
-  "escalate",
-  "offer",
-  "nudge",
-  "manual_review",
-  "enroll_sequence",
-  "send_via_skrip",
-  "pause_campaign",
-  "start_campaign",
-  "pause_contact",
-  "escalate_to_human",
+  "nurture",   // early lifecycle, low intensity — inform/educate
+  "activate",  // warm/ready, medium intensity — invite/prompt
+  "convert",   // high-readiness, high intensity — offer/push
+  "recover",   // at-risk/drifting, targeted — win-back/re-engage
+  "pause",     // overloaded/fatigued — apply fatigue guard
+  "escalate",  // stuck/needs human — hand off
+  "wait",      // insufficient signal — no action yet
 ] as const;
 
 export const ERROR_CODES = [
@@ -33,9 +32,13 @@ export const ERROR_CODES = [
   "OUTPUT_SCHEMA_INVALID",
   "CAPABILITY_DISABLED",
   "RATE_LIMITED",
+  "CORRELATION_NOT_FOUND",
+  "DUPLICATE_OUTCOME",
   "INTERNAL_FALLBACK",
   "INTERNAL_ERROR",
 ] as const;
+
+export const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const SEMVER_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-.]+)?(?:\+[0-9A-Za-z-.]+)?$/;
 export const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -48,6 +51,33 @@ export const SIGNAL_TYPE_ENUM = [
   "revenue",
   "activity",
 ] as const;
+
+/**
+ * Canonical outcome delta values for the feedback loop.
+ * Callers MUST use these constants — never inline floats.
+ * Used by the marketer to call /internal/outcome-feedback after observing an event.
+ */
+export const OUTCOME_DELTA_MAP = {
+  delivered:    0.1,
+  opened:       0.5,
+  clicked:      0.7,
+  converted:    1.0,
+  no_response:  0.0,
+  unsubscribed: -0.5,
+  bounced:      -0.3,
+  dlq_dropped:  -1.0,
+} as const;
+
+export type OutcomeMetric = keyof typeof OUTCOME_DELTA_MAP;
+
+export const TENANT_STATUS_ENUM = ["active", "paused", "churned"] as const;
+
+export const TenantRegistryMetaSchema = z.object({
+  status: z.enum(TENANT_STATUS_ENUM),
+  enrolledAt: z.string(),
+  updatedAt: z.string(),
+});
+export type TenantRegistryMeta = z.infer<typeof TenantRegistryMetaSchema>;
 
 const BaseSignal = z.object({
   name: z.enum(SIGNAL_TYPE_ENUM),
@@ -166,6 +196,72 @@ export const OutcomeDiagnoseResponseSchema = z.object({
   recommendedNextExperiments: z.array(z.string()),
 });
 
+export const TenantPriorSchema = z.object({
+  preferredTone: z.string().default("clear"),
+  avgConfidence: z.number().min(0).max(1).default(0.5),
+  topSignalWeights: z
+    .array(
+      z.object({
+        signal: z.string(),
+        weight: z.number().min(0).max(1),
+      }),
+    )
+    .default([]),
+  lastOutcomeDelta: z.number().default(0),
+  interactionCount: z.number().int().nonnegative().default(0),
+  calibrationFactor: z.number().min(0.5).max(1.5).default(1),
+  consecutiveNegativeOutcomes: z.number().int().nonnegative().default(0),
+  strategyWeights: z.object({
+    toneVariance: z.number().min(0.1).max(0.7).default(0.2),
+    urgencyBias: z.number().min(0).max(1).default(0.5),
+    conservatism: z.number().min(0).max(1).default(0.5),
+  }),
+  updatedAt: z.string(),
+});
+
+export const PendingRecommendationSchema = z.object({
+  tenantId: z.string(),
+  subjectId: z.string(),
+  capability: z.enum(CAPABILITY_NAMES),
+  action: z.object({
+    type: z.enum(ACTION_TYPE_WHITELIST),
+    params: z.record(z.unknown()),
+    reason: z.string(),
+  }),
+  confidence: z.number().min(0).max(1),
+  riskLevel: RiskLevelSchema,
+  correlationId: z.string(),
+  sourcePromptVersion: z.string(),
+  enqueuedAt: z.string(),
+  expiresAt: z.string(),
+  experimentId: z.string().optional(),
+  arm: z.enum(["treatment", "control"]).optional(),
+});
+
+export const OutcomeFeedbackRequestSchema = z.object({
+  correlationId: z.string(),
+  tenantId: z.string(),
+  subjectId: z.string(),
+  actionTaken: z.string(),
+  outcomeMetric: z.string(),
+  delta: z.number(),
+  observedAt: z.string(),
+});
+
+export const OutcomeFeedbackResponseSchema = z.object({
+  priorUpdated: z.boolean(),
+  calibrationDelta: z.number(),
+});
+
+export const TenantSubjectSchema = z.object({
+  subjectId: z.string(),
+  tenantId: z.string(),
+  signals: z.array(GrowthSignalSchema),
+  lastScannedAt: z.string().optional(),
+  staleSince: z.string(),
+  cooldownUntil: z.string().optional(),
+});
+
 export type CapabilityName = (typeof CAPABILITY_NAMES)[number];
 export type ActionType = (typeof ACTION_TYPE_WHITELIST)[number];
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -181,6 +277,11 @@ export type MessageBriefRequest = z.infer<typeof MessageBriefRequestSchema>;
 export type MessageBriefResponse = z.infer<typeof MessageBriefResponseSchema>;
 export type OutcomeDiagnoseRequest = z.infer<typeof OutcomeDiagnoseRequestSchema>;
 export type OutcomeDiagnoseResponse = z.infer<typeof OutcomeDiagnoseResponseSchema>;
+export type TenantPrior = z.infer<typeof TenantPriorSchema>;
+export type PendingRecommendation = z.infer<typeof PendingRecommendationSchema>;
+export type OutcomeFeedbackRequest = z.infer<typeof OutcomeFeedbackRequestSchema>;
+export type OutcomeFeedbackResponse = z.infer<typeof OutcomeFeedbackResponseSchema>;
+export type TenantSubject = z.infer<typeof TenantSubjectSchema>;
 
 export type Metadata = z.infer<typeof MetadataSchema>;
 

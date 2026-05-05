@@ -12,6 +12,8 @@ const ERROR_POLICY: Record<ErrorCode, { status: number; retryable: boolean }> = 
   OUTPUT_SCHEMA_INVALID: { status: 200, retryable: true },
   CAPABILITY_DISABLED: { status: 503, retryable: false },
   RATE_LIMITED: { status: 429, retryable: true },
+  CORRELATION_NOT_FOUND: { status: 404, retryable: false },
+  DUPLICATE_OUTCOME: { status: 409, retryable: false },
   INTERNAL_FALLBACK: { status: 200, retryable: true },
   INTERNAL_ERROR: { status: 500, retryable: false },
 };

@@ -61,7 +61,7 @@ function makeEnv(partial?: Partial<GrowthAgentEnv>): GrowthAgentEnv {
         if (payload.subjectId) {
           return {
             response: JSON.stringify({
-              action: { type: "send_message", params: {}, reason: "intent" },
+                action: { type: "activate", params: {}, reason: "intent" },
               riskLevel: "low",
               confidence: 0.8,
               explanation: "Go",

@@ -21,6 +21,9 @@
  *
  *   POST /api/campaigns                 — Create campaign / referral link
  *   GET  /api/campaigns                 — List campaigns
+ *   POST /api/campaigns/objectives      — Create campaign objective
+ *   GET  /api/campaigns/objectives      — List campaign objectives
+ *   GET  /api/campaigns/objectives/:id  — Get campaign objective
  *   GET  /api/campaigns/:slug           — Get campaign details
  *   PUT  /api/campaigns/:slug           — Update campaign
  *
@@ -86,6 +89,28 @@ import { handleAffiliatePortal, handleAffiliateStats } from './routes/affiliate-
 import { handleCreateAffiliateSession } from './routes/affiliate-session';
 import { handleAffiliateApply, handleAffiliateApprove, handleListApplications } from './routes/affiliate-recruitment';
 import { handleCreateCampaign, handleListCampaigns, handleGetCampaign, handleReferralRedirect, handleUpdateCampaign } from './routes/campaigns';
+import {
+  handleCampaignObjectiveScreen,
+  handleCreateCampaignObjective,
+  handleGetCampaignObjective,
+  handleListCampaignObjectives,
+} from './routes/campaign-objectives';
+import {
+  handleGetSegment,
+  handleListSegments,
+  handlePreviewSegment,
+  handleSaveSegment,
+  handleSegmentSelectionScreen,
+} from './routes/campaign-segments';
+import {
+  handleChannelIntentScreen,
+  handleGetChannelIntent,
+  handlePutChannelIntent,
+} from './routes/channel-intents';
+import {
+  handleSendStrategicBrief,
+  handleStrategicBriefingScreen,
+} from './routes/strategic-briefings';
 import { handleCreatePayoutBatch, handleProcessPayoutBatch, handleListPayoutBatches, handleGetPayoutBatch } from './routes/payouts';
 import {
   handleAdminDashboard,
@@ -293,6 +318,52 @@ export default {
       }
       if (method === 'GET' && path === '/api/campaigns') {
         return handleListCampaigns(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/campaign-objectives/screen') {
+        return handleCampaignObjectiveScreen(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/campaign-segments/screen') {
+        return handleSegmentSelectionScreen(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/channel-intent/screen') {
+        return handleChannelIntentScreen(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/strategic-briefings/screen') {
+        return handleStrategicBriefingScreen(request, env);
+      }
+      if (method === 'POST' && path === '/api/admin/strategic-briefings/send') {
+        return handleSendStrategicBrief(request, env);
+      }
+      if (method === 'POST' && path === '/api/campaigns/objectives') {
+        return handleCreateCampaignObjective(request, env);
+      }
+      if (method === 'GET' && path === '/api/campaigns/objectives') {
+        return handleListCampaignObjectives(request, env);
+      }
+      if (method === 'GET' && path.match(PATTERNS.ROUTE_CAMPAIGN_OBJECTIVE_ID)) {
+        const id = path.split('/').pop()!;
+        return handleGetCampaignObjective(request, env, id);
+      }
+      if (method === 'POST' && path === '/api/segments/preview') {
+        return handlePreviewSegment(request, env);
+      }
+      if (method === 'POST' && path === '/api/segments/save') {
+        return handleSaveSegment(request, env);
+      }
+      if (method === 'GET' && path === '/api/segments') {
+        return handleListSegments(request, env);
+      }
+      if (method === 'GET' && /^\/api\/segments\/[^/]+$/.test(path)) {
+        const id = path.split('/').pop()!;
+        return handleGetSegment(request, env, id);
+      }
+      if (method === 'GET' && /^\/api\/campaigns\/[^/]+\/channel-intent$/.test(path)) {
+        const campaignId = path.split('/')[3]!;
+        return handleGetChannelIntent(request, env, campaignId);
+      }
+      if (method === 'PUT' && /^\/api\/campaigns\/[^/]+\/channel-intent$/.test(path)) {
+        const campaignId = path.split('/')[3]!;
+        return handlePutChannelIntent(request, env, campaignId);
       }
       if (method === 'GET' && path.match(PATTERNS.ROUTE_CAMPAIGN_SLUG)) {
         const slug = path.split('/').pop()!;
@@ -723,27 +794,28 @@ export default {
         }
       }).catch((err) => {
         console.warn('[Cron] Agent attribution error:', err instanceof Error ? err.message : err);
-
-          // Write cron execution snapshot to KV for 24h trend monitoring / alerting
-          ctx.waitUntil(
-            (async () => {
-              try {
-                const cronSnapshot = JSON.stringify({
-                  runAt: Math.floor(Date.now() / 1000),
-                  runAtIso: new Date(event.scheduledTime).toISOString(),
-                  scheduledTime: event.scheduledTime,
-                });
-                const today = new Date(event.scheduledTime).toISOString().slice(0, 10);
-                await Promise.all([
-                  env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}latest`, cronSnapshot),
-                  env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}${today}`, cronSnapshot, { expirationTtl: TTL.DAYS_90 }),
-                ]);
-              } catch (snapshotErr) {
-                console.warn('[Cron] Snapshot KV write failed:', snapshotErr instanceof Error ? snapshotErr.message : snapshotErr);
-              }
-            })()
-          );
       })
+    );
+
+    // Write cron execution snapshot to KV for 24h trend monitoring / alerting.
+    // Runs unconditionally on every cron tick regardless of attribution outcome.
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const cronSnapshot = JSON.stringify({
+            runAt: Math.floor(Date.now() / 1000),
+            runAtIso: new Date(event.scheduledTime).toISOString(),
+            scheduledTime: event.scheduledTime,
+          });
+          const today = new Date(event.scheduledTime).toISOString().slice(0, 10);
+          await Promise.all([
+            env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}latest`, cronSnapshot),
+            env.KV_MARKETING.put(`${KV_PREFIX.CRON_SNAPSHOT}${today}`, cronSnapshot, { expirationTtl: TTL.DAYS_90 }),
+          ]);
+        } catch (snapshotErr) {
+          console.warn('[Cron] Snapshot KV write failed:', snapshotErr instanceof Error ? snapshotErr.message : snapshotErr);
+        }
+      })()
     );
   },
 };

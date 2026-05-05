@@ -1,0 +1,41 @@
+# Redacted snapshot of .dev.vars — safe for documentation and onboarding
+# All values replaced with ***REDACTED*** or EMPTY (if intentionally blank in source)
+# Last audited: 2026-05-05
+
+# Shared auth between analytics and marketing
+ADMIN_TOKEN=***REDACTED***
+ADMIN_TOKEN_ROLLOVER=***REDACTED***
+SYSTEM_TOKEN=***REDACTED***
+SYSTEM_TOKEN_ROLLOVER=***REDACTED***
+INTERNAL_SECRET=***REDACTED***
+INTERNAL_SECRET_ROLLOVER=***REDACTED***
+
+# Marketing worker auth
+AGENT_TOKEN=***REDACTED***
+AGENT_TOKEN_ROLLOVER=***REDACTED***
+WEBHOOK_TOKEN=***REDACTED***
+WEBHOOK_TOKEN_ROLLOVER=***REDACTED***
+AFFILIATE_AUTH_SECRET=***REDACTED***
+WEBHOOK_SIGNING_SECRET=***REDACTED***
+SKRIP_WEBHOOK_SIGNING_SECRET=***REDACTED***
+
+# Skrip integration
+SKRIP_SERVICE_TOKEN=***REDACTED***
+SKRIP_BASE_URL=https://message-manufacturer-platform.wetechfounders.workers.dev
+# SKRIP_WEBHOOK_SIGNING_SECRET must match skrip worker INBOUND_WEBHOOK_SECRET
+# SKRIP_SIGNING_SECRET — NOT in .dev.vars; optional for request signing
+
+# Notifications
+EMAIL_API_KEY=***REDACTED***
+SLACK_WEBHOOK_URL=EMPTY
+DISCORD_WEBHOOK_URL=EMPTY
+
+# Runtime vars (non-secret, mirrored locally for stability)
+FROM_EMAIL=product@clodo.dev
+FROM_NAME=Alex from AXEO
+ENVIRONMENT=development
+ALLOWED_ORIGIN=https://visibility.clodo.dev
+PAYOUT_PROVIDER=stub
+
+# Local tooling only — never set as a Cloudflare Worker secret
+CLOUDFLARE_API_TOKEN=***REDACTED***

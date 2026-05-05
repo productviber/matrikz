@@ -81,6 +81,47 @@ The platform moved from a mostly functional baseline to an explicit, fail-fast, 
 - Expectation:
   - Intentionally incomplete endpoints should return explicit contract status, not accidental 404/500 behavior.
 
+### 7) Skrip Multichannel Integration
+
+- Replaced/Refactored:
+  - Email-only execution path with no downstream manufacturing layer.
+- Improved To:
+  - `SKRIP_SERVICE` binding to `message-manufacturer-platform`.
+  - Outbox batch dispatch (`dispatchOutboxBatch`) fans out SMS, push, and WhatsApp messages via Skrip.
+  - Skrip outcome webhook at `/webhooks/skrip/v1/outcomes` writes back into `agent_action_outcomes`.
+  - New D1 migrations: `0013_skrip_integration_foundation.sql`, `0015_skrip_contact_address.sql`.
+- Expectation:
+  - `SKRIP_SERVICE_TOKEN` and `SKRIP_WEBHOOK_SIGNING_SECRET` must be set in production.
+  - Fallback to `WEBHOOK_SIGNING_SECRET` is supported for signing but not recommended.
+
+### 8) Agentic API Foundation
+
+- Replaced/Refactored:
+  - No machine-callable interface for growth actions. Growth decisions were manual or embedded in cron.
+- Improved To:
+  - `/api/agentic/*` namespace with 8 endpoints (growth signals, subject context, propose, dry-run, execute, read, audit, trace).
+  - Five-scope token model (`signals:read`, `subjects:read`, `actions:read`, `actions:propose`, `actions:dry_run`, `actions:execute_low_risk`, `actions:execute_high_risk`).
+  - `AI_ENGINE` service binding to `growth-agent` for advisory; circuit-breaker fallback to `WAIT`/`MANUAL_REVIEW`.
+  - `INTERNAL_SECRET` used as `x-internal-secret` header for AI Engine calls.
+  - New D1 migrations: `0014_agentic_growth_foundation.sql`, `0017_agent_action_linkage_and_tokens.sql`.
+- Expectation:
+  - `AGENT_TOKEN` and `AGENT_TOKEN_ROLLOVER` must be set in production.
+  - `INTERNAL_SECRET` and `INTERNAL_SECRET_ROLLOVER` must be set when `AI_ENGINE` binding is active.
+  - Default scopes when `AGENT_TOKEN_SCOPES` is unset: `signals:read, subjects:read, actions:read, actions:propose, actions:dry_run, actions:execute_low_risk`.
+
+### 9) Attribution and Outcome Loop
+
+- Replaced/Refactored:
+  - No systematic feedback path from delivery/engagement events back to action records.
+- Improved To:
+  - Cron `attributeAgentActionOutcomes` writes conversion and engagement outcomes into `agent_action_outcomes`.
+  - KV cron snapshot (`cron:snapshot:latest` + dated key) records every tick unconditionally for 24h trend monitoring.
+  - Stale action re-evaluation loop: `markStaleAgentActions` promotes low-risk stuck actions back to active.
+  - New D1 migrations: `0018_campaign_objectives.sql`, `0019_campaign_planning.sql`.
+- Expectation:
+  - KV snapshot write must run on every cron tick, independent of attribution sweep outcome.
+  - Attribution sweep errors should log a warning but never suppress the snapshot write.
+
 ## wrangler.toml Impact (What Changed and Why)
 
 Changes in `packages/analytics/wrangler.toml` and `packages/marketer/wrangler.toml` are primarily operational documentation and expectation-setting for secrets.
@@ -124,6 +165,15 @@ Required secrets:
 - `EMAIL_API_KEY`
 - `SLACK_WEBHOOK_URL`
 - `DISCORD_WEBHOOK_URL`
+- `INTERNAL_SECRET` — AI Engine bearer token
+- `INTERNAL_SECRET_ROLLOVER`
+- `SKRIP_SERVICE_TOKEN` — Skrip API auth
+- `SKRIP_WEBHOOK_SIGNING_SECRET` — inbound Skrip outcome webhook verification
+
+Optional Skrip overrides:
+
+- `SKRIP_BASE_URL` — set only if not using SKRIP_SERVICE binding
+- `SKRIP_SIGNING_SECRET` — outbound HMAC to Skrip (falls back to WEBHOOK_SIGNING_SECRET)
 
 Provider-specific payouts (only if selected):
 

@@ -473,6 +473,30 @@ export interface CampaignRow {
   updated_at: number;
 }
 
+export type CampaignObjectiveType = 'activation' | 'retention' | 'reactivation' | 'conversion' | 'expansion';
+
+export type CampaignObjectiveUrgency = 'low' | 'medium' | 'high';
+
+export type CampaignObjectiveStatus = 'draft' | 'active' | 'paused' | 'archived';
+
+export interface CampaignObjectiveRow {
+  id: string;
+  objective_type: CampaignObjectiveType;
+  campaign_name: string;
+  business_goal_statement: string;
+  urgency: CampaignObjectiveUrgency;
+  success_metric_primary: string;
+  success_metric_secondary: string | null;
+  start_at: string;
+  end_at: string;
+  timezone: string;
+  dry_run: number;
+  created_by: string;
+  created_at: number;
+  updated_at: number;
+  status: CampaignObjectiveStatus;
+}
+
 export interface PayoutBatchRow {
   id: number;
   status: 'pending' | 'processing' | 'completed' | 'failed';

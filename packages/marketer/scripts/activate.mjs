@@ -177,11 +177,50 @@ function fetchMigrationStatus(dbName) {
 
 // ─── Status model ─────────────────────────────────────────────────────────────
 
-const REQUIRED_SECRETS = ['ADMIN_TOKEN', 'EMAIL_API_KEY', 'EMAIL_PROVIDER'];
-const OPTIONAL_SECRETS = ['SLACK_WEBHOOK_URL', 'DISCORD_WEBHOOK_URL'];
+const REQUIRED_SECRETS = [
+  // Core auth tokens
+  'ADMIN_TOKEN', 'ADMIN_TOKEN_ROLLOVER',
+  'SYSTEM_TOKEN', 'SYSTEM_TOKEN_ROLLOVER',
+  'AGENT_TOKEN', 'AGENT_TOKEN_ROLLOVER',
+  'WEBHOOK_TOKEN', 'WEBHOOK_TOKEN_ROLLOVER',
+  'AFFILIATE_AUTH_SECRET',
+  'WEBHOOK_SIGNING_SECRET',
+  // Email
+  'EMAIL_API_KEY',
+  // AI Engine
+  'INTERNAL_SECRET', 'INTERNAL_SECRET_ROLLOVER',
+  // Skrip integration
+  'SKRIP_SERVICE_TOKEN',
+  'SKRIP_WEBHOOK_SIGNING_SECRET',
+];
+const OPTIONAL_SECRETS = [
+  'SLACK_WEBHOOK_URL',
+  'DISCORD_WEBHOOK_URL',
+  'SKRIP_SIGNING_SECRET',   // falls back to WEBHOOK_SIGNING_SECRET when absent
+];
 const RAZORPAY_SECRETS = ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET'];
 const STRIPE_SECRETS   = ['STRIPE_SECRET_KEY'];
-const MIGRATIONS       = ['0001_init.sql', '0002_payout_events.sql'];
+const MIGRATIONS       = [
+  '0001_init.sql',
+  '0002_payout_events.sql',
+  '0003_share_leads.sql',
+  '0004_cold_outreach_sequence.sql',
+  '0005_outbound_campaigns.sql',
+  '0006_campaign_warmup_schedule.sql',
+  '0007_prospect_channels.sql',
+  '0008_audit_followup_sequence.sql',
+  '0009_suppression_list.sql',
+  '0010_email_sends_capability_hook.sql',
+  '0011_email_sends_engagement.sql',
+  '0012_email_sends_framing_tier.sql',
+  '0013_skrip_integration_foundation.sql',
+  '0014_agentic_growth_foundation.sql',
+  '0015_skrip_contact_address.sql',
+  '0016_push_receipts_status.sql',
+  '0017_agent_action_linkage_and_tokens.sql',
+  '0018_campaign_objectives.sql',
+  '0019_campaign_planning.sql',
+];
 
 // ─── Print status report ──────────────────────────────────────────────────────
 
@@ -413,8 +452,22 @@ async function configure(local, todos) {
     else if (task.secret) {
       const hints = {
         ADMIN_TOKEN: 'generate a strong random token (e.g. openssl rand -hex 32)',
+        ADMIN_TOKEN_ROLLOVER: 'generate a strong random token — set before rotating ADMIN_TOKEN',
+        SYSTEM_TOKEN: 'generate a strong random token',
+        SYSTEM_TOKEN_ROLLOVER: 'generate a strong random token — set before rotating SYSTEM_TOKEN',
+        AGENT_TOKEN: 'generate a strong random token — used by growth-agent for agentic API calls',
+        AGENT_TOKEN_ROLLOVER: 'generate a strong random token — set before rotating AGENT_TOKEN',
+        WEBHOOK_TOKEN: 'generate a strong random token',
+        WEBHOOK_TOKEN_ROLLOVER: 'generate a strong random token — set before rotating WEBHOOK_TOKEN',
+        AFFILIATE_AUTH_SECRET: 'generate a strong random token — used to sign affiliate payloads',
+        WEBHOOK_SIGNING_SECRET: 'generate a strong random token — HMAC signing for webhook ingestion',
         EMAIL_API_KEY: 'your Brevo or SendGrid API key',
         EMAIL_PROVIDER: 'brevo or sendgrid',
+        INTERNAL_SECRET: 'generate a strong random token — sent as x-internal-secret to AI Engine',
+        INTERNAL_SECRET_ROLLOVER: 'generate a strong random token — set before rotating INTERNAL_SECRET',
+        SKRIP_SERVICE_TOKEN: 'bearer token for outbound Skrip API calls',
+        SKRIP_WEBHOOK_SIGNING_SECRET: 'HMAC secret for verifying inbound Skrip outcome webhooks',
+        SKRIP_SIGNING_SECRET: 'HMAC for outbound signing to Skrip (optional — falls back to WEBHOOK_SIGNING_SECRET)',
         SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/...',
         DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/...',
         RAZORPAY_KEY_ID: 'rzp_live_xxxxxxxxxxxxx',

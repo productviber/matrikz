@@ -52,20 +52,21 @@ Each worker owns specific routes and responsibilities:
 - /api/* - User-scoped endpoints
 - /internal/report-data/* - For marketer worker
 
-**visibility-marketer handles:**
-- / - Home page
-- /features - Features page
-- /pricing - Pricing page
-- /report/:domain - Public reports
-- /widget.js - Embeddable widget
-- /affiliate/* - Affiliate tracking
+**visibility-marketing handles:**
+- /api/agentic/* — Agentic growth API (growth-agent callable)
+- /api/admin/* — Admin management endpoints
+- /api/user/* — Subject-scoped user endpoints
+- /api/system/* — Internal system endpoints
+- /webhooks/* — Webhook ingestion (Skrip outcomes, affiliate, analytics)
+- /api/events/* — Event ingestion (email engagement, push receipts)
+- Cron pipeline — Email dispatch, reputation, outbox, attribution
 
 No overlap = no confusion.
 
 ### 2. Independent Scaling
 
 Traffic doesn't compete:
-- Marketer handles high-volume public traffic (public reports, landing pages)
+- Marketing handles agentic API calls, webhook ingestion, and cron-driven orchestration
 - Analytics serves authenticated users (lower volume, more expensive operations)
 - Separate KV stores allow different caching strategies
 
@@ -189,15 +190,16 @@ Ownership: Product & Analytics team
 - Internal APIs
 ```
 
-### Marketer Worker (Growth)
+### Marketing Worker (Growth Orchestration)
 
 Ownership: Growth & Marketing team
 ```
 - clodo-framework server setup (itty-router based)
-- Landing page rendering
-- Public report generation
-- Affiliate tracking
-- Email integration
+- Agentic API namespace (/api/agentic/*) — callable by growth-agent
+- Multi-channel execution via Skrip service binding
+- Policy engine: suppression, frequency, risk gating
+- Cron pipeline: email dispatch, reputation, outbox, attribution
+- Affiliate tracking and payout management
 - Widget serving
 - Conversion tracking
 ```

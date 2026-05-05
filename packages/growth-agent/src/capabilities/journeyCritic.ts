@@ -5,7 +5,7 @@ import {
 } from "@matrikz/growth-agent-contracts";
 import { DEFAULTS, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
-import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
+import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig, TenantPrior } from "../types";
 
 const CAPABILITY: CapabilityName = "journey-critic";
 
@@ -31,7 +31,7 @@ export interface JourneyCriticDeps {
 
 export async function handleJourneyCritic(
   input: unknown,
-  deps: JourneyCriticDeps,
+  deps: { llm: LlmAdapter; config: RuntimeConfig; tenantPrior?: TenantPrior | null },
 ): Promise<{ data: JourneyCriticResponse; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   const parsedInput = JourneyCriticRequestSchema.safeParse(input);
   if (!parsedInput.success) {
@@ -48,7 +48,8 @@ export async function handleJourneyCritic(
       maxRetries: deps.config.maxRetries,
       outputRepairAttempts: deps.config.outputRepairAttempts,
       systemPrompt: PROMPT_REGISTRY.current.systemPrompt,
-      userPrompt: JSON.stringify(parsedInput.data),
+      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale, tenantPrior: deps.tenantPrior ?? null }),
+      temperatureOverride: deps.tenantPrior?.strategyWeights.toneVariance,
     },
     (value: unknown): value is JourneyCriticResponse =>
       PROMPT_REGISTRY.current.outputSchema.safeParse(value).success,

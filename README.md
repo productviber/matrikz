@@ -16,12 +16,12 @@ Full-stack platform built with **parallel monolithic Cloudflare Workers** sharin
          │               │
     ┌────▼──────────┐   ┌──────▼──────────┐
     │ visibility-  │   │ visibility-     │
-    │ analytics    │   │ marketer        │
+    │ analytics    │   │ marketing       │
     │              │   │                 │
-    │ • Dashboard  │   │ • Landing pages │
-    │ • Auth       │   │ • Public reports│
-    │ • Data ingestion  │ • Widget      │
-    │ • User APIs  │   │ • Affiliate    │
+    │ • Dashboard  │   │ • Agentic API   │
+    │ • Auth       │   │ • Growth orch.  │
+    │ • Data ingestion  │ • Multi-channel│
+    │ • User APIs  │   │ • Attribution  │
     └────┬─────────┘   └──────┬─────────┘
          │                     │
          └────────┬────────────┘
@@ -74,13 +74,12 @@ visibility-platform/
 │   │   ├── vite.config.ts
 │   │   └── package.json
 │   │
-│   └── marketer/                   # Public-facing growth experience
+│   └── marketer/                   # Growth orchestration & agentic API worker
 │       ├── src/
-│       │   ├── index.ts            # itty-router app & routing (via clodo-framework)
-│       │   ├── routes/             # Landing pages, reports, widget
-│       │   ├── services/           # Analytics calls, email, attribution
-│       │   ├── components/         # Marketer-specific components
-│       │   └── pages/              # Full page components
+│       │   ├── index.ts            # Worker entry + scheduled cron handler
+│       │   ├── routes/             # admin, user, system, webhook, agentic lane routes
+│       │   ├── lib/                # access, auth, policy, AI Engine client, Skrip client
+│       │   └── events/             # event router + ingestion handlers
 │       ├── wrangler.toml
 │       ├── vite.config.ts
 │       └── package.json

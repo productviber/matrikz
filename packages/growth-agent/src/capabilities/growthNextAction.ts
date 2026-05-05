@@ -3,16 +3,24 @@ import {
   GrowthNextActionResponseSchema,
   type GrowthNextActionRequest,
   type GrowthNextActionResponse,
-} from "@matrikz/growth-agent-contracts";
-import { DEFAULTS, ROUTE_REASONS } from "../constants";
+} from "@clodo/growth-agent-contracts";
+import { ACTION_TYPE_POLICY, DEFAULTS, KNOWN_ACTION_TYPES, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
-import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
+import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig, TenantPrior } from "../types";
+
+type ActionType = (typeof KNOWN_ACTION_TYPES)[number];
+
+function getAllowedActionTypes(calibrationFactor: number): ActionType[] {
+  if (calibrationFactor < 0.85) return [...ACTION_TYPE_POLICY.conservative];
+  if (calibrationFactor >= 1.1) return [...ACTION_TYPE_POLICY.expansive];
+  return [...KNOWN_ACTION_TYPES];
+}
 
 const CAPABILITY: CapabilityName = "growth-next-action";
 
 export const PROMPT_REGISTRY = {
   current: {
-    version: "growth-next-action-1.2.0",
+      version: "growth-next-action-1.2.0",
     systemPrompt: [
       "You are a white-label growth decisioning assistant. Analyze contact signals, subject history, and policy hints to return the optimal next action.",
       "",
@@ -20,18 +28,28 @@ export const PROMPT_REGISTRY = {
       "If context.subjectContext.recentOutcomes contains prior actions with outcomeType 'no_outcome_observed', prefer a different action type than context.subjectContext.lastActionType.",
       "If context.policyHints.hintBlocked is true, do not propose any action type listed in context.policyHints.hintBlockedReasons.",
       "Use context.subjectContext.lifecycleStage to calibrate urgency: trial_expiring warrants higher urgency than prospect.",
-      "If proposing send_via_skrip, only choose it when context.policyHints.effectiveChannels includes at least one supported delivery channel.",
+        "If proposing activate, only choose it when context.policyHints.effectiveChannels includes at least one supported delivery channel.",
+        "If the subject shows fatigue signals (repeated no_response, churn_risk signal present), prefer pause over any outreach intent.",
       "",
       "Respond with ONLY a valid JSON object — no markdown, no code fences, no prose outside the JSON.",
       "",
       "Required JSON structure (field names and enum values are exact):",
-      '{ "action": { "type": "<one of: wait | manual_review | enroll_sequence | send_via_skrip | pause_campaign | start_campaign | pause_contact | escalate_to_human>", "params": { "subjectId": "<same as input subjectId>" }, "reason": "<short phrase — why this action>" }, "riskLevel": "<one of: low | medium | high | critical>", "confidence": <number 0.0-1.0>, "explanation": "<1-2 sentences in the outputLocale language>", "rawSummary": "<brief signal interpretation>" }',
+        '{ "action": { "type": "<one of: nurture | activate | convert | recover | pause | escalate | wait>", "params": { "subjectId": "<same as input subjectId>" }, "reason": "<short phrase — why this action>" }, "riskLevel": "<one of: low | medium | high | critical>", "confidence": <number 0.0-1.0>, "explanation": "<1-2 sentences in the outputLocale language>", "rawSummary": "<brief signal interpretation>" }',
       "",
-      "Example output for a contact with high engagement signals and prior outcomes:",
-      '{"action":{"type":"enroll_sequence","params":{"sequenceId":"onboarding","subjectId":"c_123"},"reason":"high engagement signals suggest readiness"},"riskLevel":"low","confidence":0.87,"explanation":"Contact shows strong intent and is ready for onboarding sequence.","rawSummary":"High engagement, lifecycle_stage=qualified, no churn risk."}',
+        "Intent definitions:",
+        "  nurture   — early lifecycle or low-signal subject; educate, inform, build trust",
+        "  activate  — warm/ready subject; invite, prompt, re-engage after warmup",
+        "  convert   — high-readiness subject; make offer, push toward commitment",
+        "  recover   — at-risk or drifted subject; targeted win-back, re-engagement",
+        "  pause     — subject showing fatigue or overload; apply suppression guard",
+        "  escalate  — stuck, blocked, or high-risk subject; hand off to human review",
+        "  wait      — insufficient signal; take no action until more data is available",
       "",
+        "Example output for a contact with high engagement signals and prior outcomes:",
+        '{"action":{"type":"activate","params":{"subjectId":"c_123"},"reason":"high engagement signals suggest readiness"},"riskLevel":"low","confidence":0.87,"explanation":"Contact shows strong intent and is ready to be activated.","rawSummary":"High engagement, lifecycle_stage=qualified, no churn risk."}',
+        "",
       "Rules:",
-      "- action.type MUST be exactly one of the 8 enum values listed above.",
+        "- action.type MUST be exactly one of the 7 intent values listed above.",
       "- riskLevel MUST be exactly one of: low, medium, high, critical.",
       "- confidence MUST be a decimal number between 0.0 and 1.0.",
       "- explanation and rawSummary MUST be in the language specified by outputLocale in the input.",
@@ -51,6 +69,7 @@ export const PROMPT_REGISTRY = {
 export interface GrowthNextActionDeps {
   llm: LlmAdapter;
   config: RuntimeConfig;
+  tenantPrior?: TenantPrior | null;
 }
 
 export async function handleGrowthNextAction(
@@ -63,6 +82,11 @@ export async function handleGrowthNextAction(
   }
 
   const locale = parsedInput.data.outputLocale ?? "en";
+  const allowedActions = getAllowedActionTypes(deps.tenantPrior?.calibrationFactor ?? 1.0);
+  const systemPrompt = [
+    PROMPT_REGISTRY.current.systemPrompt,
+    `You may only recommend actions from this set: ${JSON.stringify(allowedActions)}.`,
+  ].join("\n");
   const result = await generateStructured(
     deps.llm,
     {
@@ -72,11 +96,13 @@ export async function handleGrowthNextAction(
       timeoutMs: deps.config.timeoutMs,
       maxRetries: deps.config.maxRetries,
       outputRepairAttempts: deps.config.outputRepairAttempts,
-      systemPrompt: PROMPT_REGISTRY.current.systemPrompt,
-      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale }),
+      systemPrompt,
+      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale, tenantPrior: deps.tenantPrior ?? null }),
     },
-    (value: unknown): value is GrowthNextActionResponse =>
-      PROMPT_REGISTRY.current.outputSchema.safeParse(value).success,
+    (value: unknown): value is GrowthNextActionResponse => {
+      const parsed = PROMPT_REGISTRY.current.outputSchema.safeParse(value);
+      return parsed.success && (allowedActions as string[]).includes(parsed.data.action.type);
+    },
   );
 
   return {

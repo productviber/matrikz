@@ -14,6 +14,7 @@ export interface AiEngineMetadata {
   tokenEstimate: number | null;
   costEstimate: number | null;
   fallback: boolean;
+  correlationId: string | null;
   error?: string;
 }
 
@@ -91,6 +92,7 @@ function fallbackMetadata(capability: GrowthCapability, latencyMs: number, error
     tokenEstimate: null,
     costEstimate: null,
     fallback: true,
+    correlationId: null,
     error,
   };
 }
@@ -111,6 +113,7 @@ function metadataFromResponse(capability: GrowthCapability, response: Record<str
     tokenEstimate: typeof metadata.tokenEstimate === 'number' ? metadata.tokenEstimate : null,
     costEstimate: typeof metadata.costEstimate === 'number' ? metadata.costEstimate : null,
     fallback: false,
+    correlationId: typeof metadata.correlationId === 'string' ? metadata.correlationId : null,
   };
 }
 
@@ -136,14 +139,16 @@ async function requestCapability<T extends Record<string, unknown>>(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      const tenantId = normalizeTenantId(payload.tenantId as string | null ?? null);
+      const aiCorrelationId = `${tenantId}:${crypto.randomUUID()}`;
       const init = {
         method: 'POST',
         headers: {
           'Content-Type': CONTENT_TYPE_JSON,
-          'x-correlation-id': getCorrelationId(),
+          'x-correlation-id': aiCorrelationId,
           'x-capability-version': AI_ENGINE_CONFIG.CAPABILITY_VERSION,
           'x-internal-secret': env.INTERNAL_SECRET ?? '',
-          'x-tenant-id': normalizeTenantId(payload.tenantId as string | null ?? null),
+          'x-tenant-id': tenantId,
           'x-idempotency-key': crypto.randomUUID(),
         },
         body: stableStringify(payload),

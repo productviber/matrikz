@@ -5,7 +5,7 @@ import {
 } from "@matrikz/growth-agent-contracts";
 import { DEFAULTS, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
-import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
+import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig, TenantPrior } from "../types";
 
 const CAPABILITY: CapabilityName = "outcome-diagnose";
 
@@ -31,7 +31,7 @@ export interface OutcomeDiagnoseDeps {
 
 export async function handleOutcomeDiagnose(
   input: unknown,
-  deps: OutcomeDiagnoseDeps,
+  deps: { llm: LlmAdapter; config: RuntimeConfig; tenantPrior?: TenantPrior | null },
 ): Promise<{ data: OutcomeDiagnoseResponse; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   const parsedInput = OutcomeDiagnoseRequestSchema.safeParse(input);
   if (!parsedInput.success) {
@@ -48,7 +48,7 @@ export async function handleOutcomeDiagnose(
       maxRetries: deps.config.maxRetries,
       outputRepairAttempts: deps.config.outputRepairAttempts,
       systemPrompt: PROMPT_REGISTRY.current.systemPrompt,
-      userPrompt: JSON.stringify(parsedInput.data),
+      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale, tenantPrior: deps.tenantPrior ?? null }),
     },
     (value: unknown): value is OutcomeDiagnoseResponse =>
       PROMPT_REGISTRY.current.outputSchema.safeParse(value).success,

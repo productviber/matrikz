@@ -5,7 +5,7 @@ import {
 } from "@matrikz/growth-agent-contracts";
 import { DEFAULTS, ROUTE_REASONS } from "../constants";
 import { generateStructured } from "../llm/adapter";
-import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig } from "../types";
+import type { CapabilityName, LlmAdapter, RouteReason, RuntimeConfig, TenantPrior } from "../types";
 
 const CAPABILITY: CapabilityName = "growth-signal-summarize";
 
@@ -31,7 +31,7 @@ export interface GrowthSignalSummarizeDeps {
 
 export async function handleGrowthSignalSummarize(
   input: unknown,
-  deps: GrowthSignalSummarizeDeps,
+  deps: { llm: LlmAdapter; config: RuntimeConfig; tenantPrior?: TenantPrior | null },
 ): Promise<{ data: GrowthSignalSummarizeResponse; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   const parsedInput = GrowthSignalSummarizeRequestSchema.safeParse(input);
   if (!parsedInput.success) {
@@ -48,7 +48,8 @@ export async function handleGrowthSignalSummarize(
       maxRetries: deps.config.maxRetries,
       outputRepairAttempts: deps.config.outputRepairAttempts,
       systemPrompt: PROMPT_REGISTRY.current.systemPrompt,
-      userPrompt: JSON.stringify(parsedInput.data),
+      userPrompt: JSON.stringify({ input: parsedInput.data, outputLocale: locale, tenantPrior: deps.tenantPrior ?? null }),
+      temperatureOverride: deps.tenantPrior?.strategyWeights.toneVariance,
     },
     (value: unknown): value is GrowthSignalSummarizeResponse =>
       PROMPT_REGISTRY.current.outputSchema.safeParse(value).success,

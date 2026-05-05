@@ -11,11 +11,15 @@ import { degradedResponseFor } from "./degraded";
 import { AppError, makeMetadata, toErrorEnvelope } from "./errors";
 import { FailOpenBudgetGuard, InMemoryBudgetGuard, InMemoryRateLimitGuard } from "./guards";
 import { WorkersAiAdapter } from "./llm/workersAiAdapter";
+import { FetchLlmAdapter } from "./llm/fetchLlmAdapter";
+import { FailoverLlmAdapter } from "./llm/failoverLlmAdapter";
 import { emitTelemetry } from "./telemetry";
 import type {
   CapabilityEnvelope,
   CapabilityName,
   GrowthAgentEnv,
+  LlmAdapter,
+  Metadata,
   RequestContext,
   RouteReason,
   RuntimeConfig,
@@ -28,6 +32,9 @@ import { handleGrowthSignalSummarize } from "./capabilities/growthSignalSummariz
 import { handleJourneyCritic } from "./capabilities/journeyCritic";
 import { handleMessageBrief } from "./capabilities/messageBrief";
 import { handleOutcomeDiagnose } from "./capabilities/outcomeDiagnose";
+import { handleOutcomeFeedback } from "./capabilities/outcomeFeedback";
+import { getTenantPrior } from "./priors/tenantPriorStore";
+import { saveRecommendation } from "./queue/recommendationStore";
 
 const rolloutCapabilityLog = new Set<CapabilityName>();
 
@@ -58,14 +65,24 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
             requestSchemaVersion: config.requestSchemaVersion,
             responseSchemaVersion: config.responseSchemaVersion,
             idempotency: "non-idempotent-v1",
-            capabilities: Object.values(CAPABILITY_NAMES).map((name) => ({
-              name,
-              path: `/internal/${name}`,
-              enabled: config.featureFlags[name],
-              promptVersion: `${name}-1.0.0`,
-              responseSchemaVersion: config.responseSchemaVersion,
-              correlationId: authContext.correlationId,
-            })),
+            capabilities: [
+              ...Object.values(CAPABILITY_NAMES).map((name) => ({
+                name,
+                path: `/internal/${name}`,
+                enabled: config.featureFlags[name],
+                promptVersion: `${name}-1.0.0`,
+                responseSchemaVersion: config.responseSchemaVersion,
+                correlationId: authContext.correlationId,
+              })),
+              {
+                name: "outcome-feedback",
+                path: CAPABILITY_PATHS.outcomeFeedback,
+                enabled: (env.CAPABILITY_OUTCOME_FEEDBACK_ENABLED ?? "true").toLowerCase() === "true",
+                promptVersion: "outcome-feedback-1.0.0",
+                responseSchemaVersion: config.responseSchemaVersion,
+                correlationId: authContext.correlationId,
+              },
+            ],
           },
         },
         200,
@@ -81,6 +98,10 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
 
   if (request.method !== "POST" || !url.pathname.startsWith("/internal/")) {
     return json({ ok: false, error: { code: "INTERNAL_ERROR", message: "Not found", retryable: false } }, 404);
+  }
+
+  if (url.pathname === CAPABILITY_PATHS.outcomeFeedback) {
+    return handleOutcomeFeedbackRoute(request, env, config);
   }
 
   const capability = CAPABILITY_NAMES[url.pathname as keyof typeof CAPABILITY_NAMES];
@@ -109,7 +130,7 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
     );
   }
 
-  const llm = new WorkersAiAdapter(env);
+  const llm = createLlmAdapter(env);
   const budgetGuard: TenantBudgetGuard = new FailOpenBudgetGuard(
     new InMemoryBudgetGuard(config.budgetPerTenantPerMinute),
   );
@@ -149,7 +170,8 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
       );
     }
 
-    const result = await dispatchCapability(capability, body, { llm, config });
+    const tenantPrior = await getTenantPrior(env, tenantId);
+    const result = await dispatchCapability(capability, body, { llm, config, tenantPrior });
 
     const responseEnvelope: CapabilityEnvelope<unknown> = {
       ok: true,
@@ -180,6 +202,52 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
       requestSchemaVersion: config.requestSchemaVersion,
       responseSchemaVersion: config.responseSchemaVersion,
     });
+
+    if (
+      capability === "growth-next-action" &&
+      !result.fallback &&
+      typeof result.data === "object" &&
+      result.data !== null
+    ) {
+      const d = result.data as {
+        action?: { type?: string; params?: Record<string, unknown>; reason?: string };
+        confidence?: number;
+        riskLevel?: string;
+      };
+      const subjectId = (body as { subjectId?: unknown }).subjectId as string | undefined;
+      if (
+        d.action?.type &&
+        d.action.type !== "wait" &&
+        subjectId &&
+        d.confidence !== undefined &&
+        d.riskLevel
+      ) {
+        const now = new Date();
+        const expiresAt = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+        void saveRecommendation(
+          env,
+          {
+            tenantId,
+            subjectId,
+            capability: "growth-next-action",
+            action: {
+              type: d.action.type as import("@clodo/growth-agent-contracts").ActionType,
+              params: d.action.params ?? {},
+              reason: d.action.reason ?? "",
+            },
+            confidence: d.confidence,
+            riskLevel: d.riskLevel as "low" | "medium" | "high" | "critical",
+            correlationId: context.correlationId,
+            sourcePromptVersion: result.promptVersion,
+            enqueuedAt: now.toISOString(),
+            expiresAt,
+          },
+          "reactive",
+        ).catch((err: unknown) => {
+          console.log(JSON.stringify({ type: "recommendation_save_error", error: err instanceof Error ? err.message : "unknown", correlationId: context.correlationId }));
+        });
+      }
+    }
 
     return json(responseEnvelope, 200);
   } catch (error) {
@@ -285,10 +353,7 @@ function successDegradedEnvelope(
 async function dispatchCapability(
   capability: CapabilityName,
   body: unknown,
-  deps: {
-    llm: WorkersAiAdapter;
-    config: RuntimeConfig;
-  },
+  deps: { llm: LlmAdapter; config: RuntimeConfig; tenantPrior?: Awaited<ReturnType<typeof getTenantPrior>> },
 ): Promise<{ data: unknown; fallback: boolean; routeReason: RouteReason; tokenEstimate: number; promptVersion: string }> {
   switch (capability) {
     case "growth-next-action":
@@ -368,6 +433,86 @@ function logRolloutGate(capability: CapabilityName, config: RuntimeConfig): void
       requestSchemaVersion: config.requestSchemaVersion,
     }),
   );
+}
+
+function normalizeError(error: unknown): AppError {
+  if (error instanceof AppError) return error;
+  if (error instanceof Error && error.message === "VALIDATION_ERROR") {
+    return new AppError("VALIDATION_ERROR", error.message);
+  }
+  return new AppError("INTERNAL_ERROR", "Unexpected error");
+}
+
+async function handleOutcomeFeedbackRoute(
+  request: Request,
+  env: GrowthAgentEnv,
+  config: RuntimeConfig,
+): Promise<Response> {
+  const startedAt = Date.now();
+  try {
+    const context = requireInternalAuth(request, env, config);
+    if ((env.CAPABILITY_OUTCOME_FEEDBACK_ENABLED ?? "true").toLowerCase() !== "true") {
+      throw new AppError("CAPABILITY_DISABLED", "Outcome feedback disabled");
+    }
+    const body = await requireJsonBody<unknown>(request);
+    const data = await handleOutcomeFeedback(body, env, config);
+
+    return json(
+      {
+        ok: true,
+        data,
+        metadata: {
+          ...makeMetadata("outcome-diagnose", context.correlationId, config),
+          fallback: false,
+          routeReason: ROUTE_REASONS.predictive,
+          error: null,
+          latencyMs: Date.now() - startedAt,
+        },
+      },
+      200,
+    );
+  } catch (error) {
+    const appError = normalizeError(error);
+    return json(
+      {
+        ok: false,
+        error: {
+          code: appError.code,
+          message: safeMessage(appError.code),
+          retryable: appError.retryable,
+        },
+      },
+      appError.status,
+    );
+  }
+}
+
+function createLlmAdapter(env: GrowthAgentEnv): LlmAdapter {
+  const primary = new WorkersAiAdapter(env);
+  if (env.SECONDARY_LLM_PROVIDER_URL && env.SECONDARY_LLM_PROVIDER_API_KEY) {
+    const secondary = new FetchLlmAdapter(env.SECONDARY_LLM_PROVIDER_URL, env.SECONDARY_LLM_PROVIDER_API_KEY);
+    return new FailoverLlmAdapter(primary, secondary);
+  }
+  return primary;
+}
+
+function safeMessage(code: string): string {
+  const safe: Record<string, string> = {
+    UNAUTHORIZED: "Unauthorized.",
+    VALIDATION_ERROR: "Invalid request.",
+    UPSTREAM_TIMEOUT: "The request timed out.",
+    UPSTREAM_FAILURE: "Upstream service error.",
+    UPSTREAM_QUOTA_EXCEEDED: "Upstream quota exceeded.",
+    BUDGET_EXHAUSTED: "Budget limit reached.",
+    OUTPUT_SCHEMA_INVALID: "Response could not be validated.",
+    CAPABILITY_DISABLED: "This capability is currently unavailable.",
+    RATE_LIMITED: "Too many requests.",
+    CORRELATION_NOT_FOUND: "Correlation was not found.",
+    DUPLICATE_OUTCOME: "Duplicate outcome rejected.",
+    INTERNAL_FALLBACK: "Fallback response served.",
+    INTERNAL_ERROR: "An internal error occurred.",
+  };
+  return safe[code] ?? "The request could not be processed.";
 }
 
 async function safeReadBody(request: Request): Promise<unknown> {

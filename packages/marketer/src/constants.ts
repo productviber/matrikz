@@ -343,6 +343,11 @@ export const CRON_EMAIL_TIME_BUDGET_MS = 25_000;
 export const MAX_LENGTH = {
   AFFILIATE_CODE: 30,
   CAMPAIGN_SLUG: 50,
+  CAMPAIGN_OBJECTIVE_ID: 64,
+  CAMPAIGN_OBJECTIVE_NAME: 80,
+  CAMPAIGN_OBJECTIVE_GOAL_STATEMENT: 500,
+  CAMPAIGN_OBJECTIVE_METRIC: 120,
+  CAMPAIGN_OBJECTIVE_TIMEZONE: 64,
   NOTIFICATION_SUMMARY: 500,
   JSON_PREVIEW_SHORT: 200,
   JSON_PREVIEW_LONG: 300,
@@ -504,11 +509,24 @@ export const PATTERNS = {
   NOTE_SALE_AMOUNT: /sale\s*\$(\d+\.\d+)/,
   NOTE_COMMISSION: /commission\s*\$(\d+\.\d+)/,
   ROUTE_CAMPAIGN_SLUG: /^\/api\/campaigns\/[^/]+$/,
+  ROUTE_CAMPAIGN_OBJECTIVE_ID: /^\/api\/campaigns\/objectives\/[^/]+$/,
   ROUTE_PAYOUT_BATCH_PROCESS: /^\/api\/payouts\/batch\/\d+\/process$/,
   ROUTE_PAYOUT_ID: /^\/api\/payouts\/\d+$/,
   /** Matches /api/affiliate/:code/payout-details */
   ROUTE_AFFILIATE_PAYOUT_DETAILS: /^\/api\/affiliate\/[^/]+\/payout-details$/,
 } as const;
+
+export const CAMPAIGN_OBJECTIVE_TYPE = [
+  'activation',
+  'retention',
+  'reactivation',
+  'conversion',
+  'expansion',
+] as const;
+
+export const CAMPAIGN_OBJECTIVE_URGENCY = ['low', 'medium', 'high'] as const;
+
+export const CAMPAIGN_OBJECTIVE_STATUS = ['draft', 'active', 'paused', 'archived'] as const;
 
 // ─── Email Configuration ────────────────────────────────────────────────────
 
@@ -747,6 +765,12 @@ export const MESSAGES = {
     failedApproveAffiliate: 'Failed to approve affiliate',
     failedCreateCampaign: 'Failed to create campaign',
     failedUpdateCampaign: 'Failed to update campaign',
+    invalidCampaignObjectivePayload: 'Campaign objective payload is invalid',
+    invalidCampaignObjectiveStatus: 'Campaign objective status must be one of: draft, active, paused, archived',
+    campaignObjectiveNotFound: 'Campaign objective not found',
+    failedCreateCampaignObjective: 'Failed to create campaign objective',
+    failedListCampaignObjectives: 'Failed to load campaign objectives',
+    failedGetCampaignObjective: 'Failed to load campaign objective',
     failedCreateBatch: 'Failed to create payout batch',
     failedProcessBatch: 'Failed to process payout batch',
     failedDashboard: 'Failed to load dashboard',
@@ -769,6 +793,7 @@ export const MESSAGES = {
   // ── Success Messages ──
   success: {
     applicationReceived: "Application received! We'll review it within 48 hours.",
+    campaignObjectiveCreated: 'Campaign objective created successfully.',
     processedEmails: (count: number) => `Processed ${count} due emails`,
     gdprDeleted: 'All personal data has been erased.',
     unsubscribed: 'You have been unsubscribed from all marketing emails.',

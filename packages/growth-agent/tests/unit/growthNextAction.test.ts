@@ -15,6 +15,14 @@ const config: RuntimeConfig = {
   budgetPerTenantPerMinute: 10,
   rateLimitPerTenantCapabilityPerMinute: 10,
   secretRotationWindowHours: 24,
+  proactiveScanEnabled: false,
+  proactiveScanCooldownHours: 24,
+  priorTtlDays: 30,
+  calibrationRecalcAfterN: 10,
+  outcomeRetentionDays: 90,
+  auditSampleRate: 0.1,
+  proactiveScanBatchSize: 50,
+  maxPendingPerTenant: 5,
   featureFlags: {
     "growth-next-action": true,
     "growth-signal-summarize": true,
@@ -28,7 +36,7 @@ describe("growth-next-action", () => {
   it("returns model result when valid", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {
-        action: { type: "send_message", params: {}, reason: "high intent" },
+        action: { type: "activate", params: {}, reason: "high intent" },
         riskLevel: "low",
         confidence: 0.83,
         explanation: "Act now",
@@ -39,13 +47,13 @@ describe("growth-next-action", () => {
     const result = await handleGrowthNextAction(detailedGrowthNextActionPayload, { llm, config });
 
     expect(result.fallback).toBe(false);
-    expect(result.data.action.type).toBe("send_message");
+    expect(result.data.action.type).toBe("activate");
   });
 
   it("accepts production-format growth signals", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {
-        action: { type: "manual_review", params: {}, reason: "signal requires review" },
+        action: { type: "escalate", params: {}, reason: "signal requires review" },
         riskLevel: "medium",
         confidence: 0.72,
         explanation: "The signal indicates a strong but atypical pattern, so manual review is safest.",
@@ -59,8 +67,8 @@ describe("growth-next-action", () => {
       outputLocale: "en",
       context: {
         subjectContext: {
-          recentOutcomes: [{ actionType: "send_via_skrip", outcomeType: "no_outcome_observed", daysSinceExecution: 3, confidence: 0.35 }],
-          lastActionType: "send_via_skrip",
+          recentOutcomes: [{ actionType: "activate", outcomeType: "no_outcome_observed", daysSinceExecution: 3, confidence: 0.35 }],
+          lastActionType: "activate",
           lastActionDaysAgo: 3,
           activeSignalCount: 1,
           lifecycleStage: "prospect",
@@ -88,13 +96,13 @@ describe("growth-next-action", () => {
     const result = await handleGrowthNextAction(productionPayload, { llm, config });
 
     expect(result.fallback).toBe(false);
-    expect(result.data.action.type).toBe("manual_review");
+    expect(result.data.action.type).toBe("escalate");
   });
 
   it("throws validation error for malformed input", async () => {
     const llm = mockWorkersAi({
       "growth-next-action": {
-        action: { type: "send_message", params: {}, reason: "high intent" },
+        action: { type: "activate", params: {}, reason: "high intent" },
         riskLevel: "low",
         confidence: 0.83,
         explanation: "Act now",

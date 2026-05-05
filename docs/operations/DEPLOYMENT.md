@@ -138,23 +138,20 @@ In Cloudflare Dashboard:
 2. Create routes with pattern matching:
 
 ```
-Pattern: visibility.clodo.dev/report/*
-Worker: visibility-marketer
+Pattern: visibility.clodo.dev/api/agentic/*
+Worker: visibility-marketing
 
-Pattern: visibility.clodo.dev/features
-Worker: visibility-marketer
+Pattern: visibility.clodo.dev/api/admin/*
+Worker: visibility-marketing
 
-Pattern: visibility.clodo.dev/pricing
-Worker: visibility-marketer
+Pattern: visibility.clodo.dev/api/system/*
+Worker: visibility-marketing
 
-Pattern: visibility.clodo.dev/about
-Worker: visibility-marketer
-
-Pattern: visibility.clodo.dev/widget.js
-Worker: visibility-marketer
+Pattern: visibility.clodo.dev/webhooks/*
+Worker: visibility-marketing
 
 Pattern: visibility.clodo.dev/affiliate/*
-Worker: visibility-marketer
+Worker: visibility-marketing
 
 Pattern: visibility.clodo.dev/*
 Worker: visibility-analytics
@@ -175,14 +172,14 @@ Create a `wrangler.toml` in root:
 # Test analytics worker
 curl https://visibility.clodo.dev/health
 
-# Test marketer worker - landing page
-curl https://visibility.clodo.dev/
+# Test marketing worker - health
+curl https://visibility.clodo.dev/health
 
-# Test marketer worker - public report
-curl https://visibility.clodo.dev/report/example.com
+# Test marketing worker - agentic API (requires AGENT_TOKEN)
+curl -H "Authorization: Bearer $AGENT_TOKEN" https://visibility.clodo.dev/api/agentic/growth-signals
 
-# Test marketer worker - widget
-curl https://visibility.clodo.dev/widget.js?domain=example.com
+# Test marketing worker - admin (requires ADMIN_TOKEN)
+curl -H "Authorization: Bearer $ADMIN_TOKEN" https://visibility.clodo.dev/api/admin/subjects
 ```
 
 All should return 200 OK.

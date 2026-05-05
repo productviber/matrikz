@@ -59,13 +59,13 @@ export const detailedJourneyCriticPayload: JourneyCriticRequest = {
   },
   priorActions: [
     {
-      actionType: "send_message",
+      actionType: "activate",
       channel: "email",
       deliveredAt: "2026-04-25T15:00:00Z",
       result: "opened",
     },
     {
-      actionType: "offer",
+      actionType: "convert",
       offerCode: "SPRING24",
       estimatedValue: 4500,
       status: "pending",

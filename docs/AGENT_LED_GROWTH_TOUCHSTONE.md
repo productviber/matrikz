@@ -372,10 +372,13 @@ The target loop should look like this:
 Visibility Marketing should get a real `/api/agentic` namespace for the growth controller:
 
 - `GET /api/agentic/growth-signals`
-- `POST /api/agentic/enroll`
-- `POST /api/agentic/send`
-- `GET /api/agentic/attribution/summary`
-- `GET /api/agentic/audit`
+- `GET /api/agentic/subjects/:id/context`
+- `POST /api/agentic/actions/propose`
+- `POST /api/agentic/actions/dry-run`
+- `POST /api/agentic/actions/execute`
+- `GET /api/agentic/actions/:id`
+- `GET /api/agentic/actions/:id/audit`
+- `GET /api/agentic/actions/:id/trace`
 
 Skrip should get agent-callable primitive endpoints only where they support manufacturing and channel intelligence:
 

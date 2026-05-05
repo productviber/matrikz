@@ -2,6 +2,7 @@ import type { AgentActionRow, Env } from '../../types';
 import { AGENT_ACTION_EVENT, AGENT_ACTION_STATUS, AGENT_ACTION_TYPE, GROWTH_POLICY } from '../../constants';
 import { execute, now, query, queryOne } from '../db';
 import { recordAgentActionEvent, recordAgentActionOutcome } from './actions';
+import { sendOutcomeFeedback } from './feedbackClient';
 
 export interface StaleSubjectReview {
   tenantId: string;
@@ -120,9 +121,9 @@ export async function markStaleAgentActions(
   limit: number = GROWTH_POLICY.DEFAULT_LIST_LIMIT,
 ): Promise<StaleActionReviewResult> {
   const epoch = now();
-  const rows = await query<Pick<AgentActionRow, 'action_id' | 'tenant_id' | 'subject_id' | 'proposed_action' | 'outcome_due_at'>>(
+  const rows = await query<Pick<AgentActionRow, 'action_id' | 'tenant_id' | 'subject_id' | 'proposed_action' | 'outcome_due_at' | 'correlation_id' | 'ai_metadata_json'>>(
     env.DB,
-    `SELECT action_id, tenant_id, subject_id, proposed_action, outcome_due_at
+    `SELECT action_id, tenant_id, subject_id, proposed_action, outcome_due_at, correlation_id, ai_metadata_json
        FROM agent_actions
       WHERE status = ?
         AND outcome_due_at IS NOT NULL
@@ -168,6 +169,18 @@ export async function markStaleAgentActions(
       outcomeDueAt: row.outcome_due_at,
       observedAt: epoch,
     }, 'cron');
+    const aiMeta = row.ai_metadata_json ? JSON.parse(row.ai_metadata_json) as Record<string, unknown> : null;
+    const agentCorrelationId = typeof aiMeta?.correlationId === 'string' ? aiMeta.correlationId : null;
+    if (agentCorrelationId && row.tenant_id) {
+      void sendOutcomeFeedback(env, {
+        correlationId: agentCorrelationId,
+        tenantId: row.tenant_id,
+        subjectId: row.subject_id,
+        actionTaken: row.proposed_action,
+        outcomeMetric: 'no_response',
+        observedAt: new Date(epoch * 1000).toISOString(),
+      }).catch(() => { /* non-fatal */ });
+    }
     actionIds.push(row.action_id);
     subjectsForReview.push({
       tenantId: row.tenant_id ?? '',
@@ -194,9 +207,9 @@ export async function attributeAgentActionOutcomes(
   limit: number = GROWTH_POLICY.DEFAULT_LIST_LIMIT,
 ): Promise<OutcomeAttributionResult> {
   const max = Math.max(1, Math.min(limit, GROWTH_POLICY.MAX_LIST_LIMIT));
-  const rows = await query<Pick<AgentActionRow, 'action_id' | 'tenant_id' | 'subject_id' | 'proposed_action' | 'created_at' | 'outcome_due_at'>>(
+  const rows = await query<Pick<AgentActionRow, 'action_id' | 'tenant_id' | 'subject_id' | 'proposed_action' | 'created_at' | 'outcome_due_at' | 'correlation_id' | 'ai_metadata_json'>>(
     env.DB,
-    `SELECT action_id, tenant_id, subject_id, proposed_action, created_at, outcome_due_at
+    `SELECT action_id, tenant_id, subject_id, proposed_action, created_at, outcome_due_at, correlation_id, ai_metadata_json
        FROM agent_actions a
       WHERE a.proposed_action IN (?, ?)
         AND a.status IN (?, ?)
@@ -223,6 +236,9 @@ export async function attributeAgentActionOutcomes(
   const actionIds: string[] = [];
 
   for (const row of rows) {
+    const aiMeta = row.ai_metadata_json ? JSON.parse(row.ai_metadata_json) as Record<string, unknown> : null;
+    const agentCorrelationId = typeof aiMeta?.correlationId === 'string' ? aiMeta.correlationId : null;
+
     const conversionObservedAt = await readConversionObservedAt(env, row.subject_id, row.created_at, row.outcome_due_at);
     if (conversionObservedAt) {
       await recordAgentActionOutcome(env, {
@@ -237,6 +253,16 @@ export async function attributeAgentActionOutcomes(
           subjectId: row.subject_id,
         },
       });
+      if (agentCorrelationId && row.tenant_id) {
+        void sendOutcomeFeedback(env, {
+          correlationId: agentCorrelationId,
+          tenantId: row.tenant_id,
+          subjectId: row.subject_id,
+          actionTaken: row.proposed_action,
+          outcomeMetric: 'converted',
+          observedAt: new Date(conversionObservedAt * 1000).toISOString(),
+        }).catch(() => { /* non-fatal */ });
+      }
       attributed++;
       conversionAttributed++;
       actionIds.push(row.action_id);
@@ -259,6 +285,16 @@ export async function attributeAgentActionOutcomes(
             subjectId: row.subject_id,
           },
         });
+        if (agentCorrelationId && row.tenant_id) {
+          void sendOutcomeFeedback(env, {
+            correlationId: agentCorrelationId,
+            tenantId: row.tenant_id,
+            subjectId: row.subject_id,
+            actionTaken: row.proposed_action,
+            outcomeMetric: 'opened',
+            observedAt: new Date(engagementObservedAt * 1000).toISOString(),
+          }).catch(() => { /* non-fatal */ });
+        }
         attributed++;
         engagementAttributed++;
         actionIds.push(row.action_id);
@@ -282,6 +318,20 @@ export async function attributeAgentActionOutcomes(
           subjectId: row.subject_id,
         },
       });
+      if (agentCorrelationId && row.tenant_id) {
+        const skripMetric =
+          skrip.status === 'message.clicked' || skrip.status === 'clicked' ? 'clicked' :
+          skrip.status === 'message.opened' || skrip.status === 'opened' ? 'opened' :
+          'delivered';
+        void sendOutcomeFeedback(env, {
+          correlationId: agentCorrelationId,
+          tenantId: row.tenant_id,
+          subjectId: row.subject_id,
+          actionTaken: row.proposed_action,
+          outcomeMetric: skripMetric,
+          observedAt: new Date(skrip.observedAt * 1000).toISOString(),
+        }).catch(() => { /* non-fatal */ });
+      }
       attributed++;
       engagementAttributed++;
       actionIds.push(row.action_id);

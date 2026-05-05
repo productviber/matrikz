@@ -96,6 +96,20 @@ Required core secrets:
 - `AFFILIATE_AUTH_SECRET`
 - `WEBHOOK_SIGNING_SECRET`
 - `EMAIL_API_KEY`
+
+AI Engine secrets (required when `AI_ENGINE` service binding is active):
+
+- `INTERNAL_SECRET` — bearer token sent as `x-internal-secret` on AI Engine requests
+- `INTERNAL_SECRET_ROLLOVER` — rotation support
+
+Skrip integration secrets (required when receiving Skrip outcome webhooks or calling Skrip API):
+
+- `SKRIP_SERVICE_TOKEN` — bearer token for outbound Skrip API calls (required when `SKRIP_BASE_URL` is set)
+- `SKRIP_WEBHOOK_SIGNING_SECRET` — HMAC secret for verifying inbound Skrip outcome webhook payloads (falls back to `WEBHOOK_SIGNING_SECRET`)
+- `SKRIP_SIGNING_SECRET` — optional HMAC for outbound signing to Skrip (falls back to `WEBHOOK_SIGNING_SECRET`)
+
+Notification secrets (optional):
+
 - `SLACK_WEBHOOK_URL`
 - `DISCORD_WEBHOOK_URL`
 
@@ -121,6 +135,10 @@ wrangler secret put WEBHOOK_TOKEN_ROLLOVER --env development
 wrangler secret put AFFILIATE_AUTH_SECRET --env development
 wrangler secret put WEBHOOK_SIGNING_SECRET --env development
 wrangler secret put EMAIL_API_KEY --env development
+wrangler secret put INTERNAL_SECRET --env development
+wrangler secret put INTERNAL_SECRET_ROLLOVER --env development
+wrangler secret put SKRIP_SERVICE_TOKEN --env development
+wrangler secret put SKRIP_WEBHOOK_SIGNING_SECRET --env development
 wrangler secret put SLACK_WEBHOOK_URL --env development
 wrangler secret put DISCORD_WEBHOOK_URL --env development
 ```
@@ -141,6 +159,10 @@ wrangler secret put WEBHOOK_TOKEN_ROLLOVER --env production
 wrangler secret put AFFILIATE_AUTH_SECRET --env production
 wrangler secret put WEBHOOK_SIGNING_SECRET --env production
 wrangler secret put EMAIL_API_KEY --env production
+wrangler secret put INTERNAL_SECRET --env production
+wrangler secret put INTERNAL_SECRET_ROLLOVER --env production
+wrangler secret put SKRIP_SERVICE_TOKEN --env production
+wrangler secret put SKRIP_WEBHOOK_SIGNING_SECRET --env production
 wrangler secret put SLACK_WEBHOOK_URL --env production
 wrangler secret put DISCORD_WEBHOOK_URL --env production
 ```
@@ -196,6 +218,118 @@ curl https://visibility.clodo.dev/health
 curl https://visibility.clodo.dev/api/auth/me
 curl https://visibility.clodo.dev/api/sites
 ```
+
+---
+
+## Live State Audit — 2026-05-05
+
+Audited with `wrangler secret list --name <worker>`. Legend: ✅ set · ❌ missing · ⚠ empty-in-local (needs generation).
+
+### visibility-marketing (production)
+
+| Secret | Status | Action |
+|---|---|---|
+| ADMIN_TOKEN | ❌ | Known from .dev.vars — run backfill-secrets.ps1 |
+| ADMIN_TOKEN_ROLLOVER | ❌ | Known from .dev.vars — run backfill-secrets.ps1 |
+| SYSTEM_TOKEN | ✅ | — |
+| SYSTEM_TOKEN_ROLLOVER | ✅ | — |
+| INTERNAL_SECRET | ✅ | — |
+| INTERNAL_SECRET_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AGENT_TOKEN | ✅ | — |
+| AGENT_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| WEBHOOK_TOKEN | ✅ | — |
+| WEBHOOK_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AFFILIATE_AUTH_SECRET | ✅ | — |
+| WEBHOOK_SIGNING_SECRET | ✅ | — |
+| EMAIL_API_KEY | ✅ | — |
+| SKRIP_BASE_URL | ✅ | — |
+| SKRIP_SERVICE_TOKEN | ✅ | — |
+| SKRIP_WEBHOOK_SIGNING_SECRET | ❌ | Must match skrip INBOUND_WEBHOOK_SECRET; copy from dev or regenerate both sides |
+
+### visibility-marketing-dev
+
+| Secret | Status | Action |
+|---|---|---|
+| ADMIN_TOKEN | ✅ | — |
+| ADMIN_TOKEN_ROLLOVER | ✅ | — |
+| SYSTEM_TOKEN | ✅ | — |
+| SYSTEM_TOKEN_ROLLOVER | ✅ | — |
+| INTERNAL_SECRET | ✅ | — |
+| INTERNAL_SECRET_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AGENT_TOKEN | ✅ | — |
+| AGENT_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| WEBHOOK_TOKEN | ✅ | — |
+| WEBHOOK_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AFFILIATE_AUTH_SECRET | ✅ | — |
+| WEBHOOK_SIGNING_SECRET | ✅ | — |
+| EMAIL_API_KEY | ✅ | — |
+| SKRIP_BASE_URL | ✅ | — |
+| SKRIP_SERVICE_TOKEN | ❌ | Known from skrip .dev.vars — run backfill-secrets.ps1 |
+| SKRIP_WEBHOOK_SIGNING_SECRET | ✅ | — |
+
+### visibility-marketing-staging
+
+| Secret | Status | Action |
+|---|---|---|
+| ADMIN_TOKEN | ✅ | — |
+| ADMIN_TOKEN_ROLLOVER | ✅ | — |
+| SYSTEM_TOKEN | ✅ | — |
+| SYSTEM_TOKEN_ROLLOVER | ✅ | — |
+| INTERNAL_SECRET | ✅ | — |
+| INTERNAL_SECRET_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AGENT_TOKEN | ✅ | — |
+| AGENT_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| WEBHOOK_TOKEN | ✅ | — |
+| WEBHOOK_TOKEN_ROLLOVER | ⚠ | Generate: `openssl rand -base64 32` |
+| AFFILIATE_AUTH_SECRET | ✅ | — |
+| WEBHOOK_SIGNING_SECRET | ✅ | — |
+| EMAIL_API_KEY | ✅ | — |
+| SKRIP_BASE_URL | ❌ | Known from .dev.vars — run backfill-secrets.ps1 |
+| SKRIP_SERVICE_TOKEN | ❌ | Known from skrip .dev.vars — run backfill-secrets.ps1 |
+| SKRIP_WEBHOOK_SIGNING_SECRET | ❌ | Must match skrip INBOUND_WEBHOOK_SECRET |
+
+### visibility-analytics / visibility-analytics-dev / visibility-analytics-prod
+
+| Secret | Status | Action |
+|---|---|---|
+| SYSTEM_TOKEN | ✅ | Set on all three |
+| ADMIN_TOKEN | unknown | Verify — not audited this session |
+| ANALYTICS_USER_AUTH_SECRET | ❌ | Generate: `openssl rand -base64 32`; set on all three |
+
+### message-manufacturer-platform (skrip production)
+
+| Secret | Status | Action |
+|---|---|---|
+| VAPID_PUBLIC_KEY | ✅ | — |
+| VAPID_PRIVATE_KEY | ✅ | — |
+| VAPID_EMAIL | ✅ | — |
+| INTERNAL_API_SECRET | ✅ | — |
+| ENCRYPTION_KEY_32B | ✅ | — |
+| SKRIP_SERVICE_TOKEN | ✅ | — |
+| BREVO_API_KEY | ❌ | Known from skrip .dev.vars — run backfill-secrets.ps1 |
+| ANTHROPIC_API_KEY | ❌ | Known from skrip .dev.vars — run backfill-secrets.ps1 |
+| WHATSAPP_ACCESS_TOKEN | ❌ | Requires Meta Business Account |
+| WHATSAPP_PHONE_NUMBER_ID | ❌ | Requires Meta Business Account |
+| WHATSAPP_APP_SECRET | ❌ | Requires Meta Business Account |
+| WHATSAPP_VERIFY_TOKEN | ❌ | Generate or choose a static verify token |
+| TELEGRAM_BOT_TOKEN | ❌ | Create bot via @BotFather |
+| TELEGRAM_WEBHOOK_SECRET | ❌ | Generate: `openssl rand -base64 32` |
+| OPENAI_API_KEY | ❌ | Optional — only needed if OpenAI arm is active |
+
+### message-manufacturer-platform (skrip staging)
+
+All secrets are missing — no secrets set in staging environment. Clone from production or generate fresh before any staging deployment.
+
+### Automated Backfill (known values only)
+
+Run from workspace root after setting `$env:CLOUDFLARE_API_TOKEN`:
+
+```powershell
+$env:CLOUDFLARE_API_TOKEN = "<token>"
+.\scripts\backfill-secrets.ps1
+```
+
+Handles: `visibility-marketing` ADMIN_TOKEN + ADMIN_TOKEN_ROLLOVER, `visibility-marketing-dev` SKRIP_SERVICE_TOKEN, `visibility-marketing-staging` SKRIP_BASE_URL + SKRIP_SERVICE_TOKEN, `message-manufacturer-platform` BREVO_API_KEY + ANTHROPIC_API_KEY.
 
 Expected behavior notes:
 

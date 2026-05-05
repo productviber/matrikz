@@ -178,6 +178,7 @@ export interface MockEnv {
   R2_ASSETS: ReturnType<typeof createMockR2>;
   ANALYTICS: ReturnType<typeof createMockFetcher>;
   AI_ENGINE?: ReturnType<typeof createMockFetcher>;
+  SKRIP_SERVICE?: ReturnType<typeof createMockFetcher>;
   FROM_EMAIL: string;
   FROM_NAME: string;
   ADMIN_TOKEN: string;

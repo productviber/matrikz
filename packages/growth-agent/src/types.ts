@@ -4,6 +4,7 @@ import {
   type ErrorCode,
   type GrowthNextActionRequest,
   type GrowthNextActionResponse,
+  type GrowthSignal,
   type GrowthSignalSummarizeRequest,
   type GrowthSignalSummarizeResponse,
   type JourneyCriticRequest,
@@ -14,7 +15,12 @@ import {
   type OutcomeDiagnoseResponse,
   type Metadata,
   type ActionType,
-} from "@matrikz/growth-agent-contracts";
+  type TenantPrior,
+  type TenantSubject,
+  type PendingRecommendation,
+  type OutcomeFeedbackRequest,
+  type OutcomeFeedbackResponse,
+} from "@clodo/growth-agent-contracts";
 import { CAPABILITY_ENV_FLAGS, DEFAULTS, ROUTE_REASONS } from "./constants";
 
 export type {
@@ -23,6 +29,7 @@ export type {
   ErrorCode,
   GrowthNextActionRequest,
   GrowthNextActionResponse,
+  GrowthSignal,
   GrowthSignalSummarizeRequest,
   GrowthSignalSummarizeResponse,
   JourneyCriticRequest,
@@ -33,6 +40,11 @@ export type {
   OutcomeDiagnoseResponse,
   Metadata,
   ActionType,
+  TenantPrior,
+  TenantSubject,
+  PendingRecommendation,
+  OutcomeFeedbackRequest,
+  OutcomeFeedbackResponse,
 };
 
 export type RouteReason = (typeof ROUTE_REASONS)[keyof typeof ROUTE_REASONS];
@@ -42,13 +54,15 @@ export interface GrowthAgentEnv {
   INTERNAL_SECRET_PREVIOUS?: string;
   INTERNAL_SECRET_ROTATION_WINDOW_HOURS?: string;
   APP_VERSION?: string;
+  ENVIRONMENT?: string;
   RESPONSE_SCHEMA_VERSION?: string;
   REQUEST_SCHEMA_VERSION?: string;
   AI_MODEL?: string;
   AI_TIMEOUT_MS?: string;
   AI_MAX_RETRIES?: string;
   AI_OUTPUT_REPAIR_ATTEMPTS?: string;
-  FEATURE_FLAGS_JSON?: string;
+  SECONDARY_LLM_PROVIDER_URL?: string;
+  SECONDARY_LLM_PROVIDER_API_KEY?: string;
   BUDGET_PER_TENANT_PER_MIN?: string;
   RATE_LIMIT_PER_TENANT_CAPABILITY_PER_MIN?: string;
   CAPABILITY_GROWTH_NEXT_ACTION_ENABLED?: string;
@@ -56,9 +70,23 @@ export interface GrowthAgentEnv {
   CAPABILITY_JOURNEY_CRITIC_ENABLED?: string;
   CAPABILITY_MESSAGE_BRIEF_ENABLED?: string;
   CAPABILITY_OUTCOME_DIAGNOSE_ENABLED?: string;
+  CAPABILITY_OUTCOME_FEEDBACK_ENABLED?: string;
+  CAPABILITY_PROACTIVE_SCAN_ENABLED?: string;
+  PROACTIVE_SCAN_ENABLED?: string;
+  PROACTIVE_SCAN_COOLDOWN_HOURS?: string;
+  PRIOR_TTL_DAYS?: string;
+  CALIBRATION_RECALC_AFTER_N?: string;
+  OUTCOME_RETENTION_DAYS?: string;
+  PRIOR_AUDIT_SAMPLE_RATE?: string;
+    PROACTIVE_SCAN_BATCH_SIZE?: string;
+    MAX_PENDING_PER_TENANT?: string;
   WORKERS_AI?: {
     run(model: string, input: unknown, options?: { signal?: AbortSignal }): Promise<unknown>;
   };
+  TENANT_PRIOR_KV?: KVNamespace;
+  TENANT_REGISTRY_KV?: KVNamespace;
+  OUTCOME_DB?: D1Database;
+  RECOMMENDATION_QUEUE?: Queue<PendingRecommendation>;
 }
 
 export interface RequestContext {
@@ -73,10 +101,12 @@ export interface LlmGenerateArgs {
   model: string;
   maxTokens: number;
   timeoutMs: number;
+  totalDeadlineMs?: number;
   maxRetries: number;
   outputRepairAttempts: number;
   systemPrompt: string;
   userPrompt: string;
+  temperatureOverride?: number;
 }
 
 export interface LlmGenerateResult {
@@ -112,6 +142,14 @@ export interface RuntimeConfig {
   budgetPerTenantPerMinute: number;
   rateLimitPerTenantCapabilityPerMinute: number;
   secretRotationWindowHours: number;
+  proactiveScanEnabled: boolean;
+  proactiveScanCooldownHours: number;
+  priorTtlDays: number;
+  calibrationRecalcAfterN: number;
+  outcomeRetentionDays: number;
+  auditSampleRate: number;
+    proactiveScanBatchSize: number;
+    maxPendingPerTenant: number;
   featureFlags: Record<CapabilityName, boolean>;
 }
 
@@ -138,25 +176,16 @@ export function getRuntimeConfig(env: GrowthAgentEnv): RuntimeConfig {
       env.INTERNAL_SECRET_ROTATION_WINDOW_HOURS,
       DEFAULTS.secretRotationWindowHours,
     ),
-    featureFlags: {
-      "growth-next-action": resolveCapabilityEnabled(
-        env,
-        "growth-next-action",
-        parsedFlags["growth-next-action"],
-      ),
-      "growth-signal-summarize": resolveCapabilityEnabled(
-        env,
-        "growth-signal-summarize",
-        parsedFlags["growth-signal-summarize"],
-      ),
-      "journey-critic": resolveCapabilityEnabled(env, "journey-critic", parsedFlags["journey-critic"]),
-      "message-brief": resolveCapabilityEnabled(env, "message-brief", parsedFlags["message-brief"]),
-      "outcome-diagnose": resolveCapabilityEnabled(
-        env,
-        "outcome-diagnose",
-        parsedFlags["outcome-diagnose"],
-      ),
-    },
+    proactiveScanEnabled:
+      (env.PROACTIVE_SCAN_ENABLED ?? env.CAPABILITY_PROACTIVE_SCAN_ENABLED ?? "false").toLowerCase() === "true",
+    proactiveScanCooldownHours: parsePositiveInt(env.PROACTIVE_SCAN_COOLDOWN_HOURS, DEFAULTS.proactiveScanCooldownHours),
+    priorTtlDays: parsePositiveInt(env.PRIOR_TTL_DAYS, DEFAULTS.priorTtlDays),
+    calibrationRecalcAfterN: parsePositiveInt(env.CALIBRATION_RECALC_AFTER_N, DEFAULTS.calibrationRecalcAfterN),
+    outcomeRetentionDays: parsePositiveInt(env.OUTCOME_RETENTION_DAYS, DEFAULTS.outcomeRetentionDays),
+    auditSampleRate: parseFloat01(env.PRIOR_AUDIT_SAMPLE_RATE, DEFAULTS.priorAuditSampleRate),
+      proactiveScanBatchSize: parsePositiveInt(env.PROACTIVE_SCAN_BATCH_SIZE, DEFAULTS.proactiveScanBatchSize),
+      maxPendingPerTenant: parsePositiveInt(env.MAX_PENDING_PER_TENANT, DEFAULTS.maxPendingPerTenant),
+    featureFlags: parsedFlags,
   };
 }
 
@@ -173,35 +202,17 @@ function resolveCapabilityEnabled(
   return fallbackFlag ?? false;
 }
 
-function toInt(value: string | undefined, fallback: number): number {
-  if (!value) {
-    return fallback;
-  }
-  const n = Number.parseInt(value, 10);
-  return Number.isFinite(n) && n > 0 ? n : fallback;
+function parseFloat01(value: string | undefined, fallback: number): number {
+  const n = Number.parseFloat(value ?? "");
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : fallback;
 }
 
-function parseFeatureFlags(raw: string | undefined): Partial<Record<CapabilityName, boolean>> {
-  if (!raw) {
-    return {};
-  }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      "growth-next-action": toBool(parsed["growth-next-action"]),
-      "growth-signal-summarize": toBool(parsed["growth-signal-summarize"]),
-      "journey-critic": toBool(parsed["journey-critic"]),
-      "message-brief": toBool(parsed["message-brief"]),
-      "outcome-diagnose": toBool(parsed["outcome-diagnose"]),
-    };
-  } catch {
-    return {};
-  }
-}
-
-function toBool(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  return undefined;
+function parseFeatureFlags(env: GrowthAgentEnv): Record<CapabilityName, boolean> {
+  return {
+    "growth-next-action": env[CAPABILITY_ENV_FLAGS["growth-next-action"]] === "true",
+    "growth-signal-summarize": env[CAPABILITY_ENV_FLAGS["growth-signal-summarize"]] === "true",
+    "journey-critic": env[CAPABILITY_ENV_FLAGS["journey-critic"]] === "true",
+    "message-brief": env[CAPABILITY_ENV_FLAGS["message-brief"]] === "true",
+    "outcome-diagnose": env[CAPABILITY_ENV_FLAGS["outcome-diagnose"]] === "true",
+  };
 }

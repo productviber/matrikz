@@ -8,6 +8,7 @@ export const CAPABILITY_PATHS = {
   journeyCritic: "/internal/journey-critic",
   messageBrief: "/internal/message-brief",
   outcomeDiagnose: "/internal/outcome-diagnose",
+  outcomeFeedback: "/internal/outcome-feedback",
 } as const;
 
 export const CAPABILITY_NAMES = {
@@ -20,6 +21,11 @@ export const CAPABILITY_NAMES = {
 
 export const KNOWN_ACTION_TYPES = ACTION_TYPE_WHITELIST;
 export const KNOWN_SIGNAL_TYPES = SIGNAL_TYPE_ENUM;
+
+export const ACTION_TYPE_POLICY = {
+  conservative: ["wait", "pause", "escalate"] as const,
+  expansive: ["nurture", "activate", "convert", "recover"] as const,
+} as const;
 
 export const DEFAULTS = {
   appVersion: "0.1.0",
@@ -39,7 +45,15 @@ export const DEFAULTS = {
   budgetPerTenantPerMinute: 120,
   rateLimitPerTenantCapabilityPerMinute: 180,
   secretRotationWindowHours: 24,
+  proactiveScanEnabled: false,
+  proactiveScanCooldownHours: 24,
+  priorTtlDays: 30,
+  calibrationRecalcAfterN: 10,
+  outcomeRetentionDays: 90,
   retryAfterSeconds: 300,
+  priorAuditSampleRate: 0.1,
+  proactiveScanBatchSize: 50,
+  maxPendingPerTenant: 5,
 } as const;
 
 export const HEADER_NAMES = {
@@ -56,6 +70,7 @@ export const ROUTE_REASONS = {
   tierDegraded: "tier_degraded",
   fallback: "fallback",
   rateLimited: "rate_limited",
+  proactive: "proactive",
 } as const;
 
 export const CAPABILITY_ENV_FLAGS = {

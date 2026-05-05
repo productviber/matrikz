@@ -75,6 +75,15 @@ const RULES: RouteLaneRule[] = [
   // Campaign management APIs are admin-owned in this worker.
   { method: 'POST', match: (path) => path === '/api/campaigns', lane: 'admin' },
   { method: 'GET', match: (path) => path === '/api/campaigns', lane: 'admin' },
+  { method: 'POST', match: (path) => path === '/api/campaigns/objectives', lane: 'admin' },
+  { method: 'GET', match: (path) => path === '/api/campaigns/objectives', lane: 'admin' },
+  { method: 'GET', match: (path) => /^\/api\/campaigns\/objectives\/[^/]+$/.test(path), lane: 'admin' },
+  { method: 'POST', match: (path) => path === '/api/segments/preview', lane: 'admin' },
+  { method: 'POST', match: (path) => path === '/api/segments/save', lane: 'admin' },
+  { method: 'GET', match: (path) => path === '/api/segments', lane: 'admin' },
+  { method: 'GET', match: (path) => /^\/api\/segments\/[^/]+$/.test(path), lane: 'admin' },
+  { method: 'GET', match: (path) => /^\/api\/campaigns\/[^/]+\/channel-intent$/.test(path), lane: 'admin' },
+  { method: 'PUT', match: (path) => /^\/api\/campaigns\/[^/]+\/channel-intent$/.test(path), lane: 'admin' },
   { method: 'GET', match: (path) => /^\/api\/campaigns\/[^/]+$/.test(path), lane: 'admin' },
   { method: 'PUT', match: (path) => /^\/api\/campaigns\/[^/]+$/.test(path), lane: 'admin' },
 
