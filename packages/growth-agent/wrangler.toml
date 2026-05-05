@@ -37,16 +37,16 @@ binding = "WORKERS_AI"
 
 [[kv_namespaces]]
 binding = "TENANT_PRIOR_KV"
-id = "replace-with-tenant-prior-kv-id"
+id = "f95a6bd8125d44f4a536cf0b19c2ee78"
 
 [[kv_namespaces]]
 binding = "TENANT_REGISTRY_KV"
-id = "replace-with-tenant-registry-kv-id"
+id = "8979034465be45deb25da9789dd236cc"
 
 [[d1_databases]]
 binding = "OUTCOME_DB"
 database_name = "growth-agent-outcome-db"
-database_id = "replace-with-outcome-db-id"
+database_id = "bd38a503-746e-45ad-ae3b-6f27aab29485"
 
 [[queues.producers]]
 binding = "RECOMMENDATION_QUEUE"
@@ -133,16 +133,16 @@ binding = "WORKERS_AI"
 
 [[env.development.kv_namespaces]]
 binding = "TENANT_PRIOR_KV"
-id = "replace-with-dev-tenant-prior-kv-id"
+id = "e72a88c64f96438fb91ce15b565983c4"
 
 [[env.development.kv_namespaces]]
 binding = "TENANT_REGISTRY_KV"
-id = "replace-with-dev-tenant-registry-kv-id"
+id = "4c5549cd8891461ea2569895277464bd"
 
 [[env.development.d1_databases]]
 binding = "OUTCOME_DB"
 database_name = "growth-agent-outcome-db-dev"
-database_id = "replace-with-dev-outcome-db-id"
+database_id = "6adcdd10-d5fe-49ee-88f6-f1ee0aa8f9ea"
 
 [[env.development.queues.producers]]
 binding = "RECOMMENDATION_QUEUE"

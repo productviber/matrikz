@@ -19,7 +19,7 @@ queue = "growth-agent-dispatch-dlq"
 [[d1_databases]]
 binding = "OUTCOME_DB"
 database_name = "growth-agent-outcome-db"
-database_id = "replace-with-outcome-db-id"
+database_id = "bd38a503-746e-45ad-ae3b-6f27aab29485"
 
 [env.development]
 name = "growth-agent-dispatcher-dev"
@@ -41,7 +41,7 @@ queue = "growth-agent-dispatch-dlq-dev"
 [[env.development.d1_databases]]
 binding = "OUTCOME_DB"
 database_name = "growth-agent-outcome-db-dev"
-database_id = "replace-with-dev-outcome-db-id"
+database_id = "6adcdd10-d5fe-49ee-88f6-f1ee0aa8f9ea"
 
 [env.staging]
 name = "growth-agent-dispatcher-staging"
@@ -85,4 +85,4 @@ queue = "growth-agent-dispatch-dlq-production"
 [[env.production.d1_databases]]
 binding = "OUTCOME_DB"
 database_name = "growth-agent-outcome-db-production"
-database_id = "replace-with-production-outcome-db-id"
+database_id = "bd38a503-746e-45ad-ae3b-6f27aab29485"
