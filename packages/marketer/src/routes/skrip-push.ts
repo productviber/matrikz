@@ -16,6 +16,7 @@ import { execute, now } from '../lib/db';
 import { badRequest, created, ok, serverError } from '../lib/response';
 import { registerContactChannel } from '../lib/skrip/registration';
 import { getCorrelationId } from '../lib/correlation';
+import { evaluateGovernanceExecution } from '../lib/governance-execution-client';
 
 // ── Validation ─────────────────────────────────────────────────────────────
 
@@ -70,6 +71,20 @@ export async function handlePushSubscribe(
   const correlationId = getCorrelationId();
   const epoch = now();
   const consentMeta = body.consentMeta ?? null;
+
+  // Subscribe is a state-changing consent transition; evaluate governance
+  // before writing subscription side effects.
+  const govDecision = await evaluateGovernanceExecution(env, {
+    actionType: 'channel.push.subscribe',
+    actorTenantId: tenantId,
+    targetTenantId: tenantId,
+    subjectId: contactId ?? body.subscription?.endpoint ?? 'unknown',
+    context: { endpoint: body.subscription?.endpoint ?? '', correlationId },
+  });
+
+  if (!govDecision.allowed) {
+    return badRequest(`subscription blocked by governance: ${govDecision.reason}`);
+  }
 
   // Merge consent provenance into the metadata blob so it is persisted with
   // the opt-in event without changing the table schema.
@@ -143,6 +158,19 @@ export async function handlePushUnsubscribe(
   const contactId = body.contactId ?? null;
   const epoch = now();
   const correlationId = getCorrelationId();
+
+  // Unsubscribe is also state-changing and must be gated consistently.
+  const govDecision = await evaluateGovernanceExecution(env, {
+    actionType: 'channel.push.unsubscribe',
+    actorTenantId: tenantId,
+    targetTenantId: tenantId,
+    subjectId: contactId ?? body.browserSessionId ?? 'anonymous',
+    context: { browserSessionId: body.browserSessionId ?? null, correlationId },
+  });
+
+  if (!govDecision.allowed) {
+    return badRequest(`unsubscription blocked by governance: ${govDecision.reason}`);
+  }
 
   // Log unsubscribe event (idempotent write)
   try {

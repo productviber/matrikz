@@ -164,14 +164,91 @@ describe('agentic admin operator endpoints', () => {
     expect(body.data.trace[0].action_id).toBe('act_trace_1');
   });
 
-  it('returns quality rollups with fallback and policy block rates', async () => {
+  it('returns quality rollups with cost, fallback, and proxy rates', async () => {
     const env = createMockEnv();
     env.DB.onQuery(/COUNT\(\*\) AS count FROM agent_actions WHERE created_at >= \?/i, () => [{ count: 10 }]);
-    env.DB.onQuery(/ai_metadata_json IS NOT NULL/i, () => [{ count: 2 }]);
+    env.DB.onQuery(/COUNT\(\*\) AS metadata_rows/i, () => [{
+      metadata_rows: 8,
+      fallback_count: 2,
+      token_estimate_total: 1200,
+      cost_estimate_total: 0.24,
+      avg_latency_ms: 212,
+      missing_token_estimate_count: 1,
+      missing_cost_estimate_count: 1,
+    }]);
     env.DB.onQuery(/status IN \(\?, \?\)/i, () => [{ count: 6 }]);
     env.DB.onQuery(/status = \?/i, () => [{ count: 1 }]);
-    env.DB.onQuery(/ROUND\(AVG\(confidence\), 2\)/i, () => [{ proposed_action: 'enroll_sequence', avg_confidence: 72, proposals: 7 }]);
+    env.DB.onQuery(/executed_action_count/i, () => [{
+      executed_action_count: 4,
+      executed_cost_estimate_total: 0.16,
+      executed_missing_cost_estimate_count: 1,
+    }]);
+    env.DB.onQuery(/complete_trace_rows/i, () => [{
+      trace_rows: 10,
+      complete_trace_rows: 7,
+      metadata_present_count: 8,
+      prompt_version_present_count: 8,
+      schema_version_present_count: 8,
+      provider_model_or_fallback_present_count: 7,
+      route_reason_present_count: 8,
+      fallback_reason_present_count: 9,
+      policy_result_present_count: 10,
+      signal_summary_present_count: 6,
+      subject_context_present_count: 6,
+      outcome_summary_present_count: 5,
+    }]);
+    env.DB.onQuery(/GROUP BY provider, model, prompt_version/i, () => [{
+      provider: 'workers-ai',
+      model: '@cf/meta/llama',
+      prompt_version: '2026-05-02',
+      response_schema_version: 'growth-action-v1',
+      capability: 'growth-next-action',
+      fallback: 0,
+      proposals: 6,
+      token_estimate_total: 900,
+      cost_estimate_total: 0.18,
+      avg_latency_ms: 205,
+      missing_token_estimate_count: 0,
+      missing_cost_estimate_count: 0,
+    }]);
+    env.DB.onQuery(/repeated_same_category_count/i, () => [{
+      repeated_same_category_count: 3,
+      repeated_no_outcome_category_count: 2,
+      repeated_same_category_no_outcome_count: 1,
+    }]);
+    env.DB.onQuery(/SELECT COUNT\(\*\) AS proposals,[\s\S]+suppressed_or_reviewed_count/i, () => [{
+      proposals: 10,
+      high_confidence_proposals: 4,
+      positive_action_count: 3,
+      conversion_action_count: 2,
+      no_outcome_action_count: 2,
+      high_confidence_no_outcome: 1,
+      suppressed_or_reviewed_count: 2,
+      suppressed_positive_outcome_count: 1,
+    }]);
+    env.DB.onQuery(/ROUND\(AVG\(confidence\), 2\)[\s\S]+positive_outcomes/i, () => [{
+      proposed_action: 'enroll_sequence',
+      avg_confidence: 72,
+      proposals: 7,
+      positive_outcomes: 3,
+      conversions: 2,
+      no_outcome_observed: 1,
+      high_confidence_proposals: 2,
+      high_confidence_no_outcome: 1,
+      repeated_same_category: 2,
+      repeated_no_outcome_category: 1,
+    }]);
     env.DB.onQuery(/FROM agent_action_outcomes o[\s\S]+o\.outcome_type = 'conversion'/i, () => [{ proposed_action: 'enroll_sequence', conversions: 3 }]);
+    env.DB.onQuery(/SELECT action_id,[\s\S]+last_outcome_type/i, () => [{
+      action_id: 'act_risk_1',
+      subject_id: 'lead@acme.com',
+      proposed_action: 'enroll_sequence',
+      status: 'no_outcome_observed',
+      confidence: 91,
+      created_at: 100,
+      ai_metadata_json: '{"fallback":false}',
+      last_outcome_type: 'no_outcome_observed',
+    }]);
 
     const response = await handleAdminAgenticQuality(
       makeRequest('GET', '/api/admin/agentic/quality?windowDays=14'),
@@ -183,6 +260,31 @@ describe('agentic admin operator endpoints', () => {
     expect(body.data.totalProposals).toBe(10);
     expect(body.data.fallbackRate).toBe(0.2);
     expect(body.data.policyBlockRate).toBe(0.1);
+    expect(body.data.metadataCompletenessRate).toBe(0.8);
+    expect(body.data.tokenEstimateTotal).toBe(1200);
+    expect(body.data.executedActionCount).toBe(4);
+    expect(body.data.costPerExecutedAction).toBeCloseTo(0.04);
+    expect(body.data.executedMissingCostEstimateCount).toBe(1);
+    expect(body.data.costPerPositiveOutcome).toBeCloseTo(0.08);
+    expect(body.data.aiMetadataByDimension[0]).toMatchObject({
+      provider: 'workers-ai',
+      model: '@cf/meta/llama',
+      promptVersion: '2026-05-02',
+      capability: 'growth-next-action',
+      proposals: 6,
+    });
+    expect(body.data.aiMetadataByDimension[0].avgCostPerProposal).toBeCloseTo(0.03);
+    expect(body.data.repeatedSameCategoryInterventions.count).toBe(3);
+    expect(body.data.repeatedSameCategoryInterventions.repeatedNoOutcomeCategoryCount).toBe(2);
+    expect(body.data.repeatedSameCategoryInterventions.noOutcomeRate).toBeCloseTo(1 / 3);
+    expect(body.data.traceCompleteness.completeRate).toBe(0.7);
+    expect(body.data.traceCompleteness.missing.signalSummary).toBe(4);
+    expect(body.data.traceCompleteness.present.providerModelOrFallback).toBe(7);
+    expect(body.data.highConfidenceNoOutcomeRate).toBe(0.25);
+    expect(body.data.falseNegativeProxy.rate).toBe(0.5);
+    expect(body.data.qualityByAction[0].noOutcomeRate).toBeCloseTo(1 / 7);
+    expect(body.data.qualityByAction[0].repeatedSameCategoryRate).toBeCloseTo(2 / 7);
+    expect(body.data.recentQualityRisks[0].action_id).toBe('act_risk_1');
   });
 
   it('overrides a non-executed action and records override audit events', async () => {

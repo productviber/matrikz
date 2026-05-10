@@ -22,6 +22,7 @@ import { execute, now } from '../lib/db';
 import { badRequest, created, ok, serverError } from '../lib/response';
 import { registerContactChannel } from '../lib/skrip/registration';
 import { getCorrelationId } from '../lib/correlation';
+import { evaluateGovernanceExecution } from '../lib/governance-execution-client';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,21 @@ async function handleChannelSubscribe(
   };
   const metaJson = Object.keys(mergedMeta).length > 0 ? JSON.stringify(mergedMeta) : null;
 
+  // ── Governance execution gate ─────────────────────────────────────────────
+  // Subscribe flows are state-changing consent registrations — gate them so
+  // operator-controlled enforcement can block unauthorized channel opt-ins.
+  const govDecision = await evaluateGovernanceExecution(env, {
+    actionType: `channel.${channel}.subscribe`,
+    actorTenantId: tenantId,
+    targetTenantId: tenantId,
+    subjectId: contactId ?? address,
+    context: { channel, address, correlationId },
+  });
+
+  if (!govDecision.allowed) {
+    return badRequest(`subscription blocked by governance: ${govDecision.reason}`);
+  }
+
   // 1. Log the funnel event (idempotent: IGNORE duplicate for same contact+session)
   try {
     await execute(
@@ -195,6 +211,20 @@ async function handleChannelUnsubscribe(
   const correlationId = getCorrelationId();
   const epoch = now();
   const address = body.address.trim();
+
+  // Unsubscribe flows are state-changing consent revocations and must pass
+  // governance execution controls before side effects are written.
+  const govDecision = await evaluateGovernanceExecution(env, {
+    actionType: `channel.${channel}.unsubscribe`,
+    actorTenantId: tenantId,
+    targetTenantId: tenantId,
+    subjectId: contactId ?? address,
+    context: { channel, address, correlationId },
+  });
+
+  if (!govDecision.allowed) {
+    return badRequest(`unsubscription blocked by governance: ${govDecision.reason}`);
+  }
 
   // Log the opt-out event
   try {

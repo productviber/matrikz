@@ -46,6 +46,9 @@ describe('handleVariantMetrics — P0 aggregation', () => {
         env.DB.onQuery(/FROM email_sends[\s\S]+WHERE status\s*=\s*'sent'\s+AND sent_at\s*>=\s*\?\s*$/im, () => [
             { sent: 100, opened: 25, clicked: 5, replied: 1 },
         ]);
+        env.DB.onQuery(/GROUP BY campaign_slug/i, () => [
+            { campaign_slug: 'cold-outreach-v1', sent: 100, opened: 25, clicked: 5, replied: 1 },
+        ]);
 
         const { res, body } = await callVariants(env, '?windowDays=30');
 
@@ -54,6 +57,8 @@ describe('handleVariantMetrics — P0 aggregation', () => {
         expect(body.totals).toMatchObject({ sent: 100, opened: 25, clicked: 5, replied: 1 });
         expect(Array.isArray(body.byVariant)).toBe(true);
         expect(Array.isArray(body.bySubject)).toBe(true);
+        expect(Array.isArray(body.winners)).toBe(true);
+        expect(Array.isArray(body.campaignAttribution)).toBe(true);
 
         const v0 = body.byVariant.find(
             (r: any) => r.template_key === 'cold_outreach' && r.subject_variant_idx === 0,
@@ -74,6 +79,13 @@ describe('handleVariantMetrics — P0 aggregation', () => {
         const s0 = body.bySubject[0];
         expect(s0.open_rate).toBeCloseTo(0.4, 3);
         expect(s0.click_rate).toBeCloseTo(0.08, 3);
+
+        expect(body.winners[0]).toMatchObject({
+            template_key: 'cold_outreach',
+            subject_variant_idx: 0,
+        });
+        expect(body.campaignAttribution[0].sent).toBe(100);
+        expect(typeof body.campaignAttribution[0].campaign_slug).toBe('string');
     });
 
     it('clamps windowDays: default 30, cap 365, floor 1', async () => {
@@ -98,13 +110,11 @@ describe('handleVariantMetrics — P0 aggregation', () => {
         await callVariants(env, '?windowDays=7');
 
         const limited = env.DB._queries.filter((q) => /LIMIT\s+\?/i.test(q.sql));
-        // byTier (16), byVariant (200), bySubject (200) — 3 LIMITed queries.
+        // byTier (16), byVariant (200), bySubject (200), byCampaign (50).
         expect(limited.length).toBeGreaterThanOrEqual(3);
         for (const q of limited) {
             const last = q.params[q.params.length - 1];
-            // Each LIMIT must be a declared METRICS_LIMITS cap — tier is 16,
-            // variant/subject rollups are 200.
-            expect([16, 200]).toContain(last);
+            expect([16, 50, 200]).toContain(last);
         }
     });
 

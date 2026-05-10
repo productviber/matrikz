@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:semantic": "vitest run tests/evals/semanticEvaluation.test.ts --reporter=verbose",
+    "test:e2e": "GROWTH_AGENT_URL=https://growth-agent.<subdomain>.workers.dev GROWTH_AGENT_INTERNAL_SECRET=<value> vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "@matrikz/growth-agent-contracts": "file:../growth-agent-contracts"

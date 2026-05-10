@@ -20,7 +20,12 @@ import { runWithConcurrency } from './concurrency';
 import { isUnsubscribed } from '../routes/gdpr';
 import { executeSecondaryChannels } from './channel-orchestrator';
 import { getSubjectAllActiveChannels } from './growth/context';
-import { pickWeightedIndex, recordVariantEngagement, loadVariantWeights } from './email/ab';
+import {
+  pickWeightedIndex,
+  recordVariantEngagement,
+  loadVariantWeights,
+  resolvePersistentVariantAssignment,
+} from './email/ab';
 import {
   prepareTemplateContext as prepareTemplateContextV2,
   prepareWarmTemplateContext,
@@ -38,6 +43,7 @@ import {
 } from './warmup';
 import { verifyEmailDomain } from './email/verify';
 import type { WarmupStep } from './warmup';
+import { createAiEngineClient } from './ai-engine/client';
 
 const WARM_EMAIL_CONCURRENCY = 4;
 
@@ -101,6 +107,123 @@ export function prepareTemplateContext(
   variantWeights?: Record<string, number[]> | null,
 ): Record<string, unknown> {
   return prepareTemplateContextV2(context, templateKey, variantWeights);
+}
+
+function sanitizeSubjectLine(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!trimmed) return null;
+  if (trimmed.length > 160) return trimmed.slice(0, 160).trim();
+  return trimmed;
+}
+
+function sanitizePersonalizationCopy(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const cleaned = value
+    .replace(/[<>]/g, '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned) return null;
+  return cleaned.length > 500 ? cleaned.slice(0, 500).trim() : cleaned;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function applyAiPersonalizationForOutbound(
+  env: Env,
+  input: {
+    to: string;
+    templateKey: string;
+    subject: string;
+    context: Record<string, unknown>;
+    activeCampaignSlug: string;
+  },
+): Promise<{ subject: string; context: Record<string, unknown>; source: 'ai' | 'fallback'; reason?: string }> {
+  const hints = Array.isArray(input.context.personalizationHints)
+    ? input.context.personalizationHints.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+    : [];
+  if (hints.length === 0) {
+    return { subject: input.subject, context: input.context, source: 'fallback', reason: 'no_hints' };
+  }
+
+  const governanceMode = (env.GOVERNANCE_EXECUTION_MODE ?? 'off').toLowerCase();
+  if (governanceMode === 'enforce' && !env.AI_ENGINE) {
+    return { subject: input.subject, context: input.context, source: 'fallback', reason: 'enforce_mode_ai_unavailable' };
+  }
+
+  const aiClient = createAiEngineClient(env);
+  if (!aiClient.configured) {
+    return { subject: input.subject, context: input.context, source: 'fallback', reason: 'ai_binding_unavailable' };
+  }
+
+  try {
+    const response = await aiClient.messageBrief({
+      tenantId: 'default',
+      subjectId: input.to,
+      objective: input.templateKey,
+      channelHints: ['email'],
+      personalizationHints: hints,
+      evidence: {
+        campaignSlug: input.activeCampaignSlug,
+        domain: input.context.domain ?? null,
+        companyName: input.context.companyName ?? null,
+      },
+      policy: {
+        suppressionChecked: true,
+        throttleChecked: true,
+        warmupChecked: true,
+      },
+    });
+
+    if (!response.ok || !response.data || typeof response.data !== 'object') {
+      return { subject: input.subject, context: input.context, source: 'fallback', reason: response.error ?? 'ai_error' };
+    }
+
+    const envelope = response.data as Record<string, unknown>;
+    const candidate = (typeof envelope.data === 'object' && envelope.data !== null)
+      ? envelope.data as Record<string, unknown>
+      : envelope;
+
+    const aiSubject = sanitizeSubjectLine(candidate.headline);
+    const aiOpening = sanitizePersonalizationCopy(candidate.bodyIntent);
+
+    const nextContext = { ...input.context };
+    if (aiOpening) {
+      nextContext.aiPersonalizationOpening = aiOpening;
+      nextContext.aiPersonalizationHintsUsed = hints;
+    }
+
+    return {
+      subject: aiSubject ?? input.subject,
+      context: nextContext,
+      source: aiSubject || aiOpening ? 'ai' : 'fallback',
+      reason: aiSubject || aiOpening ? undefined : 'ai_empty_payload',
+    };
+  } catch (err) {
+    return {
+      subject: input.subject,
+      context: input.context,
+      source: 'fallback',
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function injectAiPersonalizationBlock(htmlBody: string, opening: string): string {
+  const block = `<p style="background:#f8fafc;border-left:3px solid #0ea5e9;padding:10px 14px;border-radius:4px;margin:0 0 16px 0;">${escapeHtml(opening)}</p>`;
+  const containerOpen = /<div[^>]*>/i;
+  if (!containerOpen.test(htmlBody)) {
+    return `${block}${htmlBody}`;
+  }
+  return htmlBody.replace(containerOpen, (m) => `${m}${block}`);
 }
 
 /**
@@ -317,29 +440,84 @@ export async function processDueEmails(
   ): Promise<boolean> => {
     try {
       const contextJson = await env.KV_MARKETING.get(`${KV_PREFIX.EMAIL_CONTEXT}${send.contact_email}:${send.sequence_id}`);
-      let context = contextJson ? JSON.parse(contextJson) as Record<string, unknown> : {};
+      let baseContext = contextJson ? JSON.parse(contextJson) as Record<string, unknown> : {};
 
-      if (isColdOutreach && Object.keys(context).length <= 1) {
+      if (isColdOutreach && Object.keys(baseContext).length <= 1) {
         const coldCtxJson = await env.KV_MARKETING.get(`${KV_PREFIX.EMAIL_CONTEXT}${send.contact_email}:cold-outreach`);
         if (coldCtxJson) {
-          context = { ...context, ...(JSON.parse(coldCtxJson) as Record<string, unknown>) };
+          baseContext = { ...baseContext, ...(JSON.parse(coldCtxJson) as Record<string, unknown>) };
         }
       }
 
+      // Keep campaign slug in context so outbound analytics and AI personalization
+      // can attribute generated copy back to the active experiment.
+      baseContext = {
+        ...baseContext,
+        campaignSlug: activeCampaignSlug,
+        contactEmail: send.contact_email,
+      };
+
+      const variantWeights = await loadVariantWeights(env.KV_MARKETING, send.template_key);
+      let context = isColdOutreach
+        ? prepareTemplateContext(baseContext, send.template_key, variantWeights)
+        : prepareWarmTemplateContext(baseContext, send.template_key, variantWeights);
+
       if (isColdOutreach) {
-        // Load A/B weights so tiered cold pools learn over time (previously
-        // cold selection was uniform random — a real learning no-op).
-        const coldWeights = await loadVariantWeights(env.KV_MARKETING, send.template_key);
-        context = prepareTemplateContext(context, send.template_key, coldWeights);
-      } else {
-        // Warm sends: prepare template context with weighted A/B variant selection
-        const warmWeights = await loadVariantWeights(env.KV_MARKETING, send.template_key);
-        context = prepareWarmTemplateContext(context, send.template_key, warmWeights);
+        const subjectPoolSize = typeof context._subjectPoolSize === 'number' ? context._subjectPoolSize : 0;
+        const bodyPoolSize = typeof context._bodyPoolSize === 'number' ? context._bodyPoolSize : 0;
+        const subjectWeightsKey = typeof context._subjectWeightsKey === 'string' ? context._subjectWeightsKey : null;
+        const bodyWeightsKey = typeof context._bodyWeightsKey === 'string' ? context._bodyWeightsKey : null;
+
+        let forcedSubjectIdx: number | null = null;
+        let forcedBodyIdx: number | null = null;
+
+        if (subjectPoolSize > 0) {
+          forcedSubjectIdx = await resolvePersistentVariantAssignment(env.KV_MARKETING, {
+            campaignSlug: activeCampaignSlug,
+            contactEmail: send.contact_email,
+            templateKey: send.template_key,
+            variantType: 'subject',
+            poolSize: subjectPoolSize,
+            weights: subjectWeightsKey ? variantWeights?.[subjectWeightsKey]?.slice(0, subjectPoolSize) : undefined,
+          });
+        }
+
+        if (bodyPoolSize > 0) {
+          forcedBodyIdx = await resolvePersistentVariantAssignment(env.KV_MARKETING, {
+            campaignSlug: activeCampaignSlug,
+            contactEmail: send.contact_email,
+            templateKey: send.template_key,
+            variantType: 'body',
+            poolSize: bodyPoolSize,
+            weights: bodyWeightsKey ? variantWeights?.[bodyWeightsKey]?.slice(0, bodyPoolSize) : undefined,
+          });
+        }
+
+        if (forcedSubjectIdx !== null || forcedBodyIdx !== null) {
+          const forcedContext = {
+            ...baseContext,
+            ...(forcedSubjectIdx !== null ? { _subjectVariantIdxForced: forcedSubjectIdx } : {}),
+            ...(forcedBodyIdx !== null ? { _bodyVariantIdxForced: forcedBodyIdx } : {}),
+          };
+          context = prepareTemplateContext(forcedContext, send.template_key, variantWeights);
+        }
       }
 
-      const subject = (context.variantSubject)
+      let subject = (context.variantSubject)
         ? String(context.variantSubject)
         : send.subject;
+
+      if (isColdOutreach) {
+        const personalized = await applyAiPersonalizationForOutbound(env, {
+          to: send.contact_email,
+          templateKey: send.template_key,
+          subject,
+          context,
+          activeCampaignSlug,
+        });
+        context = personalized.context;
+        subject = personalized.subject;
+      }
 
       // Extract variant indices set by prepareTemplateContext / prepareWarmTemplateContext.
       // Stored as numbers (null if the template has no variant pool).
@@ -598,11 +776,18 @@ async function sendEmail(
     return { messageId: null };
   }
 
-  const htmlBody = await renderTemplate(env, templateKey, {
+  let htmlBody = await renderTemplate(env, templateKey, {
     ...context,
     subject,
     to,
   });
+
+  const personalizationOpening = typeof context.aiPersonalizationOpening === 'string'
+    ? context.aiPersonalizationOpening
+    : null;
+  if (personalizationOpening) {
+    htmlBody = injectAiPersonalizationBlock(htmlBody, personalizationOpening);
+  }
 
   if (env.ENVIRONMENT === 'development' || !env.EMAIL_API_KEY) {
     console.log(`[Email:Dev] Would send to ${to}: "${subject}" (template: ${templateKey})`);

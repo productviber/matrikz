@@ -471,6 +471,46 @@ describe('worker fetch handler', () => {
     });
   });
 
+  describe('GET /api/admin/governance/ingress-slo', () => {
+    it('requires admin auth', async () => {
+      const req = makeRequest('GET', '/api/admin/governance/ingress-slo');
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 200 with valid auth', async () => {
+      env.DB.onQuery(/SELECT COUNT\(\*\) AS total[\s\S]*governance_ingress_decisions/i, () => [{
+        total: 1,
+        allowed_count: 1,
+        blocked_count: 0,
+        observed_count: 1,
+        bypassed_count: 0,
+        duplicate_suppressed_count: 0,
+        violation_count: 0,
+      }]);
+      env.DB.onQuery(/SELECT COALESCE\(authority_source, 'absent_or_legacy'\) AS source/i, () => [
+        { source: 'visibility-analytics', count: 1 },
+      ]);
+      env.DB.onQuery(/SELECT reason AS source/i, () => [
+        { source: 'authority_context_valid', count: 1 },
+      ]);
+      env.DB.onQuery(/SELECT enforcement_outcome AS source/i, () => [
+        { source: 'observed', count: 1 },
+      ]);
+
+      const req = makeRequest('GET', '/api/admin/governance/ingress-slo?hours=24', undefined, {
+        Authorization: `Bearer ${env.ADMIN_TOKEN}`,
+      });
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).toBe(200);
+
+      const body = await res.json() as any;
+      const data = body.data ?? body;
+      expect(data.totals.events).toBe(1);
+      expect(data.enforcementOutcomeDistribution.observed).toBe(1);
+    });
+  });
+
   // ── New Admin Outbound Routes ─────────────────────────────────────────
 
   describe('GET /api/admin/outbound/ab-stats', () => {
@@ -521,6 +561,20 @@ describe('worker fetch handler', () => {
 
       const res = await worker.fetch(req, env as any, ctx);
       // Should be 200 (processed) or 400 (validation) — NOT 404
+      expect(res.status).not.toBe(404);
+    });
+
+    it('remains compatible when governance ingress enforce mode is enabled', async () => {
+      env.GOVERNANCE_INGRESS_MODE = 'enforce';
+      const req = makeRequest('POST', '/webhooks/brevo/inbound', {
+        from: 'sender@example.com',
+        to: 'receiver@example.com',
+        subject: 'Test',
+        text: 'Hello from inbound',
+      });
+
+      const res = await worker.fetch(req, env as any, ctx);
+      expect(res.status).not.toBe(403);
       expect(res.status).not.toBe(404);
     });
   });

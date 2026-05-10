@@ -27,6 +27,7 @@ import {
   notifyEarningsMilestone,
 } from '../lib/notifications';
 import { markAsCustomer } from '../lib/crm';
+import { createAffiliate, getAffiliateByCode } from '../lib/analytics-client';
 
 export async function handleAffiliateConversion(
   env: Env,
@@ -103,7 +104,6 @@ export async function handleAffiliateConversion(
 
     // Notify analytics worker to update commission rate (if service binding available)
     try {
-      const { createAffiliate } = await import('../lib/analytics-client');
       await createAffiliate(env, {
         code: affiliateCode,
         name: affiliateCode, // Analytics worker should upsert
@@ -138,7 +138,6 @@ export async function handleAffiliateConversion(
   if (!affiliateEmail) {
     // Try to get from analytics service binding
     try {
-      const { getAffiliateByCode } = await import('../lib/analytics-client');
       const affData = await getAffiliateByCode(env, affiliateCode);
       if (affData && (affData as any).owner_email) {
         affiliateEmail = (affData as any).owner_email;

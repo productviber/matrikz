@@ -5,6 +5,8 @@ import { ok, badRequest, serverError } from '../lib/response';
 import { verifySkripSignature } from '../lib/skrip/signing';
 import { logEvent } from '../lib/observability';
 import { recordAgentActionOutcome } from '../lib/growth/actions';
+import { getDispatchCorrelation, normalizeOutcomeMetric } from '../lib/growth/closedLoop';
+import { sendOutcomeFeedback } from '../lib/growth/feedbackClient';
 
 interface SkripOutcomePayload {
   version?: string;
@@ -170,6 +172,26 @@ export async function handleSkripOutcomeWebhook(
       messageId: payload.messageId,
       channel: payload.channel,
     });
+
+    const correlation = await getDispatchCorrelation(env, payload.correlationId);
+    if (correlation) {
+      void sendOutcomeFeedback(env, {
+        correlationId: payload.correlationId,
+        tenantId: correlation.tenantId,
+        subjectId: correlation.subjectId,
+        actionTaken: correlation.actionType,
+        outcomeMetric: normalizeOutcomeMetric(payload.eventType),
+        observedAt: payload.occurredAt,
+        sourceEventType: payload.eventType,
+      });
+    } else {
+      console.log(JSON.stringify({
+        type: 'outcome_feedback_skipped_missing_correlation',
+        correlationId: payload.correlationId,
+        tenantId: payload.tenantId,
+        eventType: payload.eventType,
+      }));
+    }
 
     const agentActionId = typeof payload.metadata?.agentActionId === 'string'
       ? payload.metadata.agentActionId

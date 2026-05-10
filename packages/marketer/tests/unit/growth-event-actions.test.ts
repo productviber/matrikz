@@ -315,6 +315,81 @@ describe('growth event action materializer', () => {
     );
     expect(storedAction).toContain('"skripPolicy":"email_only"');
   });
+
+  it('passes repeated-action diversity warnings to the AI request', async () => {
+    let capturedAiRequest: any = null;
+    const env = createMockEnv({
+      AI_ENGINE: {
+        async fetch(_url: string | URL, init?: RequestInit): Promise<Response> {
+          capturedAiRequest = JSON.parse(String(init?.body ?? '{}'));
+          return new Response(JSON.stringify({
+            action: {
+              type: AGENT_ACTION_TYPE.WAIT,
+              params: { subjectId: 'prospect@acme.com' },
+              reason: 'avoid repeating no-outcome action type',
+            },
+            riskLevel: 'low',
+            confidence: 62,
+            explanation: 'Repeated no-outcome history warrants waiting before another intervention.',
+            metadata: {
+              provider: 'workers-ai',
+              model: 'model',
+              capability: 'growth-next-action',
+              promptVersion: '2026-05-02',
+              responseSchemaVersion: 'growth-action-v1',
+              latencyMs: 12,
+              tokenEstimate: 90,
+              costEstimate: 0,
+              fallback: false,
+            },
+            rawSummary: { diversityRisk: 'repeated_no_outcome' },
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        },
+      } as any,
+    });
+    const epoch = Math.floor(Date.now() / 1000);
+
+    env.DB.onQuery(/LEFT JOIN agent_action_outcomes/i, () => [
+      {
+        action_id: 'act_old_1',
+        proposed_action: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        confidence: 72,
+        executed_at: epoch - 2 * 86400,
+        outcome_type: 'no_outcome_observed',
+        attribution_strength: 'none',
+      },
+      {
+        action_id: 'act_old_2',
+        proposed_action: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+        confidence: 68,
+        executed_at: epoch - 5 * 86400,
+        outcome_type: 'no_outcome_observed',
+        attribution_strength: 'none',
+      },
+    ]);
+    env.DB.onQuery(/FROM growth_signals/i, () => []);
+    env.DB.onQuery(/FROM marketing_contacts/i, () => []);
+    env.DB.onQuery(/FROM contact_channel_identities/i, () => []);
+    env.DB.onQuery(/SELECT created_at\s+FROM agent_actions/i, () => []);
+    env.DB.onQuery(/SELECT COUNT\(\*\) AS count/i, () => [{ count: 0 }]);
+    env.DB.onQuery(/SELECT \* FROM agent_actions WHERE idempotency_key/i, () => [
+      actionRow({
+        proposed_action: AGENT_ACTION_TYPE.WAIT,
+        proposed_action_json: JSON.stringify({ type: AGENT_ACTION_TYPE.WAIT, params: { subjectId: 'prospect@acme.com' } }),
+      }),
+    ]);
+
+    const created = await proposeEligibleAgentActionsFromSignals(env as any, [signalRow({ subject_id: 'prospect@acme.com' })], {});
+
+    expect(created).toHaveLength(1);
+    expect(capturedAiRequest?.context?.subjectContext?.diversityRisk).toBe('repeated_no_outcome');
+    expect(capturedAiRequest?.context?.policyHints?.avoidActionTypes).toContain(AGENT_ACTION_TYPE.ENROLL_SEQUENCE);
+    expect(capturedAiRequest?.context?.policyHints?.repeatedActionWarnings[0]).toMatchObject({
+      actionType: AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+      noOutcomeCount: 2,
+      warning: 'repeated_no_outcome',
+    });
+  });
 });
 
 describe('deterministicFallbackActionForSignal', () => {

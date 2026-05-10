@@ -147,18 +147,20 @@ function makeGetRequest(path: string, headers?: Record<string, string>): Request
   });
 }
 
-function makeEnvWithResponse(response: unknown): GrowthAgentEnv {
-  return makeEnv({
-    WORKERS_AI: {
-      async run() {
-        return { response: JSON.stringify(response) };
-      },
+function makeOutcomeDb(rows: unknown[]): D1Database {
+  return {
+    prepare() {
+      return {
+        bind() {
+          return {
+            async all() {
+              return { results: rows };
+            },
+          };
+        },
+      };
     },
-  });
-}
-
-async function json<T = Envelope>(res: Response): Promise<T> {
-  return (await res.json()) as T;
+  } as unknown as D1Database;
 }
 
 describe("growth-agent integration", () => {
@@ -546,5 +548,46 @@ describe("growth-agent integration", () => {
     if (payload.ok) {
       expect(payload.metadata.fallback).toBe(true);
     }
+  });
+
+  it("returns experiment holdout report for internal operators", async () => {
+    const req = makeGetRequest("/internal/experiments/holdout-report?windowDays=30&minArmSample=20");
+    const res = await worker.fetch(
+      req,
+      makeEnv({
+        OUTCOME_DB: makeOutcomeDb([
+          {
+            experimentId: "exp-agentic-1",
+            arm: "control",
+            capability: "growth-next-action",
+            actionType: "activate",
+            recommendations: 30,
+            outcomes: 8,
+            positiveOutcomes: 4,
+            conversions: 1,
+            totalDelta: 2,
+            avgObservedDelta: 0.25,
+          },
+          {
+            experimentId: "exp-agentic-1",
+            arm: "treatment",
+            capability: "growth-next-action",
+            actionType: "activate",
+            recommendations: 40,
+            outcomes: 16,
+            positiveOutcomes: 12,
+            conversions: 4,
+            totalDelta: 7,
+            avgObservedDelta: 0.43,
+          },
+        ]),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const payload = await res.json() as any;
+    expect(payload.ok).toBe(true);
+    expect(payload.data.comparisons[0].experimentId).toBe("exp-agentic-1");
+    expect(payload.data.comparisons[0].uplift.positiveOutcomeRate).toBeGreaterThan(0);
   });
 });

@@ -139,6 +139,8 @@ export const SKRIP_CONFIG = {
   HEADER_SIGNATURE: 'x-skrip-signature',
   HEADER_CORRELATION_ID: 'x-skrip-correlation-id',
   HEADER_TENANT_ID: 'x-vm-tenant-id',
+  DISPATCH_BATCH_SIZE: 25,        // total rows per dispatch sweep
+  DISPATCH_PER_TENANT_LIMIT: 5,   // max rows per tenant per sweep (noisy-neighbor guard)
 } as const;
 
 // ─── Agent-Led Growth Foundation ───────────────────────────────────────────
@@ -236,6 +238,11 @@ export const GROWTH_POLICY = {
   MAX_LIST_LIMIT: 200,
   DEFAULT_LIST_LIMIT: 50,
   DEFAULT_CONFIDENCE: 65,
+  QUALITY_HIGH_CONFIDENCE_THRESHOLD: 80,
+  QUALITY_RISK_SAMPLE_LIMIT: 25,
+  DIVERSITY_RECENT_ACTION_LIMIT: 5,
+  DIVERSITY_REPEAT_ACTION_THRESHOLD: 2,
+  DIVERSITY_NO_OUTCOME_THRESHOLD: 2,
   MIN_EXECUTION_CONFIDENCE: 40,
   DEFAULT_AGENT_ID: 'visibility-growth-agent',
   KILL_SWITCH_GLOBAL_KEY: 'agent:growth:kill:global',
@@ -398,6 +405,8 @@ export const KV_PREFIX = {
    * Payload: `{ templateKey, subIdx, bodyIdx, sentAt }`
    */
   AB_SEND: 'ab:send:',
+  /** Persistent per-contact campaign variant assignments. */
+  AB_ASSIGNMENT: 'ab:assign:',
   /** Contact form submission dedup tracker (per domain) */
   OUTBOUND_FORM: 'outbound:form:',
   /** Nonce dedupe keys for replay-protected sensitive user actions */
@@ -414,6 +423,35 @@ export const KV_PREFIX = {
   AI_ENGINE_FAILURE: 'ai-engine:failure:',
   /** Daily fallback rate counter for ai-engine advisory calls */
   AI_ENGINE_FALLBACK_RATE: 'ai-engine:fallback-rate:',
+  /** Correlation lookup record from dispatcher ingress to outcome hooks. */
+  OUTCOME_DISPATCH_MAP: 'outcome:dispatch:map:',
+  /** Dispatch ingress accepted counter scoped by tenant (or all). */
+  OUTCOME_DISPATCH_ACCEPTED: 'outcome:dispatch:accepted:',
+  /** Dispatch ingress rejected counter scoped by tenant (or all). */
+  OUTCOME_DISPATCH_REJECTED: 'outcome:dispatch:rejected:',
+  /** Successful outcome feedback sends scoped by tenant (or all). */
+  OUTCOME_FEEDBACK_SENT: 'outcome:feedback:sent:',
+  /** Failed outcome feedback sends scoped by tenant (or all). */
+  OUTCOME_FEEDBACK_FAILED: 'outcome:feedback:failed:',
+  /** Accumulator for feedback latency sum (ms) scoped by tenant (or all). */
+  OUTCOME_FEEDBACK_LATENCY_SUM: 'outcome:feedback:latency:sum:',
+  /** Accumulator for feedback latency sample count scoped by tenant (or all). */
+  OUTCOME_FEEDBACK_LATENCY_COUNT: 'outcome:feedback:latency:count:',
+  /** Dedup store for outcome feedback idempotency fingerprints. */
+  OUTCOME_FEEDBACK_IDEMPOTENCY: 'outcome:feedback:idempotency:',
+  /**
+   * KV-based emergency override for governance ingress mode.
+   * When present, takes precedence over GOVERNANCE_INGRESS_MODE env var.
+   * Allows operators to change mode without redeployment.
+   * Key: `gov:mode-override` (singleton, no tenant suffix).
+   */
+  GOVERNANCE_MODE_OVERRIDE: 'gov:mode-override',
+  /**
+   * KV-based emergency override for governance execution mode.
+   * When present, takes precedence over GOVERNANCE_EXECUTION_MODE env var.
+   * Key: `gov:exec:mode-override` (singleton, no tenant suffix).
+   */
+  GOVERNANCE_EXECUTION_MODE_OVERRIDE: 'gov:exec:mode-override',
   /**
    * Cron execution summary snapshot — latest run stats written after each
    * cron invocation for operational trend checks.
@@ -610,6 +648,31 @@ export const EVENT_SECURITY = {
   MAX_SKEW_SECS: 300,
   /** TTL for dedupe keys used for replay protection. */
   REPLAY_TTL_SECS: 900,
+} as const;
+
+export const GOVERNANCE_INGRESS_MODE = {
+  OFF: 'off',
+  OBSERVE: 'observe',
+  ENFORCE: 'enforce',
+} as const;
+
+export const GOVERNANCE_EXECUTION_MODE = {
+  OFF: 'off',
+  OBSERVE: 'observe',
+  ENFORCE: 'enforce',
+} as const;
+
+export const GOVERNANCE_EXECUTION_CONFIG = {
+  /** Timeout in milliseconds for remote governance service calls. */
+  DEFAULT_TIMEOUT_MS: 5_000,
+  /** Internal auth header name used for governance service calls. */
+  AUTH_HEADER: 'x-internal-secret',
+  /** Internal tenant header forwarded on execution governance requests. */
+  TENANT_HEADER: 'x-vm-tenant-id',
+  /** Execution governance remote endpoint paths. */
+  ENDPOINT_ENROLLMENT: '/v1/decisions/enrollment',
+  ENDPOINT_OUTBOUND: '/v1/decisions/outbound',
+  ENDPOINT_TOKENS_VERIFY: '/v1/tokens/verify',
 } as const;
 
 // ─── Recipient Identity Token ───────────────────────────────────────────────

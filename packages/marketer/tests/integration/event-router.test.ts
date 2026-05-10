@@ -16,12 +16,13 @@ describe('event router', () => {
     env = createMockEnv();
   });
 
-  function makeEventRequest(body: unknown): Request {
+  function makeEventRequest(body: unknown, headers: Record<string, string> = {}): Request {
     return new Request('https://test.workers.dev/events', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'cf-worker': 'visibility-analytics',
+        ...headers,
       },
       body: JSON.stringify(body),
     });
@@ -114,6 +115,48 @@ describe('event router', () => {
     expect(body.event).toBe('user.converted');
   });
 
+  it('accepts outbound.prospect_enriched payload with personalization and scoring metadata', async () => {
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'outbound.prospect_enriched',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      data: {
+        prospectId: 42,
+        domain: 'acme.io',
+        contactEmail: 'growth@acme.io',
+        companyName: 'Acme',
+        score: 78,
+        auditScore: 61,
+        auditGrade: 'C',
+        issueCount: 8,
+        passCount: 10,
+        techStack: ['wordpress', 'ga4'],
+        primaryTopic: 'technical seo',
+        industry: 'SaaS',
+        angles: [{ type: 'missing_schema', hook: 'No structured data found', detail: 'Add JSON-LD' }],
+        personalizationHooks: [
+          'Your team can likely recover lost visibility with metadata fixes first.',
+          'A fast issue triage could improve search snippet quality.',
+        ],
+        personalizationSource: 'ai-engine',
+        authorityContext: {
+          decisionId: 'dec-enriched-42',
+          source: 'visibility-analytics',
+          allowed: true,
+          actorTenantId: 'default',
+          targetTenantId: 'default',
+        },
+      },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    const body = await res.json() as any;
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.event).toBe('outbound.prospect_enriched');
+  });
+
   it('accepts unknown events for forward compatibility', async () => {
     const ctx = createMockCtx();
     const req = makeEventRequest({
@@ -189,6 +232,171 @@ describe('event router', () => {
     expect(second.status).toBe(409);
     const body = await second.json() as any;
     expect(body.error).toContain('Duplicate event');
+  });
+
+  it('allows absent authority context in enforce mode (legacy compatibility)', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      data: { tenantId: 'default', foo: 'legacy' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it('allows valid forwarded authority context in enforce mode', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        decisionId: 'dec-valid-1',
+        source: 'visibility-analytics',
+        allowed: true,
+        actorTenantId: 'default',
+        targetTenantId: 'default',
+      },
+      data: { tenantId: 'default', actionType: 'campaign.start' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it('observes but does not block invalid forwarded authority context in observe mode', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'observe';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        source: 'visibility-analytics',
+        allowed: true,
+      },
+      data: { tenantId: 'default' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it('blocks invalid forwarded authority context in enforce mode', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        source: 'visibility-analytics',
+        allowed: true,
+      },
+      data: { tenantId: 'default' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('blocks untrusted forwarded authority source in enforce mode', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    env.GOVERNANCE_ALLOWED_AUTHORITY_SOURCES = 'visibility-analytics';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        decisionId: 'dec-source-bad',
+        source: 'rogue-forwarder',
+        allowed: true,
+        targetTenantId: 'default',
+      },
+      data: { tenantId: 'default', actionType: 'campaign.start' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('enforce mode can be scoped to high-risk actions only', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    env.GOVERNANCE_ENFORCE_ACTIONS = 'send_via_skrip';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        source: 'visibility-analytics',
+        allowed: true,
+      },
+      data: { tenantId: 'default', actionType: 'campaign.start' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(200);
+  });
+
+  it('blocks tenant scope mismatch in enforce mode', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    const ctx = createMockCtx();
+    const req = makeEventRequest({
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        decisionId: 'dec-tenant-mismatch',
+        source: 'visibility-analytics',
+        allowed: true,
+        targetTenantId: 'tenant-b',
+      },
+      data: { tenantId: 'tenant-a' },
+    });
+
+    const res = await routeEvent(req, env as any, ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('suppresses duplicate forwarded authority decision idempotently', async () => {
+    env.GOVERNANCE_INGRESS_MODE = 'enforce';
+    const ctx = createMockCtx();
+    const payload = {
+      event: 'some.future.event',
+      source: 'visibility-analytics',
+      timestamp: new Date().toISOString(),
+      authorityContext: {
+        decisionId: 'dec-dup-1',
+        source: 'visibility-analytics',
+        allowed: true,
+        targetTenantId: 'default',
+      },
+      data: { tenantId: 'default', actionType: 'campaign.start', foo: 'a' },
+    };
+
+    const first = await routeEvent(makeEventRequest(payload), env as any, ctx);
+    expect(first.status).toBe(200);
+
+    const second = await routeEvent(makeEventRequest({
+      ...payload,
+      timestamp: new Date(Date.now() + 1_000).toISOString(),
+      data: { tenantId: 'default', actionType: 'campaign.start', foo: 'b' },
+    }), env as any, ctx);
+    expect(second.status).toBe(200);
+    const body = await second.json() as any;
+    expect(body.duplicateSuppressed).toBe(true);
+
+    const governanceWrites = env.DB._queries.filter((q) =>
+      /INSERT INTO governance_ingress_decisions/.test(q.sql)
+    );
+    expect(governanceWrites).toHaveLength(2);
   });
 
   it('routes user.signup events to handleUserSignup', async () => {

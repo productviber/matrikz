@@ -197,6 +197,17 @@ These are plain vars in `packages/marketer/wrangler.toml` and are not set with `
 - `ALLOWED_ORIGIN`
 - `PAYOUT_PROVIDER`
 - `RAZORPAY_ACCOUNT_NUMBER` (plain var when Razorpay is used)
+- `GOVERNANCE_INGRESS_MODE` (`off` | `observe` | `enforce`)
+- `GOVERNANCE_ALLOWED_AUTHORITY_SOURCES` (comma-separated forwarded authority source allowlist)
+- `GOVERNANCE_ENFORCE_ACTIONS` (comma-separated high-risk action types for selective enforce)
+- `GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS` (comma-separated action types requiring `targetTenantId`)
+
+Governance rollout helper:
+
+```powershell
+Set-Location d:\coding\clodo-dev-site\visibility-marketing
+.\scripts\governance-ingress-rollout.ps1 -Environment staging -Mode observe
+```
 
 ## Recommended Value Sources
 

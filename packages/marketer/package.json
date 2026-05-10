@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
+    "test:closed-loop": "vitest run tests/unit/dispatch-route.test.ts tests/unit/outcome-feedback-client.test.ts tests/unit/outcome-loop-metrics.test.ts tests/integration/dispatch-outcome-feedback.e2e.test.ts",
     "test:smoke": "node tests/smoke.mjs",
     "test:smoke:skrip": "node scripts/skrip-smoke.mjs",
     "test:all": "vitest run && node tests/smoke.mjs",

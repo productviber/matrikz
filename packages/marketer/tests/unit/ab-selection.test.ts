@@ -7,7 +7,14 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { pickWeightedIndex, recordVariantEngagement, loadVariantWeights } from '../../src/lib/email/ab';
+import {
+  pickWeightedIndex,
+  recordVariantEngagement,
+  loadVariantWeights,
+  pickDeterministicWeightedIndex,
+  resolvePersistentVariantAssignment,
+  evaluateVariantWinner,
+} from '../../src/lib/email/ab';
 import { createMockKV, type MockKVNamespace } from '../helpers';
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -217,5 +224,56 @@ describe('engagement → selection convergence', () => {
       counts[pickWeightedIndex(2, w)]++;
     }
     expect(counts[0]).toBeGreaterThan(counts[1]);
+  });
+});
+
+describe('deterministic variant assignment', () => {
+  it('returns the same deterministic index for the same seed', () => {
+    const a = pickDeterministicWeightedIndex(3, 'seed-a', [1, 10, 1]);
+    const b = pickDeterministicWeightedIndex(3, 'seed-a', [1, 10, 1]);
+    expect(a).toBe(b);
+  });
+
+  it('persists assignment per contact/campaign/template/variantType', async () => {
+    const kv = createMockKV();
+    const first = await resolvePersistentVariantAssignment(kv, {
+      campaignSlug: 'cold-outreach-v2',
+      contactEmail: 'prospect@example.com',
+      templateKey: 'cold-outreach-step1',
+      variantType: 'subject',
+      poolSize: 4,
+      weights: [1, 5, 1, 1],
+    });
+
+    const second = await resolvePersistentVariantAssignment(kv, {
+      campaignSlug: 'cold-outreach-v2',
+      contactEmail: 'prospect@example.com',
+      templateKey: 'cold-outreach-step1',
+      variantType: 'subject',
+      poolSize: 4,
+      weights: [1, 5, 1, 1],
+    });
+
+    expect(first).toBe(second);
+  });
+});
+
+describe('evaluateVariantWinner', () => {
+  it('returns winner when confidence passes threshold', () => {
+    const result = evaluateVariantWinner([
+      { idx: 0, sent: 120, opened: 60, clicked: 30, replied: 12, bounced: 2, unsubscribed: 1 },
+      { idx: 1, sent: 120, opened: 20, clicked: 8, replied: 2, bounced: 5, unsubscribed: 3 },
+    ], { confidenceThreshold: 0.2, minSamples: 50 });
+    expect(result.winnerIdx).toBe(0);
+    expect(result.reason).toBe('winner_selected');
+  });
+
+  it('returns no winner when below confidence threshold', () => {
+    const result = evaluateVariantWinner([
+      { idx: 0, sent: 120, opened: 40, clicked: 18, replied: 4, bounced: 1, unsubscribed: 1 },
+      { idx: 1, sent: 120, opened: 38, clicked: 17, replied: 4, bounced: 1, unsubscribed: 1 },
+    ], { confidenceThreshold: 0.8, minSamples: 50 });
+    expect(result.winnerIdx).toBeNull();
+    expect(result.reason).toBe('below_confidence_threshold');
   });
 });

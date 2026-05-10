@@ -1,5 +1,5 @@
 import type { Env } from '../../types';
-import { AGENT_ACTION_STATUS } from '../../constants';
+import { AGENT_ACTION_STATUS, GROWTH_POLICY } from '../../constants';
 import { now, query, queryOne } from '../db';
 import { normalizeSubjectId, normalizeTenantId } from './common';
 
@@ -21,6 +21,20 @@ export interface SubjectChannelIdentity {
   consentState: string;
 }
 
+export interface SubjectActionTypeDistribution {
+  actionType: string;
+  count: number;
+  noOutcomeCount: number;
+  lastSeenDaysAgo: number | null;
+}
+
+export interface SubjectRepeatedActionWarning {
+  actionType: string;
+  count: number;
+  noOutcomeCount: number;
+  warning: 'repeated_action' | 'repeated_no_outcome';
+}
+
 /**
  * Structural context about a subject used to inform the AI engine decision.
  * Contains only what the agent needs to reason — no raw PII blobs.
@@ -40,6 +54,46 @@ export interface SubjectDecisionContext {
   emailEligible: boolean;
   lastActionType: string | null;
   lastActionDaysAgo: number | null;
+  actionTypeDistribution: SubjectActionTypeDistribution[];
+  repeatedActionWarnings: SubjectRepeatedActionWarning[];
+  diversityRisk: 'none' | 'repeated_action' | 'repeated_no_outcome';
+}
+
+function buildActionTypeDistribution(recentOutcomes: SubjectOutcomeSummary[]): SubjectActionTypeDistribution[] {
+  const byAction = new Map<string, SubjectActionTypeDistribution>();
+  for (const outcome of recentOutcomes) {
+    const current = byAction.get(outcome.actionType) ?? {
+      actionType: outcome.actionType,
+      count: 0,
+      noOutcomeCount: 0,
+      lastSeenDaysAgo: null,
+    };
+    current.count += 1;
+    if (outcome.outcomeType === AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED || outcome.outcomeType === 'no_response') {
+      current.noOutcomeCount += 1;
+    }
+    current.lastSeenDaysAgo = current.lastSeenDaysAgo === null
+      ? outcome.daysSinceExecution
+      : Math.min(current.lastSeenDaysAgo, outcome.daysSinceExecution);
+    byAction.set(outcome.actionType, current);
+  }
+  return [...byAction.values()].sort((a, b) => b.count - a.count || b.noOutcomeCount - a.noOutcomeCount);
+}
+
+function buildRepeatedActionWarnings(distribution: SubjectActionTypeDistribution[]): SubjectRepeatedActionWarning[] {
+  return distribution
+    .filter((row) =>
+      row.count >= GROWTH_POLICY.DIVERSITY_REPEAT_ACTION_THRESHOLD ||
+      row.noOutcomeCount >= GROWTH_POLICY.DIVERSITY_NO_OUTCOME_THRESHOLD,
+    )
+    .map((row) => ({
+      actionType: row.actionType,
+      count: row.count,
+      noOutcomeCount: row.noOutcomeCount,
+      warning: row.noOutcomeCount >= GROWTH_POLICY.DIVERSITY_NO_OUTCOME_THRESHOLD
+        ? 'repeated_no_outcome'
+        : 'repeated_action',
+    }));
 }
 
 // ─── Loader ──────────────────────────────────────────────────────────────────
@@ -104,13 +158,14 @@ export async function loadSubjectContextForDecision(
           AND aa.subject_id = ?
           AND aa.status IN (?, ?, ?)
         ORDER BY COALESCE(aa.executed_at, aa.created_at) DESC
-        LIMIT 5`,
+        LIMIT ?`,
       [
         normalTenantId,
         normalSubjectId,
         AGENT_ACTION_STATUS.EXECUTED,
         AGENT_ACTION_STATUS.OUTCOME_OBSERVED,
         AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        GROWTH_POLICY.DIVERSITY_RECENT_ACTION_LIMIT,
       ],
     ),
 
@@ -150,6 +205,13 @@ export async function loadSubjectContextForDecision(
 
   const lastAction = recentActions[0] ?? null;
   const activeChannelIds = activeChannels.map((row) => row.channel);
+  const actionTypeDistribution = buildActionTypeDistribution(recentOutcomes);
+  const repeatedActionWarnings = buildRepeatedActionWarnings(actionTypeDistribution);
+  const diversityRisk = repeatedActionWarnings.some((warning) => warning.warning === 'repeated_no_outcome')
+    ? 'repeated_no_outcome'
+    : repeatedActionWarnings.length > 0
+      ? 'repeated_action'
+      : 'none';
 
   return {
     recentOutcomes,
@@ -163,5 +225,8 @@ export async function loadSubjectContextForDecision(
     lastActionDaysAgo: lastAction?.executed_at
       ? Math.floor((epochNow - lastAction.executed_at) / (24 * 60 * 60))
       : null,
+    actionTypeDistribution,
+    repeatedActionWarnings,
+    diversityRisk,
   };
 }

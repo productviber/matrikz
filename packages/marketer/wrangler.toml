@@ -50,8 +50,15 @@ ENVIRONMENT = "production"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
 GROWTH_AGENT_TIMEOUT_MS = "12000"
+GOVERNANCE_INGRESS_MODE = "observe"
+GOVERNANCE_ALLOWED_AUTHORITY_SOURCES = "visibility-analytics"
+GOVERNANCE_ENFORCE_ACTIONS = ""
+GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS = "enroll_sequence,send_via_skrip,pause_campaign,start_campaign,pause_contact,campaign.start,campaign.pause,contact.pause"
+GOVERNANCE_EXECUTION_MODE = "observe"
 # When using PAYOUT_PROVIDER = "razorpay", also set:
 #   RAZORPAY_ACCOUNT_NUMBER = "your-razorpay-account-number"  (plain var — not secret)
+# Governance ingress mode values: off | observe | enforce
+# GOVERNANCE_ENFORCE_ACTIONS: comma list of action types to enforce in enforce mode; empty means all
 
 # Secrets (set via `wrangler secret put`):
 #   ADMIN_TOKEN
@@ -87,6 +94,11 @@ EMAIL_PROVIDER = "brevo"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
 GROWTH_AGENT_TIMEOUT_MS = "12000"
+GOVERNANCE_INGRESS_MODE = "observe"
+GOVERNANCE_ALLOWED_AUTHORITY_SOURCES = "visibility-analytics"
+GOVERNANCE_ENFORCE_ACTIONS = ""
+GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS = "enroll_sequence,send_via_skrip,pause_campaign,start_campaign,pause_contact,campaign.start,campaign.pause,contact.pause"
+GOVERNANCE_EXECUTION_MODE = "observe"
 
 [[env.development.kv_namespaces]]
 binding = "KV_MARKETING"
@@ -122,6 +134,11 @@ EMAIL_PROVIDER = "brevo"
 ALLOWED_ORIGIN = "https://visibility.clodo.dev"
 PAYOUT_PROVIDER = "stub"
 GROWTH_AGENT_TIMEOUT_MS = "12000"
+GOVERNANCE_INGRESS_MODE = "observe"
+GOVERNANCE_ALLOWED_AUTHORITY_SOURCES = "visibility-analytics"
+GOVERNANCE_ENFORCE_ACTIONS = ""
+GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS = "enroll_sequence,send_via_skrip,pause_campaign,start_campaign,pause_contact,campaign.start,campaign.pause,contact.pause"
+GOVERNANCE_EXECUTION_MODE = "observe"
 
 [[env.staging.kv_namespaces]]
 binding = "KV_MARKETING"

@@ -2,7 +2,7 @@ import type { Env, ProposedAgentAction } from '../../types';
 import { AGENT_ACTION_TYPE, AGENT_RISK_LEVEL, AI_ENGINE_CONFIG, CONTENT_TYPE_JSON, KV_PREFIX, TTL } from '../../constants';
 import { getCorrelationId } from '../correlation';
 import { normalizeTenantId, stableStringify } from '../growth/common';
-import { ACTION_TYPE_WHITELIST } from '@matrikz/growth-agent-contracts';
+
 
 export interface AiEngineMetadata {
   provider: string | null;
@@ -249,7 +249,8 @@ function normalizeGrowthNextActionResponse(
     ? response.action as Record<string, unknown>
     : {};
   const rawActionType = typeof actionRecord.type === 'string' ? actionRecord.type : AGENT_ACTION_TYPE.MANUAL_REVIEW;
-  const actionType = (ACTION_TYPE_WHITELIST as readonly string[]).includes(rawActionType)
+  const knownActionTypes = new Set<string>(Object.values(AGENT_ACTION_TYPE));
+  const actionType = knownActionTypes.has(rawActionType)
     ? rawActionType
     : (() => {
         console.warn(JSON.stringify({ type: 'action_type_whitelist_miss', received: rawActionType }));

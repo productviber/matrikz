@@ -2,18 +2,53 @@
  * Skrip Push Subscription Route Tests
  *
  * Covers: subscribe happy path, unsubscribe, missing subscription object,
- * invalid endpoint, and graceful degradation when Skrip is down.
+ * invalid endpoint, governance blocking behavior, and graceful degradation.
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { handlePushSubscribe, handlePushUnsubscribe } from '../../src/routes/skrip-push';
 import { createMockEnv, makeRequest, type MockEnv } from '../helpers';
+import { evaluateGovernanceExecution } from '../../src/lib/governance-execution-client';
+
+vi.mock('../../src/lib/governance-execution-client', () => ({
+  evaluateGovernanceExecution: vi.fn().mockResolvedValue({
+    decisionId: 'gexec_test',
+    governanceMode: 'off',
+    actionType: 'channel.push.subscribe',
+    actorTenantId: 'default',
+    targetTenantId: 'default',
+    tenantScope: 'default',
+    allowed: true,
+    enforcementOutcome: 'bypassed',
+    reason: 'bypass_mode_off',
+    policyVersion: null,
+    signedDecisionToken: null,
+    violation: false,
+  }),
+}));
 
 const mockFetch = vi.fn();
-beforeEach(() => { mockFetch.mockClear(); vi.stubGlobal('fetch', mockFetch); });
+beforeEach(() => {
+  mockFetch.mockClear();
+  vi.stubGlobal('fetch', mockFetch);
+  (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+    decisionId: 'gexec_test',
+    governanceMode: 'off',
+    actionType: 'channel.push.subscribe',
+    actorTenantId: 'default',
+    targetTenantId: 'default',
+    tenantScope: 'default',
+    allowed: true,
+    enforcementOutcome: 'bypassed',
+    reason: 'bypass_mode_off',
+    policyVersion: null,
+    signedDecisionToken: null,
+    violation: false,
+  });
+});
 afterEach(() => vi.unstubAllGlobals());
 
-// ── POST /api/push/subscribe ───────────────────────────────────────────────
+// -- POST /api/push/subscribe ------------------------------------------------
 
 describe('handlePushSubscribe()', () => {
   let env: MockEnv;
@@ -23,7 +58,6 @@ describe('handlePushSubscribe()', () => {
   });
 
   it('returns 201 and logs the opt-in event for an identified contact', async () => {
-    // Skrip not configured — should degrade gracefully
     const req = makeRequest('POST', '/api/push/subscribe', {
       subscription: {
         endpoint: 'https://fcm.googleapis.com/fcm/send/tok123',
@@ -86,9 +120,35 @@ describe('handlePushSubscribe()', () => {
     const res = await handlePushSubscribe(req, env as any);
     expect(res.status).toBe(400);
   });
+
+  it('returns 400 when governance blocks subscribe', async () => {
+    const req = makeRequest('POST', '/api/push/subscribe', {
+      subscription: {
+        endpoint: 'https://fcm.googleapis.com/fcm/send/tok123',
+      },
+      contactId: 'lead@acme.com',
+    });
+    (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+      decisionId: 'gexec_block',
+      governanceMode: 'enforce',
+      actionType: 'channel.push.subscribe',
+      actorTenantId: 'default',
+      targetTenantId: 'default',
+      tenantScope: 'default',
+      allowed: false,
+      enforcementOutcome: 'blocked',
+      reason: 'denied_by_service',
+      policyVersion: 'v1',
+      signedDecisionToken: null,
+      violation: true,
+    });
+
+    const res = await handlePushSubscribe(req, env as any);
+    expect(res.status).toBe(400);
+  });
 });
 
-// ── DELETE /api/push/unsubscribe ───────────────────────────────────────────
+// -- DELETE /api/push/unsubscribe -------------------------------------------
 
 describe('handlePushUnsubscribe()', () => {
   let env: MockEnv;
@@ -129,7 +189,6 @@ describe('handlePushUnsubscribe()', () => {
     const updateQ = env.DB._queries.find((q) =>
       q.sql.includes('UPDATE contact_channel_identities'),
     );
-    // Should NOT attempt an identity update for anonymous contact
     expect(updateQ).toBeUndefined();
   });
 
@@ -139,6 +198,30 @@ describe('handlePushUnsubscribe()', () => {
       body: 'bad',
       headers: { 'Content-Type': 'application/json' },
     });
+    const res = await handlePushUnsubscribe(req, env as any);
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when governance blocks unsubscribe', async () => {
+    const req = makeRequest('DELETE', '/api/push/unsubscribe', {
+      contactId: 'lead@acme.com',
+      tenantId: 'default',
+    });
+    (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+      decisionId: 'gexec_block',
+      governanceMode: 'enforce',
+      actionType: 'channel.push.unsubscribe',
+      actorTenantId: 'default',
+      targetTenantId: 'default',
+      tenantScope: 'default',
+      allowed: false,
+      enforcementOutcome: 'blocked',
+      reason: 'denied_by_service',
+      policyVersion: 'v1',
+      signedDecisionToken: null,
+      violation: true,
+    });
+
     const res = await handlePushUnsubscribe(req, env as any);
     expect(res.status).toBe(400);
   });

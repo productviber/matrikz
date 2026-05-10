@@ -23,6 +23,7 @@ import { enrollInSequences } from '../../lib/email';
 import { upsertContact } from '../../lib/crm';
 import { isSuppressed } from '../../lib/suppression';
 import { CONTACT_SOURCE, CONTACT_STATUS, EVENT_TYPES, KV_PREFIX, TTL, isPersonalEmail } from '../../constants';
+import { evaluateVariantWinner, promoteVariantWinner } from '../../lib/email/ab';
 
 /** Upper bounds — protect D1 from runaway scans. */
 const METRICS_LIMITS = Object.freeze({
@@ -495,12 +496,80 @@ export async function handleVariantMetrics(
             [sinceEpoch]
         );
 
+        const winnersByTemplateTier = new Map<string, {
+            template_key: string;
+            framing_tier: string;
+            subject_variant_idx: number;
+            sent: number;
+            open_rate: number;
+            click_rate: number;
+            reply_rate: number;
+            score: number;
+        }>();
+
+        for (const row of variantRows) {
+            if (!Number.isFinite(row.subject_variant_idx) || row.sent < 10) {
+                continue;
+            }
+            const key = `${row.template_key}:${row.framing_tier ?? 'unknown'}`;
+            const score = row.reply_rate * 0.6 + row.click_rate * 0.3 + row.open_rate * 0.1;
+            const candidate = {
+                template_key: row.template_key,
+                framing_tier: row.framing_tier ?? 'unknown',
+                subject_variant_idx: Number(row.subject_variant_idx),
+                sent: row.sent,
+                open_rate: row.open_rate,
+                click_rate: row.click_rate,
+                reply_rate: row.reply_rate,
+                score,
+            };
+            const current = winnersByTemplateTier.get(key);
+            if (!current || candidate.score > current.score || (candidate.score === current.score && candidate.sent > current.sent)) {
+                winnersByTemplateTier.set(key, candidate);
+            }
+        }
+        const winners = [...winnersByTemplateTier.values()].sort((a, b) => b.score - a.score);
+
+        const byCampaign = await query<{
+            campaign_slug: string | null;
+            sent: number;
+            opened: number;
+            clicked: number;
+            replied: number;
+        }>(
+            env.DB,
+            `SELECT campaign_slug,
+              COUNT(*) AS sent,
+              SUM(CASE WHEN opened_at  IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+              SUM(CASE WHEN clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS clicked,
+              SUM(CASE WHEN replied_at IS NOT NULL THEN 1 ELSE 0 END) AS replied
+         FROM email_sends
+        WHERE status = 'sent' AND sent_at >= ?
+        GROUP BY campaign_slug
+        ORDER BY sent DESC
+        LIMIT ?`,
+            [sinceEpoch, METRICS_LIMITS.MAX_BATCH_BREAKDOWN_ROWS]
+        );
+
+        const campaignAttribution = byCampaign.map((row) => ({
+            campaign_slug: row.campaign_slug || '(none)',
+            sent: row.sent,
+            opened: row.opened,
+            clicked: row.clicked,
+            replied: row.replied,
+            open_rate: row.sent > 0 ? row.opened / row.sent : 0,
+            click_rate: row.sent > 0 ? row.clicked / row.sent : 0,
+            reply_rate: row.sent > 0 ? row.replied / row.sent : 0,
+        }));
+
         return ok({
             windowDays,
             totals: totals ?? { sent: 0, opened: 0, clicked: 0, replied: 0 },
             byTier: tierRows,
             byVariant: variantRows,
             bySubject: subjectRows,
+            winners,
+            campaignAttribution,
         });
     } catch (err) {
         console.error('[variants] aggregation failed:', err instanceof Error ? err.message : err);
@@ -714,5 +783,157 @@ export async function handlePruneVariants(
     } catch (err) {
         console.error('[prune] failed:', err instanceof Error ? err.message : err);
         return serverError('Failed to prune variant');
+    }
+}
+
+// ─── Promote winner ─────────────────────────────────────────────────────────
+
+/**
+ * POST /api/internal/outbound/variants/promote-winner
+ *
+ * Body: {
+ *   templateKey: string,
+ *   variantType: 'subject' | 'body',
+ *   tier?: 'good' | 'standard' | 'compulsion',
+ *   minSamples?: number  (default 50),
+ *   confidenceThreshold?: number  (default 0.8),
+ *   dryRun?: boolean  (default true),
+ * }
+ *
+ * Queries D1 for variant engagement stats within the last 30 days, runs
+ * evaluateVariantWinner, and — when dryRun is false and a winner meets the
+ * confidence threshold — writes amplified KV weights via promoteVariantWinner.
+ *
+ * The winner receives weight 9 (~90% selection) while non-disabled peers
+ * retain weight 1 (exploration floor). Disabled (weight=0) slots stay at 0.
+ * At most one winner is promoted per call.
+ */
+export async function handlePromoteVariantWinner(
+    request: Request,
+    env: Env,
+): Promise<Response> {
+    if (request.method !== 'POST') {
+        return badRequest('POST required');
+    }
+    let body: Record<string, unknown>;
+    try {
+        body = (await request.json()) as Record<string, unknown>;
+    } catch {
+        return badRequest('Invalid JSON body');
+    }
+
+    const templateKey = typeof body.templateKey === 'string' ? body.templateKey : '';
+    const tier = typeof body.tier === 'string' ? body.tier : null;
+    const variantType = typeof body.variantType === 'string' ? body.variantType : '';
+    const dryRun = body.dryRun !== false; // default true
+    const rawMinSamples = typeof body.minSamples === 'number' ? body.minSamples : PRUNE_DEFAULTS.MIN_SAMPLES;
+    const minSamples = Number.isFinite(rawMinSamples) && rawMinSamples > 0
+        ? Math.floor(rawMinSamples)
+        : PRUNE_DEFAULTS.MIN_SAMPLES;
+    const rawConfidence = typeof body.confidenceThreshold === 'number' ? body.confidenceThreshold : 0.8;
+    const confidenceThreshold = Number.isFinite(rawConfidence) && rawConfidence > 0 && rawConfidence <= 1
+        ? rawConfidence
+        : 0.8;
+
+    if (!templateKey || !ALLOWED_TYPES.has(variantType)) {
+        return badRequest('templateKey and variantType (subject|body) are required');
+    }
+    if (tier && !ALLOWED_TIERS.has(tier)) {
+        return badRequest('tier must be good|standard|compulsion when provided');
+    }
+
+    const sinceEpoch = Math.floor(Date.now() / 1000) - PRUNE_DEFAULTS.WINDOW_DAYS * 86400;
+    const idxColumn = variantType === 'subject' ? 'subject_variant_idx' : 'body_variant_idx';
+    const poolKey = tier
+        ? `${variantType}:${templateKey}:${tier}`
+        : `${variantType}:${templateKey}`;
+
+    try {
+        const rows = await query<{
+            idx: number | null;
+            sent: number;
+            opened: number;
+            clicked: number;
+            replied: number;
+        }>(
+            env.DB,
+            `SELECT ${idxColumn} AS idx,
+              COUNT(*) AS sent,
+              SUM(CASE WHEN es.opened_at  IS NOT NULL THEN 1 ELSE 0 END) AS opened,
+              SUM(CASE WHEN es.clicked_at IS NOT NULL THEN 1 ELSE 0 END) AS clicked,
+              SUM(CASE WHEN es.replied_at IS NOT NULL THEN 1 ELSE 0 END) AS replied
+         FROM email_sends es
+         JOIN email_steps est ON est.id = es.step_id
+        WHERE es.status = 'sent'
+          AND es.sent_at >= ?
+          AND est.template_key = ?
+          ${tier ? 'AND es.framing_tier = ?' : ''}
+          AND ${idxColumn} IS NOT NULL
+        GROUP BY ${idxColumn}
+        ORDER BY ${idxColumn} ASC
+        LIMIT ?`,
+            tier
+                ? [sinceEpoch, templateKey, tier, METRICS_LIMITS.MAX_VARIANT_ROWS]
+                : [sinceEpoch, templateKey, METRICS_LIMITS.MAX_VARIANT_ROWS],
+        );
+
+        const performanceRows = rows
+            .filter((r): r is { idx: number; sent: number; opened: number; clicked: number; replied: number } =>
+                r.idx !== null)
+            .map((r) => ({ idx: r.idx, sent: r.sent, opened: r.opened, clicked: r.clicked, replied: r.replied }));
+
+        const evaluation = evaluateVariantWinner(performanceRows, { confidenceThreshold, minSamples });
+
+        if (evaluation.winnerIdx === null) {
+            return ok({
+                action: 'no_winner',
+                reason: evaluation.reason,
+                confidence: evaluation.confidence,
+                confidenceThreshold,
+                compared: evaluation.compared,
+                poolKey,
+                windowDays: PRUNE_DEFAULTS.WINDOW_DAYS,
+                minSamples,
+                samples: performanceRows,
+            });
+        }
+
+        if (dryRun) {
+            return ok({
+                action: 'dry_run',
+                winnerIdx: evaluation.winnerIdx,
+                confidence: evaluation.confidence,
+                reason: evaluation.reason,
+                poolKey,
+                windowDays: PRUNE_DEFAULTS.WINDOW_DAYS,
+                minSamples,
+                confidenceThreshold,
+                samples: performanceRows,
+            });
+        }
+
+        await promoteVariantWinner(
+            env.KV_MARKETING,
+            templateKey,
+            variantType as 'subject' | 'body',
+            evaluation.winnerIdx,
+            performanceRows.length,
+            tier,
+        );
+
+        return ok({
+            action: 'promoted',
+            winnerIdx: evaluation.winnerIdx,
+            confidence: evaluation.confidence,
+            reason: evaluation.reason,
+            poolKey,
+            windowDays: PRUNE_DEFAULTS.WINDOW_DAYS,
+            minSamples,
+            confidenceThreshold,
+            samples: performanceRows,
+        });
+    } catch (err) {
+        console.error('[promote-winner] failed:', err instanceof Error ? err.message : err);
+        return serverError('Failed to evaluate or promote variant winner');
     }
 }

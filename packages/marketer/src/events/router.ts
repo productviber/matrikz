@@ -73,6 +73,10 @@ import { handleProspectDiscovered, handleProspectEnriched, handleProspectConvert
 import { handleAuditCompleted, handleLeadCaptured } from './audit-funnel';
 import { materializeGrowthSignalsFromEvent } from '../lib/growth/signals';
 import { proposeEligibleAgentActionsFromSignals } from '../lib/growth/event-actions';
+import {
+  evaluateAndGuardGovernanceIngress,
+  writeGovernanceIngressDecision,
+} from '../lib/governance-ingress';
 
 /**
  * Main event handler — called by the worker entry point for POST /events.
@@ -118,6 +122,41 @@ export async function routeEvent(
       }, 'warn'));
       return new Response(JSON.stringify({ ok: false, error: 'Invalid event envelope' }), {
         status: 400,
+        headers: { 'Content-Type': CONTENT_TYPE_JSON },
+      });
+    }
+
+    // ── Governance ingress authority gate (progressive: off|observe|enforce) ──
+    const governanceDecision = await evaluateAndGuardGovernanceIngress(envelope, request, env);
+    ctx.waitUntil(writeGovernanceIngressDecision(env, governanceDecision));
+
+    if (governanceDecision.duplicateSuppressed) {
+      return new Response(JSON.stringify({
+        ok: true,
+        event,
+        duplicateSuppressed: true,
+        governance: {
+          decisionId: governanceDecision.decisionId,
+          enforcementOutcome: governanceDecision.enforcementOutcome,
+          reason: governanceDecision.reason,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': CONTENT_TYPE_JSON },
+      });
+    }
+
+    if (!governanceDecision.allowed) {
+      return new Response(JSON.stringify({
+        ok: false,
+        error: 'Governance authority validation failed',
+        governance: {
+          decisionId: governanceDecision.decisionId,
+          enforcementOutcome: governanceDecision.enforcementOutcome,
+          reason: governanceDecision.reason,
+        },
+      }), {
+        status: 403,
         headers: { 'Content-Type': CONTENT_TYPE_JSON },
       });
     }

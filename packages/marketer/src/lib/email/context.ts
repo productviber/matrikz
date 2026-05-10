@@ -262,22 +262,30 @@ export function prepareTemplateContext(
     : [];
   const variants = basePool ? [...basePool, ...capSubjects] : undefined;
   if (variants && variants.length > 0) {
+    const rawWeightsKey = tierSubjects
+      ? variantWeightsKey('subject', templateKey, tier)
+      : legacyVariantWeightsKey('subject', templateKey);
     // Keep weight array aligned with the pool it describes: when the tier pool
     // is active, only consult tier-keyed weights; fall back to legacy weights
     // only when the legacy pool is active. Slice to the effective pool length
     // so stored weights for currently-unavailable capability slots are
     // correctly excluded from this pick.
-    const rawWeights = tierSubjects
-      ? variantWeights?.[variantWeightsKey('subject', templateKey, tier)]
-      : variantWeights?.[legacyVariantWeightsKey('subject', templateKey)];
+    const rawWeights = variantWeights?.[rawWeightsKey];
     const subjectWeights = rawWeights ? rawWeights.slice(0, variants.length) : undefined;
-    const selectedIdx = pickWeightedIndex(variants.length, subjectWeights);
+    const forcedSubjectIdx = typeof processed._subjectVariantIdxForced === 'number'
+      ? processed._subjectVariantIdxForced
+      : null;
+    const selectedIdx = forcedSubjectIdx !== null && forcedSubjectIdx >= 0 && forcedSubjectIdx < variants.length
+      ? forcedSubjectIdx
+      : pickWeightedIndex(variants.length, subjectWeights);
     const selectedSubject = variants[selectedIdx];
     processed.variantSubject = selectedSubject.replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];
       return val !== undefined ? String(val) : '';
     });
     processed._subjectVariantIdx = selectedIdx;
+    processed._subjectPoolSize = variants.length;
+    processed._subjectWeightsKey = rawWeightsKey;
   }
 
   if (!processed.reportUrl && domain) {
@@ -299,18 +307,26 @@ export function prepareTemplateContext(
     // Weights only apply when the same pool produced them. Retarget pool has
     // no learned weights yet; tier pool uses tier-keyed weights; legacy pool
     // uses legacy-keyed weights.
+    const rawWeightsKey = tierBodies
+      ? variantWeightsKey('body', templateKey, tier)
+      : legacyVariantWeightsKey('body', templateKey);
     const bodyWeights = effectivePool === RETARGET_BODY_STEP3
       ? undefined
-      : tierBodies
-        ? variantWeights?.[variantWeightsKey('body', templateKey, tier)]
-        : variantWeights?.[legacyVariantWeightsKey('body', templateKey)];
-    const bodyIdx = pickWeightedIndex(effectivePool.length, bodyWeights);
+      : variantWeights?.[rawWeightsKey];
+    const forcedBodyIdx = typeof processed._bodyVariantIdxForced === 'number'
+      ? processed._bodyVariantIdxForced
+      : null;
+    const bodyIdx = forcedBodyIdx !== null && forcedBodyIdx >= 0 && forcedBodyIdx < effectivePool.length
+      ? forcedBodyIdx
+      : pickWeightedIndex(effectivePool.length, bodyWeights);
     const selectedBody = effectivePool[bodyIdx];
     processed.bodyVariant = selectedBody.replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];
       return val !== undefined ? String(val) : '';
     });
     processed._bodyVariantIdx = bodyIdx;
+    processed._bodyPoolSize = effectivePool.length;
+    processed._bodyWeightsKey = rawWeightsKey;
   }
 
   processed.auditPageUrl = `${APP_URLS.HOME}/audit?url=${processed.domainEncoded}`;
@@ -380,29 +396,45 @@ export function prepareWarmTemplateContext(
   const tierWarmSubjects = selectWarmSubjectPool(templateKey, warmTier);
   const subjects = tierWarmSubjects ?? WARM_SUBJECT_VARIANTS[templateKey];
   if (subjects && subjects.length > 0) {
-    const subjectWeights = tierWarmSubjects
-      ? variantWeights?.[variantWeightsKey('subject', templateKey, warmTier)]
-      : variantWeights?.[legacyVariantWeightsKey('subject', templateKey)];
-    const idx = pickWeightedIndex(subjects.length, subjectWeights);
+    const warmSubjectWeightsKey = tierWarmSubjects
+      ? variantWeightsKey('subject', templateKey, warmTier)
+      : legacyVariantWeightsKey('subject', templateKey);
+    const subjectWeights = variantWeights?.[warmSubjectWeightsKey];
+    const forcedSubjectIdx = typeof processed._subjectVariantIdxForced === 'number'
+      ? processed._subjectVariantIdxForced
+      : null;
+    const idx = forcedSubjectIdx !== null && forcedSubjectIdx >= 0 && forcedSubjectIdx < subjects.length
+      ? forcedSubjectIdx
+      : pickWeightedIndex(subjects.length, subjectWeights);
     processed.variantSubject = subjects[idx].replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];
       return val !== undefined ? String(val) : '';
     });
     processed._subjectVariantIdx = idx;
+    processed._subjectPoolSize = subjects.length;
+    processed._subjectWeightsKey = warmSubjectWeightsKey;
   }
 
   const tierWarmBodies = selectWarmBodyPool(templateKey, warmTier);
   const bodies = tierWarmBodies ?? WARM_BODY_VARIANTS[templateKey];
   if (bodies && bodies.length > 0) {
-    const bodyWeights = tierWarmBodies
-      ? variantWeights?.[variantWeightsKey('body', templateKey, warmTier)]
-      : variantWeights?.[legacyVariantWeightsKey('body', templateKey)];
-    const idx = pickWeightedIndex(bodies.length, bodyWeights);
+    const warmBodyWeightsKey = tierWarmBodies
+      ? variantWeightsKey('body', templateKey, warmTier)
+      : legacyVariantWeightsKey('body', templateKey);
+    const bodyWeights = variantWeights?.[warmBodyWeightsKey];
+    const forcedBodyIdx = typeof processed._bodyVariantIdxForced === 'number'
+      ? processed._bodyVariantIdxForced
+      : null;
+    const idx = forcedBodyIdx !== null && forcedBodyIdx >= 0 && forcedBodyIdx < bodies.length
+      ? forcedBodyIdx
+      : pickWeightedIndex(bodies.length, bodyWeights);
     processed.bodyVariant = bodies[idx].replace(/\{\{(\w+)\}\}/g, (_, key) => {
       const val = processed[key];
       return val !== undefined ? String(val) : '';
     });
     processed._bodyVariantIdx = idx;
+    processed._bodyPoolSize = bodies.length;
+    processed._bodyWeightsKey = warmBodyWeightsKey;
   }
 
   return processed;

@@ -23,40 +23,40 @@ function getConfiguredTimeout(env: Env): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : SKRIP_CONFIG.DEFAULT_TIMEOUT_MS;
 }
 
-async function readCircuitOpenUntil(env: Env): Promise<number> {
-  const raw = await env.KV_MARKETING.get(`${KV_PREFIX.SKRIP_CIRCUIT}default`);
+async function readCircuitOpenUntil(env: Env, tenantId: string): Promise<number> {
+  const raw = await env.KV_MARKETING.get(`${KV_PREFIX.SKRIP_CIRCUIT}${tenantId}`);
   const parsed = raw ? Number.parseInt(raw, 10) : 0;
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
-async function recordFailure(env: Env): Promise<void> {
-  const key = `${KV_PREFIX.SKRIP_FAILURE}default`;
+async function recordFailure(env: Env, tenantId: string): Promise<void> {
+  const key = `${KV_PREFIX.SKRIP_FAILURE}${tenantId}`;
   const current = Number.parseInt((await env.KV_MARKETING.get(key)) ?? '0', 10);
   const next = (Number.isFinite(current) ? current : 0) + 1;
   await env.KV_MARKETING.put(key, String(next), { expirationTtl: TTL.DAYS_1 });
   if (next >= SKRIP_CONFIG.CIRCUIT_FAILURE_THRESHOLD) {
     const openUntil = Date.now() + SKRIP_CONFIG.CIRCUIT_OPEN_TTL_SECS * 1000;
     await env.KV_MARKETING.put(
-      `${KV_PREFIX.SKRIP_CIRCUIT}default`,
+      `${KV_PREFIX.SKRIP_CIRCUIT}${tenantId}`,
       String(openUntil),
       { expirationTtl: SKRIP_CONFIG.CIRCUIT_OPEN_TTL_SECS },
     );
   }
 }
 
-async function clearFailures(env: Env): Promise<void> {
-  await env.KV_MARKETING.delete(`${KV_PREFIX.SKRIP_FAILURE}default`);
-  await env.KV_MARKETING.delete(`${KV_PREFIX.SKRIP_CIRCUIT}default`);
+async function clearFailures(env: Env, tenantId: string): Promise<void> {
+  await env.KV_MARKETING.delete(`${KV_PREFIX.SKRIP_FAILURE}${tenantId}`);
+  await env.KV_MARKETING.delete(`${KV_PREFIX.SKRIP_CIRCUIT}${tenantId}`);
 }
 
 async function performRequest<T>(env: Env, options: SkripRequestOptions): Promise<T> {
   const serviceToken = getSkripServiceToken(env);
   const signingSecret = getSkripSigningSecret(env);
-    if (!(env.SKRIP_SERVICE || env.SKRIP_BASE_URL) || !serviceToken) {
+  if (!(env.SKRIP_SERVICE || env.SKRIP_BASE_URL) || !serviceToken) {
     throw new Error('Skrip client is not fully configured');
   }
 
-  const openUntil = await readCircuitOpenUntil(env);
+  const openUntil = await readCircuitOpenUntil(env, options.tenantId);
   if (openUntil > Date.now()) {
     throw new Error('Skrip circuit breaker is open');
   }
@@ -64,7 +64,7 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
   const rawBody = options.body ? JSON.stringify(options.body) : '';
   const path = options.path.startsWith('/') ? options.path : `/${options.path}`;
   const timeoutMs = getConfiguredTimeout(env);
-    const url = env.SKRIP_BASE_URL ? new URL(path, env.SKRIP_BASE_URL).toString() : null;
+  const url = env.SKRIP_BASE_URL ? new URL(path, env.SKRIP_BASE_URL).toString() : null;
 
   // Build optional HMAC signature headers only when a dedicated outbound signing
   // secret is explicitly configured (distinct from the inbound webhook secret).
@@ -114,12 +114,12 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
         throw new Error(`Skrip API ${response.status}: ${await response.text()}`);
       }
 
-      await clearFailures(env);
+      await clearFailures(env, options.tenantId);
       return await response.json() as T;
     } catch (error) {
       clearTimeout(timer);
       lastError = error instanceof Error ? error : new Error(String(error));
-      await recordFailure(env);
+      await recordFailure(env, options.tenantId);
       if (attempt === SKRIP_CONFIG.MAX_RETRIES) break;
     }
   }
@@ -130,7 +130,7 @@ async function performRequest<T>(env: Env, options: SkripRequestOptions): Promis
 export function createSkripClient(env: Env) {
   const serviceToken = getSkripServiceToken(env);
   return {
-      configured: Boolean((env.SKRIP_SERVICE || env.SKRIP_BASE_URL) && serviceToken),
+    configured: Boolean((env.SKRIP_SERVICE || env.SKRIP_BASE_URL) && serviceToken),
     registerContact: <T>(tenantId: string, payload: unknown) =>
       performRequest<T>(env, { tenantId, path: '/v1/contacts/upsert', method: 'POST', body: payload }),
     sendMessage: <T>(tenantId: string, payload: unknown) =>

@@ -1,5 +1,5 @@
 import type { Env } from '../../types';
-import { AGENT_ACTION_EVENT, AGENT_ACTION_STATUS, GROWTH_POLICY } from '../../constants';
+import { AGENT_ACTION_EVENT, AGENT_ACTION_STATUS, AGENT_ACTION_TYPE, GROWTH_POLICY } from '../../constants';
 import { createAiEngineClient } from '../../lib/ai-engine/client';
 import { execute, now, query, queryOne } from '../../lib/db';
 import { listGrowthSignals } from '../../lib/growth/signals';
@@ -19,6 +19,10 @@ function parseLimit(request: Request, fallback: number = GROWTH_POLICY.DEFAULT_L
   const url = new URL(request.url);
   const raw = Number.parseInt(url.searchParams.get('limit') ?? String(fallback), 10);
   return Number.isFinite(raw) ? Math.min(Math.max(raw, 1), GROWTH_POLICY.MAX_LIST_LIMIT) : fallback;
+}
+
+function rate(numerator: number, denominator: number): number {
+  return denominator > 0 ? numerator / denominator : 0;
 }
 
 export async function handleAdminAgenticSignals(request: Request, env: Env): Promise<Response> {
@@ -258,27 +262,52 @@ export async function handleAgentDecisionTrace(request: Request, env: Env, subje
 export async function handleAdminAgenticQuality(request: Request, env: Env): Promise<Response> {
   const windowDays = parseWindowDays(request);
   const sinceEpoch = now() - windowDays * 86_400;
+  const highConfidenceThreshold = GROWTH_POLICY.QUALITY_HIGH_CONFIDENCE_THRESHOLD;
+  const reviewActionTypes = [
+    AGENT_ACTION_TYPE.WAIT,
+    AGENT_ACTION_TYPE.MANUAL_REVIEW,
+    AGENT_ACTION_TYPE.ESCALATE_TO_HUMAN,
+  ];
 
   const [
     totals,
-    aiFallback,
+    metadataRollup,
     approvals,
     policyBlocks,
-    confidenceByAction,
+    executedCostRollup,
+    traceCompletenessRollup,
+    aiMetadataByDimension,
+    diversityQualityRollup,
+    aggregateQuality,
+    qualityByAction,
     conversionsByAction,
+    recentQualityRisks,
   ] = await Promise.all([
     queryOne<{ count: number }>(
       env.DB,
       `SELECT COUNT(*) AS count FROM agent_actions WHERE created_at >= ?`,
       [sinceEpoch],
     ),
-    queryOne<{ count: number }>(
+    queryOne<{
+      metadata_rows: number;
+      fallback_count: number | null;
+      token_estimate_total: number | null;
+      cost_estimate_total: number | null;
+      avg_latency_ms: number | null;
+      missing_token_estimate_count: number | null;
+      missing_cost_estimate_count: number | null;
+    }>(
       env.DB,
-      `SELECT COUNT(*) AS count
+      `SELECT COUNT(*) AS metadata_rows,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.fallback') = 1 THEN 1 ELSE 0 END) AS fallback_count,
+              SUM(COALESCE(CAST(json_extract(ai_metadata_json, '$.tokenEstimate') AS REAL), 0)) AS token_estimate_total,
+              SUM(COALESCE(CAST(json_extract(ai_metadata_json, '$.costEstimate') AS REAL), 0)) AS cost_estimate_total,
+              ROUND(AVG(CAST(json_extract(ai_metadata_json, '$.latencyMs') AS REAL)), 2) AS avg_latency_ms,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.tokenEstimate') IS NULL THEN 1 ELSE 0 END) AS missing_token_estimate_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.costEstimate') IS NULL THEN 1 ELSE 0 END) AS missing_cost_estimate_count
          FROM agent_actions
         WHERE created_at >= ?
-          AND ai_metadata_json IS NOT NULL
-          AND (ai_metadata_json LIKE '%"fallback":true%' OR ai_metadata_json LIKE '%"fallback": true%')`,
+          AND ai_metadata_json IS NOT NULL`,
       [sinceEpoch],
     ),
     queryOne<{ count: number }>(
@@ -297,16 +326,242 @@ export async function handleAdminAgenticQuality(request: Request, env: Env): Pro
           AND status = ?`,
       [sinceEpoch, AGENT_ACTION_STATUS.REJECTED],
     ),
-    query<{ proposed_action: string; avg_confidence: number; proposals: number }>(
+    queryOne<{
+      executed_action_count: number;
+      executed_cost_estimate_total: number | null;
+      executed_missing_cost_estimate_count: number | null;
+    }>(
+      env.DB,
+      `SELECT COUNT(*) AS executed_action_count,
+              SUM(COALESCE(CAST(json_extract(ai_metadata_json, '$.costEstimate') AS REAL), 0)) AS executed_cost_estimate_total,
+              SUM(CASE WHEN ai_metadata_json IS NULL OR json_extract(ai_metadata_json, '$.costEstimate') IS NULL THEN 1 ELSE 0 END) AS executed_missing_cost_estimate_count
+         FROM agent_actions
+        WHERE created_at >= ?
+          AND status IN (?, ?, ?)`,
+      [
+        sinceEpoch,
+        AGENT_ACTION_STATUS.EXECUTED,
+        AGENT_ACTION_STATUS.OUTCOME_OBSERVED,
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+      ],
+    ),
+    queryOne<{
+      trace_rows: number;
+      complete_trace_rows: number | null;
+      metadata_present_count: number | null;
+      prompt_version_present_count: number | null;
+      schema_version_present_count: number | null;
+      provider_model_or_fallback_present_count: number | null;
+      route_reason_present_count: number | null;
+      fallback_reason_present_count: number | null;
+      policy_result_present_count: number | null;
+      signal_summary_present_count: number | null;
+      subject_context_present_count: number | null;
+      outcome_summary_present_count: number | null;
+    }>(
+      env.DB,
+      `SELECT COUNT(*) AS trace_rows,
+              SUM(CASE WHEN ai_metadata_json IS NOT NULL THEN 1 ELSE 0 END) AS metadata_present_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.promptVersion') IS NOT NULL THEN 1 ELSE 0 END) AS prompt_version_present_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.responseSchemaVersion') IS NOT NULL THEN 1 ELSE 0 END) AS schema_version_present_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.fallback') = 1
+                         OR (json_extract(ai_metadata_json, '$.provider') IS NOT NULL
+                         AND json_extract(ai_metadata_json, '$.model') IS NOT NULL)
+                       THEN 1 ELSE 0 END) AS provider_model_or_fallback_present_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.explanation') IS NOT NULL
+                         OR json_extract(proposed_action_json, '$.reason') IS NOT NULL
+                       THEN 1 ELSE 0 END) AS route_reason_present_count,
+              SUM(CASE WHEN json_extract(ai_metadata_json, '$.fallback') != 1
+                         OR json_extract(ai_metadata_json, '$.error') IS NOT NULL
+                         OR json_extract(ai_metadata_json, '$.rawSummary.error') IS NOT NULL
+                         OR json_extract(ai_metadata_json, '$.explanation') IS NOT NULL
+                       THEN 1 ELSE 0 END) AS fallback_reason_present_count,
+              SUM(CASE WHEN policy_result_json IS NOT NULL
+                         AND json_extract(policy_result_json, '$.allowed') IS NOT NULL
+                       THEN 1 ELSE 0 END) AS policy_result_present_count,
+              SUM(CASE WHEN json_extract(evidence_json, '$.signalCount') IS NOT NULL
+                         AND json_extract(evidence_json, '$.signalTypes') IS NOT NULL
+                       THEN 1 ELSE 0 END) AS signal_summary_present_count,
+              SUM(CASE WHEN json_extract(evidence_json, '$.subjectContext') IS NOT NULL THEN 1 ELSE 0 END) AS subject_context_present_count,
+              SUM(CASE WHEN json_extract(evidence_json, '$.subjectContext.recentOutcomeTypes') IS NOT NULL THEN 1 ELSE 0 END) AS outcome_summary_present_count,
+              SUM(CASE WHEN ai_metadata_json IS NOT NULL
+                         AND json_extract(ai_metadata_json, '$.promptVersion') IS NOT NULL
+                         AND json_extract(ai_metadata_json, '$.responseSchemaVersion') IS NOT NULL
+                         AND (json_extract(ai_metadata_json, '$.fallback') = 1
+                              OR (json_extract(ai_metadata_json, '$.provider') IS NOT NULL
+                              AND json_extract(ai_metadata_json, '$.model') IS NOT NULL))
+                         AND (json_extract(ai_metadata_json, '$.explanation') IS NOT NULL
+                              OR json_extract(proposed_action_json, '$.reason') IS NOT NULL)
+                         AND (json_extract(ai_metadata_json, '$.fallback') != 1
+                              OR json_extract(ai_metadata_json, '$.error') IS NOT NULL
+                              OR json_extract(ai_metadata_json, '$.rawSummary.error') IS NOT NULL
+                              OR json_extract(ai_metadata_json, '$.explanation') IS NOT NULL)
+                         AND policy_result_json IS NOT NULL
+                         AND json_extract(policy_result_json, '$.allowed') IS NOT NULL
+                         AND json_extract(evidence_json, '$.signalCount') IS NOT NULL
+                         AND json_extract(evidence_json, '$.signalTypes') IS NOT NULL
+                         AND json_extract(evidence_json, '$.subjectContext') IS NOT NULL
+                         AND json_extract(evidence_json, '$.subjectContext.recentOutcomeTypes') IS NOT NULL
+                       THEN 1 ELSE 0 END) AS complete_trace_rows
+         FROM agent_actions
+        WHERE created_at >= ?`,
+      [sinceEpoch],
+    ),
+      query<{
+        provider: string | null;
+        model: string | null;
+        prompt_version: string | null;
+        response_schema_version: string | null;
+        capability: string | null;
+        fallback: number | null;
+        proposals: number;
+        token_estimate_total: number | null;
+        cost_estimate_total: number | null;
+        avg_latency_ms: number | null;
+        missing_token_estimate_count: number | null;
+        missing_cost_estimate_count: number | null;
+      }>(
+        env.DB,
+        `SELECT json_extract(ai_metadata_json, '$.provider') AS provider,
+                json_extract(ai_metadata_json, '$.model') AS model,
+                json_extract(ai_metadata_json, '$.promptVersion') AS prompt_version,
+                json_extract(ai_metadata_json, '$.responseSchemaVersion') AS response_schema_version,
+                json_extract(ai_metadata_json, '$.capability') AS capability,
+                CASE WHEN json_extract(ai_metadata_json, '$.fallback') = 1 THEN 1 ELSE 0 END AS fallback,
+                COUNT(*) AS proposals,
+                SUM(COALESCE(CAST(json_extract(ai_metadata_json, '$.tokenEstimate') AS REAL), 0)) AS token_estimate_total,
+                SUM(COALESCE(CAST(json_extract(ai_metadata_json, '$.costEstimate') AS REAL), 0)) AS cost_estimate_total,
+                ROUND(AVG(CAST(json_extract(ai_metadata_json, '$.latencyMs') AS REAL)), 2) AS avg_latency_ms,
+                SUM(CASE WHEN json_extract(ai_metadata_json, '$.tokenEstimate') IS NULL THEN 1 ELSE 0 END) AS missing_token_estimate_count,
+                SUM(CASE WHEN json_extract(ai_metadata_json, '$.costEstimate') IS NULL THEN 1 ELSE 0 END) AS missing_cost_estimate_count
+           FROM agent_actions
+          WHERE created_at >= ?
+            AND ai_metadata_json IS NOT NULL
+          GROUP BY provider, model, prompt_version, response_schema_version, capability, fallback
+          ORDER BY proposals DESC`,
+        [sinceEpoch],
+      ),
+      queryOne<{
+        repeated_same_category_count: number | null;
+        repeated_no_outcome_category_count: number | null;
+        repeated_same_category_no_outcome_count: number | null;
+      }>(
+        env.DB,
+        `SELECT SUM(CASE WHEN json_array_length(json_extract(evidence_json, '$.subjectContext.repeatedActionWarnings')) > 0 THEN 1 ELSE 0 END) AS repeated_same_category_count,
+                SUM(CASE WHEN json_extract(evidence_json, '$.subjectContext.diversityRisk') = 'repeated_no_outcome' THEN 1 ELSE 0 END) AS repeated_no_outcome_category_count,
+                SUM(CASE WHEN json_array_length(json_extract(evidence_json, '$.subjectContext.repeatedActionWarnings')) > 0
+                           AND EXISTS (
+                             SELECT 1 FROM agent_action_outcomes o
+                              WHERE o.action_id = agent_actions.action_id
+                                AND o.outcome_type = ?
+                           )
+                         THEN 1 ELSE 0 END) AS repeated_same_category_no_outcome_count
+           FROM agent_actions
+          WHERE created_at >= ?`,
+        [AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED, sinceEpoch],
+      ),
+    queryOne<{
+      proposals: number;
+      high_confidence_proposals: number | null;
+      positive_action_count: number | null;
+      conversion_action_count: number | null;
+      no_outcome_action_count: number | null;
+      high_confidence_no_outcome: number | null;
+      suppressed_or_reviewed_count: number | null;
+      suppressed_positive_outcome_count: number | null;
+    }>(
+      env.DB,
+      `SELECT COUNT(*) AS proposals,
+              SUM(CASE WHEN confidence >= ? THEN 1 ELSE 0 END) AS high_confidence_proposals,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = agent_actions.action_id
+                       AND o.outcome_type IN ('conversion', 'engagement')
+                  ) THEN 1 ELSE 0 END) AS positive_action_count,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = agent_actions.action_id
+                       AND o.outcome_type = 'conversion'
+                  ) THEN 1 ELSE 0 END) AS conversion_action_count,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = agent_actions.action_id
+                       AND o.outcome_type = ?
+                  ) THEN 1 ELSE 0 END) AS no_outcome_action_count,
+              SUM(CASE WHEN confidence >= ? AND EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = agent_actions.action_id
+                       AND o.outcome_type = ?
+                  ) THEN 1 ELSE 0 END) AS high_confidence_no_outcome,
+              SUM(CASE WHEN proposed_action IN (?, ?, ?) THEN 1 ELSE 0 END) AS suppressed_or_reviewed_count,
+              SUM(CASE WHEN proposed_action IN (?, ?, ?) AND EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = agent_actions.action_id
+                       AND o.outcome_type IN ('conversion', 'engagement')
+                  ) THEN 1 ELSE 0 END) AS suppressed_positive_outcome_count
+         FROM agent_actions
+        WHERE created_at >= ?`,
+      [
+        highConfidenceThreshold,
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        highConfidenceThreshold,
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        ...reviewActionTypes,
+        ...reviewActionTypes,
+        sinceEpoch,
+      ],
+    ),
+    query<{
+      proposed_action: string;
+      avg_confidence: number;
+      proposals: number;
+      positive_outcomes: number;
+      conversions: number;
+      no_outcome_observed: number;
+      high_confidence_proposals: number;
+      high_confidence_no_outcome: number;
+      repeated_same_category: number;
+      repeated_no_outcome_category: number;
+    }>(
       env.DB,
       `SELECT proposed_action,
               ROUND(AVG(confidence), 2) AS avg_confidence,
-              COUNT(*) AS proposals
+              COUNT(*) AS proposals,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = a.action_id
+                       AND o.outcome_type IN ('conversion', 'engagement')
+                  ) THEN 1 ELSE 0 END) AS positive_outcomes,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = a.action_id
+                       AND o.outcome_type = 'conversion'
+                  ) THEN 1 ELSE 0 END) AS conversions,
+              SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = a.action_id
+                       AND o.outcome_type = ?
+                  ) THEN 1 ELSE 0 END) AS no_outcome_observed,
+              SUM(CASE WHEN confidence >= ? THEN 1 ELSE 0 END) AS high_confidence_proposals,
+              SUM(CASE WHEN confidence >= ? AND EXISTS (
+                    SELECT 1 FROM agent_action_outcomes o
+                     WHERE o.action_id = a.action_id
+                       AND o.outcome_type = ?
+                  ) THEN 1 ELSE 0 END) AS high_confidence_no_outcome,
+              SUM(CASE WHEN json_array_length(json_extract(evidence_json, '$.subjectContext.repeatedActionWarnings')) > 0 THEN 1 ELSE 0 END) AS repeated_same_category,
+              SUM(CASE WHEN json_extract(evidence_json, '$.subjectContext.diversityRisk') = 'repeated_no_outcome' THEN 1 ELSE 0 END) AS repeated_no_outcome_category
          FROM agent_actions
+           AS a
         WHERE created_at >= ?
         GROUP BY proposed_action
         ORDER BY proposals DESC`,
-      [sinceEpoch],
+      [
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        highConfidenceThreshold,
+        highConfidenceThreshold,
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        sinceEpoch,
+      ],
     ),
     query<{ proposed_action: string; conversions: number }>(
       env.DB,
@@ -319,27 +574,204 @@ export async function handleAdminAgenticQuality(request: Request, env: Env): Pro
         ORDER BY conversions DESC`,
       [sinceEpoch],
     ),
+    query<{
+      action_id: string;
+      subject_id: string;
+      proposed_action: string;
+      status: string;
+      confidence: number;
+      created_at: number;
+      ai_metadata_json: string | null;
+      last_outcome_type: string | null;
+    }>(
+      env.DB,
+      `SELECT action_id,
+              subject_id,
+              proposed_action,
+              status,
+              confidence,
+              created_at,
+              ai_metadata_json,
+              (SELECT outcome_type
+                 FROM agent_action_outcomes o
+                WHERE o.action_id = agent_actions.action_id
+                ORDER BY observed_at DESC
+                LIMIT 1) AS last_outcome_type
+         FROM agent_actions
+        WHERE created_at >= ?
+          AND (
+            (confidence >= ? AND EXISTS (
+              SELECT 1 FROM agent_action_outcomes o
+               WHERE o.action_id = agent_actions.action_id
+                 AND o.outcome_type = ?
+            ))
+            OR
+            (proposed_action IN (?, ?, ?) AND EXISTS (
+              SELECT 1 FROM agent_action_outcomes o
+               WHERE o.action_id = agent_actions.action_id
+                 AND o.outcome_type IN ('conversion', 'engagement')
+            ))
+            OR json_extract(ai_metadata_json, '$.fallback') = 1
+          )
+        ORDER BY created_at DESC
+        LIMIT ?`,
+      [
+        sinceEpoch,
+        highConfidenceThreshold,
+        AGENT_ACTION_STATUS.NO_OUTCOME_OBSERVED,
+        ...reviewActionTypes,
+        GROWTH_POLICY.QUALITY_RISK_SAMPLE_LIMIT,
+      ],
+    ),
   ]);
 
   const totalProposals = totals?.count ?? 0;
-  const fallbackCount = aiFallback?.count ?? 0;
+  const metadataRows = metadataRollup?.metadata_rows ?? 0;
+  const fallbackCount = metadataRollup?.fallback_count ?? 0;
   const acceptedCount = approvals?.count ?? 0;
   const blockedCount = policyBlocks?.count ?? 0;
-  const fallbackRate = totalProposals > 0 ? fallbackCount / totalProposals : 0;
-  const acceptanceRate = totalProposals > 0 ? acceptedCount / totalProposals : 0;
-  const policyBlockRate = totalProposals > 0 ? blockedCount / totalProposals : 0;
+  const positiveActionCount = aggregateQuality?.positive_action_count ?? 0;
+  const noOutcomeActionCount = aggregateQuality?.no_outcome_action_count ?? 0;
+  const highConfidenceProposals = aggregateQuality?.high_confidence_proposals ?? 0;
+  const highConfidenceNoOutcome = aggregateQuality?.high_confidence_no_outcome ?? 0;
+  const suppressedOrReviewedCount = aggregateQuality?.suppressed_or_reviewed_count ?? 0;
+  const suppressedPositiveOutcomeCount = aggregateQuality?.suppressed_positive_outcome_count ?? 0;
+  const tokenEstimateTotal = metadataRollup?.token_estimate_total ?? 0;
+  const costEstimateTotal = metadataRollup?.cost_estimate_total ?? 0;
+  const executedActionCount = executedCostRollup?.executed_action_count ?? 0;
+  const executedCostEstimateTotal = executedCostRollup?.executed_cost_estimate_total ?? 0;
+  const traceRows = traceCompletenessRollup?.trace_rows ?? 0;
+  const completeTraceRows = traceCompletenessRollup?.complete_trace_rows ?? 0;
+  const repeatedSameCategoryCount = diversityQualityRollup?.repeated_same_category_count ?? 0;
+  const repeatedNoOutcomeCategoryCount = diversityQualityRollup?.repeated_no_outcome_category_count ?? 0;
+  const repeatedSameCategoryNoOutcomeCount = diversityQualityRollup?.repeated_same_category_no_outcome_count ?? 0;
+
+  const fallbackRate = rate(fallbackCount, totalProposals);
+  const acceptanceRate = rate(acceptedCount, totalProposals);
+  const policyBlockRate = rate(blockedCount, totalProposals);
+  const metadataCompletenessRate = rate(metadataRows, totalProposals);
+  const noOutcomeRate = rate(noOutcomeActionCount, totalProposals);
+  const highConfidenceNoOutcomeRate = rate(highConfidenceNoOutcome, highConfidenceProposals);
+  const suppressedPositiveOutcomeRate = rate(suppressedPositiveOutcomeCount, suppressedOrReviewedCount);
+
+  const qualityByActionWithRates = qualityByAction.map((row) => ({
+    ...row,
+    positiveOutcomeRate: rate(row.positive_outcomes ?? 0, row.proposals),
+    conversionRate: rate(row.conversions ?? 0, row.proposals),
+    noOutcomeRate: rate(row.no_outcome_observed ?? 0, row.proposals),
+    highConfidenceNoOutcomeRate: rate(row.high_confidence_no_outcome ?? 0, row.high_confidence_proposals ?? 0),
+    repeatedSameCategoryRate: rate(row.repeated_same_category ?? 0, row.proposals),
+    repeatedNoOutcomeCategoryRate: rate(row.repeated_no_outcome_category ?? 0, row.proposals),
+  }));
+
+  const aiMetadataByDimensionWithRates = aiMetadataByDimension.map((row) => ({
+    provider: row.provider,
+    model: row.model,
+    promptVersion: row.prompt_version,
+    responseSchemaVersion: row.response_schema_version,
+    capability: row.capability,
+    fallback: row.fallback === 1,
+    proposals: row.proposals,
+    tokenEstimateTotal: row.token_estimate_total ?? 0,
+    costEstimateTotal: row.cost_estimate_total ?? 0,
+    avgLatencyMs: row.avg_latency_ms ?? null,
+    avgTokensPerProposal: rate(row.token_estimate_total ?? 0, row.proposals),
+    avgCostPerProposal: rate(row.cost_estimate_total ?? 0, row.proposals),
+    missingTokenEstimateCount: row.missing_token_estimate_count ?? 0,
+    missingCostEstimateCount: row.missing_cost_estimate_count ?? 0,
+  }));
 
   return ok({
     windowDays,
+    highConfidenceThreshold,
     totalProposals,
+    metadataRows,
+    metadataCompletenessRate,
     fallbackCount,
     fallbackRate,
     acceptedCount,
     acceptanceRate,
     blockedCount,
     policyBlockRate,
-    confidenceByAction,
+    tokenEstimateTotal,
+    costEstimateTotal,
+    avgLatencyMs: metadataRollup?.avg_latency_ms ?? null,
+    avgTokensPerProposal: rate(tokenEstimateTotal, totalProposals),
+    avgCostPerProposal: rate(costEstimateTotal, totalProposals),
+    executedActionCount,
+    executedCostEstimateTotal,
+    costPerExecutedAction: rate(executedCostEstimateTotal, executedActionCount),
+    executedMissingCostEstimateCount: executedCostRollup?.executed_missing_cost_estimate_count ?? 0,
+    costPerPositiveOutcome: rate(costEstimateTotal, positiveActionCount),
+    missingTokenEstimateCount: metadataRollup?.missing_token_estimate_count ?? 0,
+    missingCostEstimateCount: metadataRollup?.missing_cost_estimate_count ?? 0,
+    positiveActionCount,
+    conversionActionCount: aggregateQuality?.conversion_action_count ?? 0,
+    noOutcomeActionCount,
+    noOutcomeRate,
+    highConfidenceProposals,
+    highConfidenceNoOutcome,
+    highConfidenceNoOutcomeRate,
+    falsePositiveProxy: {
+      description: 'High-confidence proposals that later recorded no_outcome_observed.',
+      count: highConfidenceNoOutcome,
+      denominator: highConfidenceProposals,
+      rate: highConfidenceNoOutcomeRate,
+    },
+    falseNegativeProxy: {
+      description: 'Wait/manual_review/escalate_to_human proposals that later recorded conversion or engagement.',
+      count: suppressedPositiveOutcomeCount,
+      denominator: suppressedOrReviewedCount,
+      rate: suppressedPositiveOutcomeRate,
+    },
+    aiMetadataByDimension: aiMetadataByDimensionWithRates,
+    repeatedSameCategoryInterventions: {
+      description: 'Proposals created when recent history already showed repeated action-category exposure for the subject.',
+      count: repeatedSameCategoryCount,
+      rate: rate(repeatedSameCategoryCount, totalProposals),
+      repeatedNoOutcomeCategoryCount,
+      repeatedNoOutcomeCategoryRate: rate(repeatedNoOutcomeCategoryCount, totalProposals),
+      noOutcomeCount: repeatedSameCategoryNoOutcomeCount,
+      noOutcomeRate: rate(repeatedSameCategoryNoOutcomeCount, repeatedSameCategoryCount),
+    },
+    traceCompleteness: {
+      description: 'Proposal rows with enough structured metadata, policy, signal, subject, and outcome context for operator trace review.',
+      rows: traceRows,
+      completeRows: completeTraceRows,
+      completeRate: rate(completeTraceRows, traceRows),
+      present: {
+        metadata: traceCompletenessRollup?.metadata_present_count ?? 0,
+        promptVersion: traceCompletenessRollup?.prompt_version_present_count ?? 0,
+        responseSchemaVersion: traceCompletenessRollup?.schema_version_present_count ?? 0,
+        providerModelOrFallback: traceCompletenessRollup?.provider_model_or_fallback_present_count ?? 0,
+        routeReason: traceCompletenessRollup?.route_reason_present_count ?? 0,
+        fallbackReason: traceCompletenessRollup?.fallback_reason_present_count ?? 0,
+        policyResult: traceCompletenessRollup?.policy_result_present_count ?? 0,
+        signalSummary: traceCompletenessRollup?.signal_summary_present_count ?? 0,
+        subjectContext: traceCompletenessRollup?.subject_context_present_count ?? 0,
+        outcomeSummary: traceCompletenessRollup?.outcome_summary_present_count ?? 0,
+      },
+      missing: {
+        metadata: traceRows - (traceCompletenessRollup?.metadata_present_count ?? 0),
+        promptVersion: traceRows - (traceCompletenessRollup?.prompt_version_present_count ?? 0),
+        responseSchemaVersion: traceRows - (traceCompletenessRollup?.schema_version_present_count ?? 0),
+        providerModelOrFallback: traceRows - (traceCompletenessRollup?.provider_model_or_fallback_present_count ?? 0),
+        routeReason: traceRows - (traceCompletenessRollup?.route_reason_present_count ?? 0),
+        fallbackReason: traceRows - (traceCompletenessRollup?.fallback_reason_present_count ?? 0),
+        policyResult: traceRows - (traceCompletenessRollup?.policy_result_present_count ?? 0),
+        signalSummary: traceRows - (traceCompletenessRollup?.signal_summary_present_count ?? 0),
+        subjectContext: traceRows - (traceCompletenessRollup?.subject_context_present_count ?? 0),
+        outcomeSummary: traceRows - (traceCompletenessRollup?.outcome_summary_present_count ?? 0),
+      },
+    },
+    confidenceByAction: qualityByActionWithRates.map((row) => ({
+      proposed_action: row.proposed_action,
+      avg_confidence: row.avg_confidence,
+      proposals: row.proposals,
+    })),
+    qualityByAction: qualityByActionWithRates,
     conversionsByAction,
+    recentQualityRisks,
   });
 }
 

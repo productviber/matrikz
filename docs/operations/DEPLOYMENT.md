@@ -294,6 +294,59 @@ wrangler deployments list
 wrangler rollback DEPLOYMENT_ID
 ```
 
+## Governance Ingress Rollout (Visibility-Marketing)
+
+Use progressive enforcement for forwarded authority context at `POST /events`:
+
+1. Set `GOVERNANCE_INGRESS_MODE=observe` in staging, then production.
+2. Monitor `GET /api/admin/governance/ingress-slo` for:
+  - `rates.blockedRate` (should remain near 0 in observe)
+  - `totals.violations` and `reasonDistribution`
+  - `sourceDistribution.absent_or_legacy` (expected while legacy webhook/event traffic transitions)
+3. Resolve false-deny candidates and malformed authority producers.
+4. Move high-risk actions/tenants to `enforce` after violation rate stabilizes.
+
+### Automation Script
+
+Use the rollout helper to standardize migration + mode changes:
+
+```powershell
+Set-Location d:\coding\clodo-dev-site\visibility-marketing
+
+# Preview commands only
+.\scripts\governance-ingress-rollout.ps1 -Environment staging -Mode observe
+
+# Execute migrations and set mode
+.\scripts\governance-ingress-rollout.ps1 -Environment staging -Mode observe -ApplyMigration -SetMode
+```
+
+Relevant worker vars:
+- `GOVERNANCE_INGRESS_MODE` = `off | observe | enforce`
+- `GOVERNANCE_ALLOWED_AUTHORITY_SOURCES` = comma-separated trusted forwarded sources
+- `GOVERNANCE_ENFORCE_ACTIONS` = comma-separated high-risk action types; empty means enforce for all actions
+- `GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS` = comma-separated action types that must include `targetTenantId`
+
+### Incident Controls (Temporary Fail-Open)
+
+If a production incident shows unexpected deny behavior:
+
+```powershell
+Set-Location packages/marketer
+
+# Immediate fail-open (allows all, still writes bypass telemetry)
+wrangler secret put GOVERNANCE_INGRESS_MODE --env production
+# value: off
+
+# Restore observe after mitigation
+wrangler secret put GOVERNANCE_INGRESS_MODE --env production
+# value: observe
+```
+
+Operational notes:
+- Keep fail-open windows short and time-boxed.
+- Export incident sample IDs from governance SLO (`reasonDistribution`, `sourceDistribution`) before changing mode.
+- After rollback to observe/off, verify webhook and `/events` success rates normalize.
+
 ## Troubleshooting
 
 ### Workers Not Communicating

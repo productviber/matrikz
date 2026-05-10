@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createMockEnv } from '../helpers';
 import { MockD1Database } from '../helpers';
+import { evaluateGovernanceExecution } from '../../src/lib/governance-execution-client';
 import {
   handleWhatsAppSubscribe,
   handleWhatsAppUnsubscribe,
@@ -22,6 +23,23 @@ import {
 
 vi.mock('../../src/lib/skrip/registration', () => ({
   registerContactChannel: vi.fn().mockResolvedValue({ registrationState: 'registered' }),
+}));
+
+vi.mock('../../src/lib/governance-execution-client', () => ({
+  evaluateGovernanceExecution: vi.fn().mockResolvedValue({
+    decisionId: 'gexec_test',
+    governanceMode: 'off',
+    actionType: 'channel.whatsapp.subscribe',
+    actorTenantId: 'default',
+    targetTenantId: 'default',
+    tenantScope: 'default',
+    allowed: true,
+    enforcementOutcome: 'bypassed',
+    reason: 'bypass_mode_off',
+    policyVersion: null,
+    signedDecisionToken: null,
+    violation: false,
+  }),
 }));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -48,12 +66,27 @@ function makeEnvWithInsertHandler() {
   return env;
 }
 
+beforeEach(() => {
+  vi.clearAllMocks();
+  (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+    decisionId: 'gexec_test',
+    governanceMode: 'off',
+    actionType: 'channel.test',
+    actorTenantId: 'default',
+    targetTenantId: 'default',
+    tenantScope: 'default',
+    allowed: true,
+    enforcementOutcome: 'bypassed',
+    reason: 'bypass_mode_off',
+    policyVersion: null,
+    signedDecisionToken: null,
+    violation: false,
+  });
+});
+
 // ── WhatsApp ──────────────────────────────────────────────────────────────────
 
 describe('handleWhatsAppSubscribe', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
 
   it('returns 400 for missing address', async () => {
     const env = makeEnvWithInsertHandler();
@@ -95,6 +128,23 @@ describe('handleWhatsAppSubscribe', () => {
 });
 
 describe('handleWhatsAppUnsubscribe', () => {
+  beforeEach(() => {
+    (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+      decisionId: 'gexec_test',
+      governanceMode: 'off',
+      actionType: 'channel.whatsapp.unsubscribe',
+      actorTenantId: 'default',
+      targetTenantId: 'default',
+      tenantScope: 'default',
+      allowed: true,
+      enforcementOutcome: 'bypassed',
+      reason: 'bypass_mode_off',
+      policyVersion: null,
+      signedDecisionToken: null,
+      violation: false,
+    });
+  });
+
   it('returns 200 with channel=whatsapp', async () => {
     const env = makeEnvWithInsertHandler();
     const req = makeDeleteRequest({ contactId: 'c1', address: '+14155551234' });
@@ -102,6 +152,27 @@ describe('handleWhatsAppUnsubscribe', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.data.channel).toBe('whatsapp');
+  });
+
+  it('returns 400 when governance blocks unsubscribe', async () => {
+    const env = makeEnvWithInsertHandler();
+    (evaluateGovernanceExecution as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+      decisionId: 'gexec_block',
+      governanceMode: 'enforce',
+      actionType: 'channel.whatsapp.unsubscribe',
+      actorTenantId: 'default',
+      targetTenantId: 'default',
+      tenantScope: 'default',
+      allowed: false,
+      enforcementOutcome: 'blocked',
+      reason: 'denied_by_service',
+      policyVersion: 'v1',
+      signedDecisionToken: null,
+      violation: true,
+    });
+    const req = makeDeleteRequest({ contactId: 'c1', address: '+14155551234' });
+    const res = await handleWhatsAppUnsubscribe(req, env as any);
+    expect(res.status).toBe(400);
   });
 });
 

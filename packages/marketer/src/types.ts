@@ -22,8 +22,14 @@ export interface Env {
   // Service binding back to visibility-analytics
   ANALYTICS: Fetcher;
 
+  // Optional service binding back to governance worker
+  GOVERNANCE?: Fetcher;
+
   // Optional service binding to ai-engine for structured growth advice
   AI_ENGINE?: Fetcher;
+
+  // Optional service binding to matrikz outcome-feedback endpoint
+  MATRIKZ?: Fetcher;
 
     // Optional service binding to Skrip messaging platform
     // When present, used instead of SKRIP_BASE_URL to avoid CF error 1042
@@ -85,6 +91,20 @@ export interface Env {
   INTERNAL_SECRET_ROLLOVER?: string;
   /** Optional override for growth-agent timeout in milliseconds */
   GROWTH_AGENT_TIMEOUT_MS?: string;
+  /** Optional override endpoint for outcome feedback posts. */
+  OUTCOME_FEEDBACK_URL?: string;
+  /** Progressive governance ingress mode for forwarded authority context. */
+  GOVERNANCE_INGRESS_MODE?: string;
+  /** Comma-separated action types that should enforce in enforce mode; empty means all actions. */
+  GOVERNANCE_ENFORCE_ACTIONS?: string;
+  /** Comma-separated trusted sources allowed in forwarded authority contexts. */
+  GOVERNANCE_ALLOWED_AUTHORITY_SOURCES?: string;
+  /** Comma-separated action types that require targetTenantId in forwarded authority context. */
+  GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS?: string;
+  /** Progressive governance execution mode for state-changing agent actions. off | observe | enforce */
+  GOVERNANCE_EXECUTION_MODE?: string;
+  /** Optional base URL for governance service when no service binding is configured. */
+  GOVERNANCE_URL?: string;
   /** Emergency kill switch for agent executions. Accepts 'true' to block. */
   AGENT_EXECUTION_DISABLED?: string;
   /**
@@ -108,11 +128,21 @@ export interface Env {
 
 // ─── Event Envelope ─────────────────────────────────────────────────────────
 
+export interface ForwardedAuthorityContext {
+  decisionId: string;
+  source: string;
+  allowed: boolean;
+  actorTenantId?: string;
+  targetTenantId?: string;
+  lineage?: Record<string, unknown>;
+}
+
 export interface EventEnvelope<T = unknown> {
   event: string;
   source: string;
   timestamp: string; // ISO 8601
   data: T;
+  authorityContext?: ForwardedAuthorityContext;
 }
 
 // ─── Event Payloads ─────────────────────────────────────────────────────────

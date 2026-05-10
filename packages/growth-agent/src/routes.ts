@@ -35,6 +35,7 @@ import { handleOutcomeDiagnose } from "./capabilities/outcomeDiagnose";
 import { handleOutcomeFeedback } from "./capabilities/outcomeFeedback";
 import { getTenantPrior } from "./priors/tenantPriorStore";
 import { saveRecommendation } from "./queue/recommendationStore";
+import { buildHoldoutReport } from "./reporting/holdoutReport";
 
 const rolloutCapabilityLog = new Set<CapabilityName>();
 
@@ -94,6 +95,10 @@ export async function handleRequest(request: Request, env: GrowthAgentEnv): Prom
         appError.status,
       );
     }
+  }
+
+  if (request.method === "GET" && url.pathname === "/internal/experiments/holdout-report") {
+    return handleHoldoutReportRoute(request, env, config);
   }
 
   if (request.method !== "POST" || !url.pathname.startsWith("/internal/")) {
@@ -485,6 +490,46 @@ async function handleOutcomeFeedbackRoute(
       appError.status,
     );
   }
+}
+
+async function handleHoldoutReportRoute(
+  request: Request,
+  env: GrowthAgentEnv,
+  config: RuntimeConfig,
+): Promise<Response> {
+  try {
+    requireInternalAuth(request, env, config);
+    const url = new URL(request.url);
+    const windowDays = parsePositiveInt(url.searchParams.get("windowDays"), 30, 365);
+    const minArmSample = parsePositiveInt(url.searchParams.get("minArmSample"), 50, 10_000);
+    const report = await buildHoldoutReport(env, {
+      windowDays,
+      minArmSample,
+      experimentId: url.searchParams.get("experimentId"),
+      actionType: url.searchParams.get("actionType"),
+    });
+
+    return json({ ok: true, data: report }, 200);
+  } catch (error) {
+    const appError = normalizeError(error);
+    return json(
+      {
+        ok: false,
+        error: {
+          code: appError.code,
+          message: safeMessage(appError.code),
+          retryable: appError.retryable,
+        },
+      },
+      appError.status,
+    );
+  }
+}
+
+function parsePositiveInt(value: string | null, fallback: number, max: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(parsed, max);
 }
 
 function createLlmAdapter(env: GrowthAgentEnv): LlmAdapter {

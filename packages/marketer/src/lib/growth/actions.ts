@@ -27,6 +27,7 @@ import {
 } from './execution-intent';
 import { hashObject, isRecord, normalizeSubjectId, normalizeTenantId, parseJsonObject, stableStringify } from './common';
 import { createAiEngineClient } from '../ai-engine/client';
+import { evaluateGovernanceExecution } from '../governance-execution-client';
 
 export interface CreateAgentActionInput {
   agentId?: string | null;
@@ -469,6 +470,53 @@ export async function executeAgentAction(env: Env, actionId: string): Promise<Ex
     const result = { blocked: true, approvalRequired: true };
     await markActionStatus(env, action.action_id, AGENT_ACTION_STATUS.POLICY_CHECKED, result, AGENT_ACTION_EVENT.POLICY_CHECKED);
     return { executed: false, action: await getAgentAction(env, action.action_id) ?? action, result };
+  }
+
+  // ── Governance execution gate ──────────────────────────────────────────────
+  // Applied to state-changing action types only; non-destructive types (wait,
+  // manual_review, escalate_to_human) are excluded as they produce no side-effects.
+  const EXECUTION_GOVERNED_ACTIONS = new Set([
+    AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+    AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+    AGENT_ACTION_TYPE.START_CAMPAIGN,
+    AGENT_ACTION_TYPE.PAUSE_CAMPAIGN,
+    AGENT_ACTION_TYPE.PAUSE_CONTACT,
+  ]);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (EXECUTION_GOVERNED_ACTIONS.has(action.proposed_action as any)) {
+    const govDecision = await evaluateGovernanceExecution(env, {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      actionType: action.proposed_action as any,
+      actorTenantId: action.tenant_id,
+      targetTenantId: action.tenant_id,
+      subjectId: action.subject_id,
+      context: {
+        actionId: action.action_id,
+        riskLevel: action.risk_level,
+        confidence: action.confidence,
+      },
+    });
+
+    await recordAgentActionEvent(env, action.action_id, 'governance_execution_evaluated', {
+      decisionId: govDecision.decisionId,
+      governanceMode: govDecision.governanceMode,
+      allowed: govDecision.allowed,
+      enforcementOutcome: govDecision.enforcementOutcome,
+      reason: govDecision.reason,
+      violation: govDecision.violation,
+    });
+
+    if (!govDecision.allowed) {
+      const result = {
+        blocked: true,
+        blockedBy: 'governance_execution',
+        decisionId: govDecision.decisionId,
+        reason: govDecision.reason,
+      };
+      await markActionStatus(env, action.action_id, AGENT_ACTION_STATUS.REJECTED, result, AGENT_ACTION_EVENT.REJECTED);
+      return { executed: false, action: await getAgentAction(env, action.action_id) ?? action, result };
+    }
   }
 
   try {

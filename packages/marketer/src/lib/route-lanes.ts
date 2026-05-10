@@ -31,6 +31,9 @@ const RULES: RouteLaneRule[] = [
   // Internal service-to-service endpoints (analytics worker → marketing worker)
   // Auth: CF service-binding header OR x-system-token / SYSTEM_TOKEN.
   { method: '*', match: (path) => path.startsWith('/api/internal/'), lane: 'system' },
+  // Closed-loop ingress and operator metrics.
+  { method: 'POST', match: (path) => path === '/dispatch', lane: 'system' },
+  { method: 'GET', match: (path) => path.startsWith('/metrics/'), lane: 'system' },
 
   // Webhook ingress
   { method: 'POST', match: (path) => path === '/webhooks/brevo', lane: 'webhook' },

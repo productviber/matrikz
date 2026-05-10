@@ -57,6 +57,10 @@
  *   POST /api/admin/outbound/skrip/dispatch     — Admin: trigger outbox dispatch sweep
  *   POST /api/admin/outbound/skrip/reconcile    — Admin: trigger identity reconciliation
  *   GET  /api/admin/outbound/skrip/lineage      — Admin: message lineage by tenant/campaign
+ *   GET  /api/admin/governance/ingress-slo       — Admin: governance ingress SLO summary
+ *   GET  /api/admin/governance/enforcement-status — Admin: current active mode and policy config
+ *   POST /api/admin/governance/mode-override      — Admin: set KV emergency mode override
+ *   DELETE /api/admin/governance/mode-override    — Admin: clear KV emergency mode override
  *
  *   POST /api/admin/push/send           — Admin: enqueue push notification for a contact
  *   POST /api/admin/qa/affiliate-token  — QA only (QA_MODE_ENABLED=true): mint affiliate bearer token
@@ -143,6 +147,7 @@ import {
   handleEnqueueProspect,
   handleVariantMetrics,
   handlePruneVariants,
+  handlePromoteVariantWinner,
   handleSkripDiagnostics,
   handleSkripDispatchTrigger,
   handleSkripReconcileTrigger,
@@ -164,10 +169,20 @@ import {
   handleAgenticOutcomeExport,
   handleMarkStaleAgentActions,
   handleAttributeAgentActionOutcomes,
+  handleGovernanceIngressSlo,
+  handleGovernanceEnforcementStatus,
+  handleGovernanceModeOverride,
+  handleGovernanceExecutionSlo,
 } from './routes/admin';
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
 import { handleBrevoWebhook, handleBrevoInbound } from './routes/webhooks';
 import { handleSkripOutcomeWebhook } from './routes/webhooks-skrip';
+import { handleDispatchIngress } from './routes/dispatch';
+import {
+  handleDispatchSuccessRate,
+  handleOutcomeFeedbackLatency,
+  handleOutcomeFeedbackFailures,
+} from './routes/outcome-metrics';
 import { handlePushSubscribe, handlePushUnsubscribe } from './routes/skrip-push';
 import { handlePushReceipt, handlePushStatus } from './routes/push-receipts';
 import { handleQATokenMint } from './routes/qa-token';
@@ -262,6 +277,20 @@ export default {
 
       if (method === 'POST' && path === '/events') {
         return routeEvent(request, env, ctx);
+      }
+
+      // ── Closed-loop dispatch ingress / operator metrics ──
+      if (method === 'POST' && path === '/dispatch') {
+        return handleDispatchIngress(request, env);
+      }
+      if (method === 'GET' && path === '/metrics/dispatch-success-rate') {
+        return handleDispatchSuccessRate(request, env);
+      }
+      if (method === 'GET' && path === '/metrics/outcome-feedback-latency') {
+        return handleOutcomeFeedbackLatency(request, env);
+      }
+      if (method === 'GET' && path === '/metrics/outcome-feedback-failures') {
+        return handleOutcomeFeedbackFailures(request, env);
       }
 
       // ── Health checks ──
@@ -477,6 +506,18 @@ export default {
       if (method === 'GET' && path === '/api/admin/outbound/skrip/lineage') {
         return handleSkripLineage(request, env);
       }
+      if (method === 'GET' && path === '/api/admin/governance/ingress-slo') {
+        return handleGovernanceIngressSlo(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/governance/enforcement-status') {
+        return handleGovernanceEnforcementStatus(request, env);
+      }
+      if ((method === 'POST' || method === 'DELETE') && path === '/api/admin/governance/mode-override') {
+        return handleGovernanceModeOverride(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/governance/execution-slo') {
+        return handleGovernanceExecutionSlo(request, env);
+      }
       if (method === 'GET' && path === '/api/admin/outbound/skrip/opt-in-funnel') {
         return handleSkripOptInFunnel(request, env);
       }
@@ -600,6 +641,9 @@ export default {
       }
       if (method === 'POST' && path === '/api/internal/outbound/variants/prune') {
         return handlePruneVariants(request, env);
+      }
+      if (method === 'POST' && path === '/api/internal/outbound/variants/promote-winner') {
+        return handlePromoteVariantWinner(request, env);
       }
       if (method === 'POST' && path === '/api/internal/outbound/enqueue') {
         return handleEnqueueProspect(request, env);

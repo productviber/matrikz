@@ -13,3 +13,4 @@ export * from './admin/outbound';
 export * from './admin/metrics';
 export * from './admin/skrip';
 export * from './admin/agentic';
+export * from './admin/governance';

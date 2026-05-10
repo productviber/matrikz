@@ -178,6 +178,7 @@ export interface MockEnv {
   R2_ASSETS: ReturnType<typeof createMockR2>;
   ANALYTICS: ReturnType<typeof createMockFetcher>;
   AI_ENGINE?: ReturnType<typeof createMockFetcher>;
+  MATRIKZ?: ReturnType<typeof createMockFetcher>;
   SKRIP_SERVICE?: ReturnType<typeof createMockFetcher>;
   FROM_EMAIL: string;
   FROM_NAME: string;
@@ -209,6 +210,15 @@ export interface MockEnv {
   INTERNAL_SECRET?: string;
   INTERNAL_SECRET_ROLLOVER?: string;
   GROWTH_AGENT_TIMEOUT_MS?: string;
+  OUTCOME_FEEDBACK_URL?: string;
+  GOVERNANCE_INGRESS_MODE?: string;
+  GOVERNANCE_ENFORCE_ACTIONS?: string;
+  GOVERNANCE_ALLOWED_AUTHORITY_SOURCES?: string;
+  GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS?: string;
+  GOVERNANCE_EXECUTION_MODE?: string;
+  GOVERNANCE_URL?: string;
+  GOVERNANCE?: ReturnType<typeof createMockFetcher>;
+  GOVERNANCE_POLICY_VERSION?: string;
 }
 
 export function createMockEnv(overrides: Partial<MockEnv> = {}): MockEnv {

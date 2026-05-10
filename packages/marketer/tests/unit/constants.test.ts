@@ -117,7 +117,7 @@ describe('constants', () => {
 
   describe('KV_PREFIX', () => {
     it('all prefixes end with colon (except special keys)', () => {
-      const specialKeys = ['AFFILIATE_APPLICATIONS_PENDING', 'HEALTH_CHECK'];
+      const specialKeys = ['AFFILIATE_APPLICATIONS_PENDING', 'HEALTH_CHECK', 'GOVERNANCE_MODE_OVERRIDE', 'GOVERNANCE_EXECUTION_MODE_OVERRIDE'];
       for (const [key, value] of Object.entries(KV_PREFIX)) {
         if (!specialKeys.includes(key)) {
           expect(value).toMatch(/:$/);

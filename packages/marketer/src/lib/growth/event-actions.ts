@@ -15,7 +15,7 @@ import {
   fallbackGrowthNextAction,
   type GrowthNextActionRequest,
 } from '../ai-engine/client';
-import { loadSubjectContextForDecision } from './context';
+import { loadSubjectContextForDecision, type SubjectDecisionContext } from './context';
 
 export interface ProposeEligibleAgentActionsOptions {
   sourceEvent?: string;
@@ -180,6 +180,23 @@ function clampSkripPolicyForChannels(action: ProposedAgentAction, effectiveChann
   };
 }
 
+function buildDiversityPolicyHints(subjectContext: SubjectDecisionContext): Record<string, unknown> {
+  const avoidActionTypes = subjectContext.repeatedActionWarnings
+    .filter((warning) => warning.noOutcomeCount >= GROWTH_POLICY.DIVERSITY_NO_OUTCOME_THRESHOLD)
+    .map((warning) => warning.actionType);
+  return {
+    diversityRisk: subjectContext.diversityRisk,
+    actionTypeDistribution: subjectContext.actionTypeDistribution,
+    repeatedActionWarnings: subjectContext.repeatedActionWarnings,
+    avoidActionTypes,
+    diversityBudget: {
+      recentActionLimit: GROWTH_POLICY.DIVERSITY_RECENT_ACTION_LIMIT,
+      repeatActionThreshold: GROWTH_POLICY.DIVERSITY_REPEAT_ACTION_THRESHOLD,
+      noOutcomeThreshold: GROWTH_POLICY.DIVERSITY_NO_OUTCOME_THRESHOLD,
+    },
+  };
+}
+
 /**
  * Proposes eligible agent actions from a set of growth signals.
  *
@@ -231,7 +248,7 @@ export async function proposeEligibleAgentActionsFromSignals(
     // Use the deterministic fallback for the primary signal to get a channel
     // eligibility snapshot. This prevents the AI proposing actions that policy
     // will always block. If the hint action itself is null, skip hints.
-    let policyHints: Record<string, unknown> = {};
+    let policyHints: Record<string, unknown> = buildDiversityPolicyHints(subjectContext);
     const hintAction = deterministicFallbackActionForSignal(primarySignal);
     if (hintAction) {
       const hintPolicy = await evaluateGrowthPolicy(env, {
@@ -242,6 +259,7 @@ export async function proposeEligibleAgentActionsFromSignals(
         confidence: dominantConfidence,
       });
       policyHints = {
+        ...policyHints,
         effectiveChannels: hintPolicy.effectiveChannels,
         cooldownUntil: hintPolicy.cooldownUntil,
         warnings: hintPolicy.warnings,
@@ -267,8 +285,8 @@ export async function proposeEligibleAgentActionsFromSignals(
         expiresAt: s.expires_at,
       })),
       context: {
-        sourceEvent: options.sourceEvent,
-        timestamp: options.timestamp,
+        ...(options.sourceEvent ? { sourceEvent: options.sourceEvent } : {}),
+        ...(options.timestamp ? { timestamp: options.timestamp } : {}),
         subjectContext,
         policyHints,
       },
@@ -309,6 +327,9 @@ export async function proposeEligibleAgentActionsFromSignals(
         lastActionType: subjectContext.lastActionType,
         lastActionDaysAgo: subjectContext.lastActionDaysAgo,
         recentOutcomeTypes: subjectContext.recentOutcomes.map((o) => o.outcomeType),
+        actionTypeDistribution: subjectContext.actionTypeDistribution,
+        repeatedActionWarnings: subjectContext.repeatedActionWarnings,
+        diversityRisk: subjectContext.diversityRisk,
         activeSignalCount: subjectContext.activeSignalCount,
         pushRegistered: subjectContext.pushRegistered,
         activeChannels: subjectContext.activeChannels,
@@ -336,7 +357,7 @@ export async function proposeEligibleAgentActionsFromSignals(
         aiRequestSummary: {
           signalCount: subjectSignals.length,
           subjectContextLoaded: true,
-          policyHintsComputed: Boolean(hintAction),
+          policyHintsComputed: Boolean(hintAction) || subjectContext.actionTypeDistribution.length > 0,
         },
       },
       aiMetadata: {

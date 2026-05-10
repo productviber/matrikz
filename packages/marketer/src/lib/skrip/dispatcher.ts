@@ -68,15 +68,36 @@ async function claimPendingBatch(
   env: Env,
   batchSize: number,
 ): Promise<ChannelExecutionOutboxRow[]> {
+  const epoch = now();
+  const perTenantLimit = SKRIP_CONFIG.DISPATCH_PER_TENANT_LIMIT;
+  // Subquery ranks rows per tenant so each tenant gets at most perTenantLimit slots.
+  // This prevents a single high-volume tenant from consuming the whole batch window.
   return query<ChannelExecutionOutboxRow>(
     env.DB,
     `SELECT *
        FROM channel_execution_outbox
       WHERE status IN (?, ?)
         AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+        AND id IN (
+          SELECT id FROM (
+            SELECT id,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY tenant_id
+                     ORDER BY next_attempt_at ASC NULLS FIRST, created_at ASC
+                   ) AS rn
+              FROM channel_execution_outbox
+             WHERE status IN (?, ?)
+               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+          ) WHERE rn <= ?
+        )
       ORDER BY next_attempt_at ASC NULLS FIRST, created_at ASC
       LIMIT ?`,
-    [SKRIP_OUTBOX_STATUS.PENDING, SKRIP_OUTBOX_STATUS.RETRYING, now(), batchSize],
+    [
+      SKRIP_OUTBOX_STATUS.PENDING, SKRIP_OUTBOX_STATUS.RETRYING, epoch,
+      SKRIP_OUTBOX_STATUS.PENDING, SKRIP_OUTBOX_STATUS.RETRYING, epoch,
+      perTenantLimit,
+      batchSize,
+    ],
   );
 }
 
@@ -223,7 +244,7 @@ async function sendToDeadLetter(env: Env, row: ChannelExecutionOutboxRow, errorM
 
 export async function dispatchOutboxBatch(
   env: Env,
-  batchSize = 25,
+  batchSize: number = SKRIP_CONFIG.DISPATCH_BATCH_SIZE,
 ): Promise<DispatchResult> {
   const result: DispatchResult = { total: 0, dispatched: 0, skipped: 0, failed: 0, errors: [] };
   const rows = await claimPendingBatch(env, batchSize);
@@ -259,7 +280,7 @@ export async function dispatchOutboxBatch(
       const response = await client.sendMessage<SkripSendResponse>(row.tenant_id, {
         ...payload,
         idempotencyKey: row.idempotency_key,
-        correlationId: getCorrelationId(),
+        correlationId: row.correlation_id || getCorrelationId(),
       });
 
       await markDispatched(env, row.id, response.messageId, response.outboundId ?? null);
@@ -296,7 +317,7 @@ export async function runDispatcherSweep(
   env: Env,
   options: DispatchTriggerOptions = {},
 ): Promise<DispatchResult> {
-  const batchSize = options.batchSize ?? 25;
+  const batchSize = options.batchSize ?? SKRIP_CONFIG.DISPATCH_BATCH_SIZE;
 
   if (options.dryRunOnly) {
     const rows = await claimPendingBatch(env, batchSize);

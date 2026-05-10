@@ -174,3 +174,75 @@ Agentic access (proposed, gated by token):
 - `[x]` Introduce shared access library and wire to `/events` and webhook ingress.
 - `[x]` Add tests for the new access layer.
 - `[x]` Enforce campaign detail endpoint ownership decision.
+
+## Agent-Led Growth Improvement Execution
+
+- `[x]` Dedicated execution plan: `docs/execution/visibility-marketing-agent-led-growth-improvement-plan.md`.
+- `[x]` Dedicated implementation tracker: `docs/execution/visibility-marketing-agent-led-growth-implementation-todolist.md`.
+- `[x]` Operator review template: `docs/operations/AGENTIC-GROWTH-QUARTERLY-REVIEW-TEMPLATE.md`.
+- `[x]` Trace review guide: `docs/operations/AGENTIC-TRACE-REVIEW-GUIDE.md`.
+- `[x]` Cost telemetry guide: `docs/operations/AGENTIC-COST-TELEMETRY.md`.
+
+---
+
+## 9) Governance Ingress Hardening
+
+Date completed: 2026-05-06
+
+Authority contract validation at marketing event ingress with progressive enforcement modes
+and full decision observability.
+
+### Core implementation
+- `[x]` Add `ForwardedAuthorityContext` type and `authorityContext` field on `EventEnvelope`.
+- `[x]` Add `governance-ingress.ts` module with policy engine, validation, and decision types.
+  - `GovernanceIngressMode`: `off | observe | enforce`.
+  - `GovernancePolicy`: `allowedAuthoritySources`, `enforceActionTypes`, `requireTargetTenantActionTypes`.
+  - `GovernanceReason` taxonomy (12 named reasons covering all valid/invalid paths).
+  - `evaluateGovernanceIngress()` — pure policy evaluation, accepts optional mode override.
+  - `evaluateAndGuardGovernanceIngress()` — async, resolves KV mode override, deduplicates via KV.
+  - `resolveGovernanceMode()` — KV-first, env var fallback; enables no-redeploy mode changes.
+  - `buildGovernancePolicyInfo()` — serializable policy snapshot for admin introspection.
+- `[x]` Place governance gate in `events/router.ts` before freshness/replay checks.
+  - Legacy context-absent events: allowed and logged as governance gap (non-blocking).
+  - Duplicate decision suppression: single KV write, 200 early return.
+  - Tenant mismatch: blocked in enforce mode.
+- `[x]` Add `GOVERNANCE_INGRESS_MODE`, `GOVERNANCE_ENFORCE_ACTIONS`, `GOVERNANCE_ALLOWED_AUTHORITY_SOURCES`, `GOVERNANCE_REQUIRE_TARGET_TENANT_ACTIONS` env vars to `Env` type and `wrangler.toml` (all three envs, default `off`).
+- `[x]` Add `GOVERNANCE_INGRESS_MODE` and `GOVERNANCE_MODE_OVERRIDE` constants.
+- `[x]` Add D1 migration `0020_governance_ingress_hardening.sql` — `governance_ingress_decisions` table with dedup unique index.
+
+### Admin endpoints
+- `[x]` `GET /api/admin/governance/ingress-slo` — SLO summary with pass/violation/block rates, source/reason/outcome distributions, filterable by hours/tenant/source/reason/mode/actionType.
+- `[x]` `GET /api/admin/governance/enforcement-status` — active mode (KV + env), policy config, `overrideActive` flag.
+- `[x]` `POST /api/admin/governance/mode-override` — set KV override (7-day TTL, no redeploy required).
+- `[x]` `DELETE /api/admin/governance/mode-override` — clear KV override, restore env var control.
+
+### Testing
+- `[x]` Unit: `tests/unit/governance-ingress.test.ts` — 10 tests covering all mode/reason/source/tenant combinations.
+- `[x]` Unit: `tests/unit/admin-governance-ingress.test.ts` — 2 tests for SLO endpoint.
+- `[x]` Unit: `tests/unit/admin-governance-override.test.ts` — 11 tests for mode override and enforcement status endpoints.
+- `[x]` Integration: `tests/integration/event-router.test.ts` — 28 tests including enforce/observe/absent/tenant-mismatch/source-allowlist/selective-enforce/duplicate-suppression paths.
+- `[x]` Integration: `tests/integration/api-routes.test.ts` — governance SLO auth + success + webhook compat regression.
+- `[x]` Regression: skrip/webhook tests (24 tests) — zero regression on webhook delivery/reconcile paths.
+- Total: 84 governance-related tests pass.
+
+### Operational docs and automation
+- `[x]` `scripts/governance-ingress-rollout.ps1` — automates migration application and mode setting per environment.
+- `[x]` `docs/operations/GOVERNANCE-SLO-RUNBOOK.md` — SLO definitions, alert criteria, D1 queries, staging gate script, incident checklist, emergency controls.
+- `[x]` `docs/operations/GOVERNANCE-ROLLOUT-GUIDE.md` — per-environment command sequences for all 5 stages (off → observe dev → observe staging → observe prod → selective enforce → full enforce) with gate criteria and rollback at each step.
+
+### Pending (operational, requires human action)
+- `[x]` Set `GOVERNANCE_INGRESS_MODE=observe` in `wrangler.toml` for all three environments (dev, staging, production). Takes effect on next `wrangler deploy`.
+- `[ ]` Apply migration `0020_governance_ingress_hardening.sql` to D1.
+  - All three environments share `database_id = "00bb447b-f813-4f00-929b-b709f64f8872"` — run once.
+  - **Requires Cloudflare auth**: `wrangler login` or set `CLOUDFLARE_API_TOKEN` env var, then:
+    ```
+    cd packages/marketer
+    npx wrangler d1 migrations apply visibility-marketing-db --config wrangler.toml
+    ```
+- `[ ]` Deploy after migration: `npx wrangler deploy --config packages/marketer/wrangler.toml` — activates observe mode from wrangler.toml.
+- `[ ]` Staging 7-day soak in observe mode — monitor via `GET /api/admin/governance/ingress-slo?hours=168`. Required before production enforce.
+- `[ ]` Run staging gate script (`GOVERNANCE-ROLLOUT-GUIDE.md` Stage 2c) after 7-day soak.
+- `[ ]` Production 7-day soak after deploying observe mode.
+- `[ ]` Run production gate script (Stage 4c/5b) before enabling selective enforce.
+- `[ ]` Set `GOVERNANCE_ENFORCE_ACTIONS` scope with product team sign-off before enabling enforce.
+- `[ ]` Enable enforce mode on staging → 24h soak → production (after all gate criteria pass).
