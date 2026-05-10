@@ -52,7 +52,8 @@ async function waitMs(ms: number): Promise<void> {
 
 export async function sendOutcomeFeedback(env: Env, params: SendOutcomeFeedbackParams): Promise<void> {
   const service = env.MATRIKZ ?? env.AI_ENGINE;
-  if (!service || !env.INTERNAL_SECRET) {
+  const internalSecret = env.GROWTH_AGENT_INTERNAL_SECRET ?? env.INTERNAL_SECRET ?? env.INTERNAL_SECRET_ROLLOVER;
+  if (!service || !internalSecret) {
     return;
   }
 
@@ -84,7 +85,7 @@ export async function sendOutcomeFeedback(env: Env, params: SendOutcomeFeedbackP
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-internal-secret': env.INTERNAL_SECRET,
+          'x-internal-secret': internalSecret,
           'x-correlation-id': params.correlationId,
           'x-tenant-id': tenantId,
           'x-idempotency-key': idempotencyKey,

@@ -657,7 +657,7 @@ export default {
         return handleBrevoInbound(request, env);
       }
       if (method === 'POST' && path === '/webhooks/skrip/v1/outcomes') {
-        return handleSkripOutcomeWebhook(request, env);
+        return handleSkripOutcomeWebhook(request, env, ctx);
       }
 
       // ── Identity Token (admin lane: mint; system lane: verify) ──

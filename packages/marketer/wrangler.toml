@@ -156,7 +156,7 @@ service = "visibility-analytics"
 
 [[env.staging.services]]
 binding = "AI_ENGINE"
-service = "growth-agent"
+service = "growth-agent-staging"
 
 [[env.staging.services]]
 binding = "SKRIP_SERVICE"

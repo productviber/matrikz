@@ -87,6 +87,8 @@ export interface Env {
   AI_ENGINE_TIMEOUT_MS?: string;
   /** Shared secret for growth-agent service authentication */
   INTERNAL_SECRET?: string;
+  /** Optional dedicated secret for outbound calls to growth-agent endpoints. */
+  GROWTH_AGENT_INTERNAL_SECRET?: string;
   /** Optional rollover secret accepted during rotation window */
   INTERNAL_SECRET_ROLLOVER?: string;
   /** Optional override for growth-agent timeout in milliseconds */

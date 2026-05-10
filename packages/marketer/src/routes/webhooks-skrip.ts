@@ -29,6 +29,15 @@ interface SkripOutcomePayload {
   metadata?: Record<string, unknown> | null;
 }
 
+function resolveFallbackActionTaken(payload: SkripOutcomePayload): string {
+  const raw = payload.metadata?.actionType;
+  if (typeof raw === 'string' && raw.trim().length > 0) {
+    return raw.trim();
+  }
+  // Default action keeps closed-loop non-fatal when correlation map is unavailable.
+  return 'send_via_skrip';
+}
+
 function validateOutcomePayload(payload: Partial<SkripOutcomePayload>): string | null {
   if (!payload.eventId) return 'Missing eventId';
   if (!payload.eventType) return 'Missing eventType';
@@ -78,6 +87,7 @@ async function writeOutcomeToDlq(
 export async function handleSkripOutcomeWebhook(
   request: Request,
   env: Env,
+  ctx?: ExecutionContext,
 ): Promise<Response> {
   const webhookSigningSecret = env.SKRIP_WEBHOOK_SIGNING_SECRET ?? env.WEBHOOK_SIGNING_SECRET;
   if (!webhookSigningSecret) {
@@ -174,23 +184,28 @@ export async function handleSkripOutcomeWebhook(
     });
 
     const correlation = await getDispatchCorrelation(env, payload.correlationId);
-    if (correlation) {
-      void sendOutcomeFeedback(env, {
-        correlationId: payload.correlationId,
-        tenantId: correlation.tenantId,
-        subjectId: correlation.subjectId,
-        actionTaken: correlation.actionType,
-        outcomeMetric: normalizeOutcomeMetric(payload.eventType),
-        observedAt: payload.occurredAt,
-        sourceEventType: payload.eventType,
-      });
-    } else {
+    if (!correlation) {
       console.log(JSON.stringify({
-        type: 'outcome_feedback_skipped_missing_correlation',
+        type: 'outcome_feedback_fallback_missing_correlation',
         correlationId: payload.correlationId,
         tenantId: payload.tenantId,
         eventType: payload.eventType,
       }));
+    }
+
+    const feedbackTask = sendOutcomeFeedback(env, {
+      correlationId: payload.correlationId,
+      tenantId: correlation?.tenantId ?? payload.tenantId,
+      subjectId: correlation?.subjectId ?? payload.contactId,
+      actionTaken: correlation?.actionType ?? resolveFallbackActionTaken(payload),
+      outcomeMetric: normalizeOutcomeMetric(payload.eventType),
+      observedAt: payload.occurredAt,
+      sourceEventType: payload.eventType,
+    });
+    if (ctx) {
+      ctx.waitUntil(feedbackTask);
+    } else {
+      void feedbackTask;
     }
 
     const agentActionId = typeof payload.metadata?.agentActionId === 'string'
