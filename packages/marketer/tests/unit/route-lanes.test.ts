@@ -10,6 +10,8 @@ describe('route lane resolver', () => {
     expect(resolveRouteLane('POST', '/webhooks/brevo')).toBe('webhook');
     expect(resolveRouteLane('POST', '/webhooks/brevo/inbound')).toBe('webhook');
     expect(resolveRouteLane('POST', '/webhooks/skrip/v1/outcomes')).toBe('webhook');
+    expect(resolveRouteLane('POST', '/webhooks/providers/fcm')).toBe('webhook');
+    expect(resolveRouteLane('POST', '/webhooks/providers/meta-whatsapp')).toBe('webhook');
   });
 
   it('maps user self-service routes', () => {

@@ -37,6 +37,7 @@ interface NormalizedTelemetryEvent {
   correlationId: string;
   sourceWorker: string;
   schemaVersion: string;
+  schemaAlignment: SchemaAlignmentState;
   channel: TelemetryChannel;
   timestamp: number;
   sendTimestamp: number | null;
@@ -52,6 +53,13 @@ interface NormalizedTelemetryEvent {
   metadata: Record<string, unknown>;
   eventPayload: Record<string, unknown>;
   deliveryLatencyMs: number | null;
+}
+
+interface SchemaAlignmentState {
+  requestedSchemaVersion: string | null;
+  effectiveSchemaVersion: string;
+  supportedSchemaVersions: string[];
+  coerced: boolean;
 }
 
 export interface TelemetryEmitResult {
@@ -125,6 +133,34 @@ function normalizeString(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function resolveSupportedSchemaVersions(env: Env): string[] {
+  const configured = (env.TELEMETRY_SCHEMA_VERSIONS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+  return Array.from(new Set([TELEMETRY.SCHEMA_VERSION, ...configured]));
+}
+
+function resolveSchemaAlignment(env: Env, requested: string | null): SchemaAlignmentState {
+  const supportedSchemaVersions = resolveSupportedSchemaVersions(env);
+  const requestedSchemaVersion = normalizeString(requested);
+  if (!requestedSchemaVersion || supportedSchemaVersions.includes(requestedSchemaVersion)) {
+    return {
+      requestedSchemaVersion,
+      effectiveSchemaVersion: requestedSchemaVersion ?? TELEMETRY.SCHEMA_VERSION,
+      supportedSchemaVersions,
+      coerced: false,
+    };
+  }
+
+  return {
+    requestedSchemaVersion,
+    effectiveSchemaVersion: TELEMETRY.SCHEMA_VERSION,
+    supportedSchemaVersions,
+    coerced: true,
+  };
+}
+
 function deriveChannel(type: string, channel?: string | null): TelemetryChannel {
   const explicit = normalizeString(channel);
   if (
@@ -146,7 +182,7 @@ function deriveChannel(type: string, channel?: string | null): TelemetryChannel 
   return 'system';
 }
 
-function normalizeEvent(event: TelemetryEvent): NormalizedTelemetryEvent {
+function normalizeEvent(env: Env, event: TelemetryEvent): NormalizedTelemetryEvent {
   const epoch = now();
   const eventTs = toEpochSeconds(event.timestamp ?? null, epoch);
   const sendTs = event.sendTimestamp == null ? null : toEpochSeconds(event.sendTimestamp, eventTs);
@@ -154,6 +190,18 @@ function normalizeEvent(event: TelemetryEvent): NormalizedTelemetryEvent {
   const deliveryLatencyMs = sendTs != null && receiptTs != null && receiptTs >= sendTs
     ? (receiptTs - sendTs) * 1000
     : null;
+  const schemaAlignment = resolveSchemaAlignment(env, normalizeString(event.schemaVersion));
+
+  const baseMetadata = event.metadata ?? {};
+  const metadata = schemaAlignment.coerced
+    ? {
+        ...baseMetadata,
+        schemaAlignment: {
+          requested: schemaAlignment.requestedSchemaVersion,
+          effective: schemaAlignment.effectiveSchemaVersion,
+        },
+      }
+    : baseMetadata;
 
   const normalized: NormalizedTelemetryEvent = {
     type: event.type,
@@ -161,7 +209,8 @@ function normalizeEvent(event: TelemetryEvent): NormalizedTelemetryEvent {
     messageId: event.messageId,
     correlationId: normalizeString(event.correlationId) ?? getCorrelationId(),
     sourceWorker: normalizeString(event.sourceWorker) ?? WORKER_NAME,
-    schemaVersion: normalizeString(event.schemaVersion) ?? TELEMETRY.SCHEMA_VERSION,
+    schemaVersion: schemaAlignment.effectiveSchemaVersion,
+    schemaAlignment,
     channel: deriveChannel(event.type, event.channel),
     timestamp: eventTs,
     sendTimestamp: sendTs,
@@ -174,7 +223,7 @@ function normalizeEvent(event: TelemetryEvent): NormalizedTelemetryEvent {
     stepId: normalizeString(event.stepId),
     contactId: normalizeString(event.contactId),
     reason: normalizeString(event.reason),
-    metadata: event.metadata ?? {},
+    metadata,
     eventPayload: event.eventPayload ?? {},
     deliveryLatencyMs,
   };
@@ -269,6 +318,19 @@ async function recordBindingMetric(
   } catch {
     // Non-fatal; health snapshots degrade gracefully if this table is unavailable.
   }
+}
+
+async function recordSchemaAlignmentMetric(env: Env, event: NormalizedTelemetryEvent): Promise<void> {
+  if (!event.schemaAlignment.coerced) return;
+  await recordBindingMetric(
+    env,
+    'schema_alignment',
+    event.tenantId,
+    event.type,
+    0,
+    false,
+    `unsupported_schema_version:${event.schemaAlignment.requestedSchemaVersion ?? 'unknown'}`,
+  );
 }
 
 async function enqueueFallback(
@@ -382,12 +444,13 @@ async function updateDailyChannelCounters(env: Env, event: NormalizedTelemetryEv
 async function sendAnalyticsEvent(
   env: Env,
   payload: Record<string, unknown>,
+  schemaVersion: string,
 ): Promise<{ ok: boolean; status: number }> {
   const response = await env.ANALYTICS.fetch(TELEMETRY.ANALYTICS_EVENT_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'x-schema-version': TELEMETRY.SCHEMA_VERSION,
+      'x-schema-version': schemaVersion,
     },
     body: JSON.stringify(payload),
   });
@@ -396,10 +459,26 @@ async function sendAnalyticsEvent(
 }
 
 export async function emitTelemetryEvent(env: Env, event: TelemetryEvent): Promise<TelemetryEmitResult> {
-  const normalized = normalizeEvent(event);
+  const normalized = normalizeEvent(env, event);
   const payload = toAnalyticsEnvelope(normalized);
 
   await updateDailyChannelCounters(env, normalized);
+  await recordSchemaAlignmentMetric(env, normalized);
+
+  if (normalized.schemaAlignment.coerced) {
+    try {
+      await logEvent(env, 'telemetry.schema_alignment_coerced', {
+        requestedSchemaVersion: normalized.schemaAlignment.requestedSchemaVersion,
+        effectiveSchemaVersion: normalized.schemaAlignment.effectiveSchemaVersion,
+        supportedSchemaVersions: normalized.schemaAlignment.supportedSchemaVersions,
+        type: normalized.type,
+        tenantId: normalized.tenantId,
+        messageId: normalized.messageId,
+      }, 'warn');
+    } catch {
+      // Schema-alignment telemetry should never block primary event emit.
+    }
+  }
 
   const started = Date.now();
   let queued = false;
@@ -420,7 +499,7 @@ export async function emitTelemetryEvent(env: Env, event: TelemetryEvent): Promi
       return { accepted: false, queued: true, error: errorMessage };
     }
 
-    const response = await sendAnalyticsEvent(env, payload);
+    const response = await sendAnalyticsEvent(env, payload, normalized.schemaVersion);
     accepted = response.ok;
     if (!response.ok) {
       errorMessage = `analytics_http_${response.status}`;
@@ -507,7 +586,8 @@ export async function flushTelemetryFallbackQueue(
     const started = Date.now();
     try {
       const payload = JSON.parse(row.event_json) as Record<string, unknown>;
-      const response = await sendAnalyticsEvent(env, payload);
+      const payloadSchema = normalizeString(payload.schema_version) ?? TELEMETRY.SCHEMA_VERSION;
+      const response = await sendAnalyticsEvent(env, payload, payloadSchema);
       const latencyMs = Date.now() - started;
 
       if (response.ok) {
@@ -603,11 +683,25 @@ export interface OutboundTelemetryHealthSnapshot {
     deadLetter: number;
     oldestPendingAgeSec: number | null;
   };
+  quality: {
+    deadLetterCount24h: number;
+    retryableDeadLetterCount24h: number;
+    nonRetryableDeadLetterCount24h: number;
+    unsupportedOutcomeCount24h: number;
+    reverseEmitFailureCount24h: number;
+  };
+  schemaAlignment: {
+    defaultSchemaVersion: string;
+    supportedSchemaVersions: string[];
+    coercedCount24h: number;
+  };
   thresholds: {
     sendSuccessRateMin: number;
     webhookReceiptRateMin: number;
     avgLatencyMaxMs: number;
     errorCountMax24h: number;
+    deadLetterMax24h: number;
+    schemaCoercionMax24h: number;
   };
   breaches: string[];
 }
@@ -788,6 +882,60 @@ export async function getOutboundTelemetryHealth(env: Env): Promise<OutboundTele
     // Table may be absent before migrations are applied; degrade gracefully.
   }
 
+  let qualityDeadLetterCount24h = 0;
+  let qualityRetryableDeadLetterCount24h = 0;
+  let qualityNonRetryableDeadLetterCount24h = 0;
+  let qualityUnsupportedOutcomeCount24h = 0;
+  let qualityReverseEmitFailureCount24h = 0;
+
+  try {
+    const qualityRow = await queryOne<{
+      dead_letter_count: number;
+      retryable_dead_letter_count: number;
+      non_retryable_dead_letter_count: number;
+      unsupported_outcome_count: number;
+      reverse_emit_failure_count: number;
+    }>(
+      env.DB,
+      `SELECT
+         COUNT(*) AS dead_letter_count,
+         COALESCE(SUM(CASE WHEN retryable = 1 THEN 1 ELSE 0 END), 0) AS retryable_dead_letter_count,
+         COALESCE(SUM(CASE WHEN retryable = 0 THEN 1 ELSE 0 END), 0) AS non_retryable_dead_letter_count,
+         COALESCE(SUM(CASE WHEN error_code = 'unsupported_outcome_mapping' THEN 1 ELSE 0 END), 0) AS unsupported_outcome_count,
+         COALESCE(SUM(CASE WHEN error_code = 'reverse_tracking_emit_failed' THEN 1 ELSE 0 END), 0) AS reverse_emit_failure_count
+       FROM channel_outcome_dead_letter
+       WHERE last_failed_at >= ?
+         AND replayed_at IS NULL`,
+      [windowStart],
+    );
+
+    qualityDeadLetterCount24h = Number(qualityRow?.dead_letter_count ?? 0);
+    qualityRetryableDeadLetterCount24h = Number(qualityRow?.retryable_dead_letter_count ?? 0);
+    qualityNonRetryableDeadLetterCount24h = Number(qualityRow?.non_retryable_dead_letter_count ?? 0);
+    qualityUnsupportedOutcomeCount24h = Number(qualityRow?.unsupported_outcome_count ?? 0);
+    qualityReverseEmitFailureCount24h = Number(qualityRow?.reverse_emit_failure_count ?? 0);
+  } catch {
+    // Table may be absent before migrations are applied; degrade gracefully.
+  }
+
+  const supportedSchemaVersions = resolveSupportedSchemaVersions(env);
+  let schemaCoercionCount24h = 0;
+
+  try {
+    const schemaRow = await queryOne<{ coercion_count: number }>(
+      env.DB,
+      `SELECT COUNT(*) AS coercion_count
+         FROM service_binding_metrics
+        WHERE binding = 'schema_alignment'
+          AND success = 0
+          AND created_at >= ?`,
+      [windowStart],
+    );
+    schemaCoercionCount24h = Number(schemaRow?.coercion_count ?? 0);
+  } catch {
+    // Table may be absent before migrations are applied; degrade gracefully.
+  }
+
   const sendSuccessRate =
     bindingAttempts > 0
       ? (bindingSuccess / bindingAttempts) * 100
@@ -809,6 +957,12 @@ export async function getOutboundTelemetryHealth(env: Env): Promise<OutboundTele
   }
   if (bindingFailures > TELEMETRY.ALERT_ERROR_COUNT_MAX_24H) {
     breaches.push('error_count_24h');
+  }
+  if (qualityDeadLetterCount24h > TELEMETRY.ALERT_DEAD_LETTER_MAX_24H) {
+    breaches.push('dead_letter_24h');
+  }
+  if (schemaCoercionCount24h > TELEMETRY.ALERT_SCHEMA_COERCION_MAX_24H) {
+    breaches.push('schema_alignment');
   }
 
   return {
@@ -832,11 +986,25 @@ export async function getOutboundTelemetryHealth(env: Env): Promise<OutboundTele
       deadLetter: queueDeadLetter,
       oldestPendingAgeSec,
     },
+    quality: {
+      deadLetterCount24h: qualityDeadLetterCount24h,
+      retryableDeadLetterCount24h: qualityRetryableDeadLetterCount24h,
+      nonRetryableDeadLetterCount24h: qualityNonRetryableDeadLetterCount24h,
+      unsupportedOutcomeCount24h: qualityUnsupportedOutcomeCount24h,
+      reverseEmitFailureCount24h: qualityReverseEmitFailureCount24h,
+    },
+    schemaAlignment: {
+      defaultSchemaVersion: TELEMETRY.SCHEMA_VERSION,
+      supportedSchemaVersions,
+      coercedCount24h: schemaCoercionCount24h,
+    },
     thresholds: {
       sendSuccessRateMin: TELEMETRY.ALERT_SEND_SUCCESS_RATE_MIN,
       webhookReceiptRateMin: TELEMETRY.ALERT_WEBHOOK_RECEIPT_RATE_MIN,
       avgLatencyMaxMs: TELEMETRY.ALERT_AVG_LATENCY_MAX_MS,
       errorCountMax24h: TELEMETRY.ALERT_ERROR_COUNT_MAX_24H,
+      deadLetterMax24h: TELEMETRY.ALERT_DEAD_LETTER_MAX_24H,
+      schemaCoercionMax24h: TELEMETRY.ALERT_SCHEMA_COERCION_MAX_24H,
     },
     breaches,
   };
@@ -867,6 +1035,8 @@ export async function evaluateOutboundTelemetryAlerts(
       avgLatencyMs: snapshot.avgLatencyMs,
       errorCount24h: snapshot.errorCount24h,
       queuePending: snapshot.fallbackQueue.pending,
+      deadLetter24h: snapshot.quality.deadLetterCount24h,
+      schemaCoercions24h: snapshot.schemaAlignment.coercedCount24h,
     }, 'warn');
 
     const summary = [
@@ -876,6 +1046,8 @@ export async function evaluateOutboundTelemetryAlerts(
       `avg_latency_ms=${Math.round(snapshot.avgLatencyMs)}`,
       `error_count_24h=${snapshot.errorCount24h}`,
       `fallback_queue_pending=${snapshot.fallbackQueue.pending}`,
+      `dead_letter_24h=${snapshot.quality.deadLetterCount24h}`,
+      `schema_coercions_24h=${snapshot.schemaAlignment.coercedCount24h}`,
     ].join(' | ');
 
     await Promise.allSettled([

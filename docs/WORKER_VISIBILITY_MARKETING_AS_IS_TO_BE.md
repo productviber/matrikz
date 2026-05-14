@@ -14,6 +14,9 @@
 - Push receipt and Skrip outcome handlers emit canonical `PUSH_*` / `WHATSAPP_*` event taxonomy.
 - Service-binding observability is implemented: latency/success metrics, circuit breaker, fallback queue, replay.
 - Outbound telemetry health snapshot and alert evaluation are integrated into admin health + scheduled cron.
+- Direct provider webhook ingestion baseline is implemented for FCM and Meta WhatsApp callback normalization.
+- Autonomy policy now enforces runtime outbound-health gates before low-risk auto-send actions remain fully autonomous.
+- Schema-alignment quality monitoring now tracks schema coercions and dead-letter quality in health + alert surfaces.
 - Focused unit suite currently passes for telemetry/webhook/outbound surfaces (79 tests passed).
 
 ### Verified Code Surfaces
@@ -55,7 +58,7 @@
    - Prospect lifecycle fields are updated (`email_opened_at`, `last_engaged_at`, bounce-type fields, push/whatsapp lifecycle fields).
    - Bounce-type categorization is persisted (`transient` vs `permanent`) for suppression and analytics context.
 - **Remaining gaps**:
-   - Non-Skrip direct provider webhooks (e.g., native FCM/Meta direct callbacks) are future optional expansions.
+   - Provider-specific signature verification and richer direct-provider payload enrichment remain incremental hardening scope.
 
 #### Service Binding Integration
 - **What works now**:
@@ -76,7 +79,7 @@
 | 2 | Blocked | Implemented for current channel stack (push + WhatsApp via Skrip + push receipts) |
 | 3 | Blocked | Implemented baseline (bounce typing, lifecycle projection, callback normalization) |
 | 4 | Blocked | Implemented (health snapshot + dedicated SLI view + alert evaluation + cron replay wiring) |
-| 5 | Blocked | Partially implemented (schema version + fallback event support in place; broader autonomy gating remains iterative) |
+| 5 | Blocked | Implemented baseline (schema alignment normalization + autonomy health gate + fallback continuity); cross-worker rollout remains iterative |
 
 The detailed phase checklists below are preserved as the original planning baseline; use this snapshot and the validation section as the current source of truth.
 
@@ -266,7 +269,7 @@ The detailed phase checklists below are preserved as the original planning basel
 **Objective**: Prepare for future schema evolution and enable autonomy for multi-channel dispatch  
 **Duration**: 1-2 weeks + ongoing
 
-**Current Status (2026-05-14)**: In progress (core schema + campaign channel config implemented)
+**Current Status (2026-05-14)**: Implemented baseline (schema alignment + campaign channel config + autonomy health gate)
 
 #### To-Be Requirements
 1. **Schema Version Header** (all event emissions)
@@ -311,10 +314,10 @@ The detailed phase checklists below are preserved as the original planning basel
 | Phase | Current State | External Dependency Status |
 |-------|---------------|----------------------------|
 | 1 | Implemented | Contract alignment should continue as analytics evolves schema |
-| 2 | Implemented (current channel stack) | Optional direct-provider integrations remain future scope |
+| 2 | Implemented (current channel stack + direct FCM/Meta webhook ingestion baseline) | Additional provider-specific hardening remains iterative |
 | 3 | Implemented baseline | Ongoing production quality monitoring with analytics dashboards |
 | 4 | Implemented | Dedicated outreach SLI UI is live in visibility-marketing; cockpit parity is optional |
-| 5 | In progress | Full autonomy gating depends on visibility-analytics Phase 5 rollout |
+| 5 | Implemented baseline in visibility-marketing | Full cross-worker autonomy rollout depends on visibility-analytics Phase 5 completion |
 
 ---
 
@@ -326,9 +329,9 @@ The detailed phase checklists below are preserved as the original planning basel
 | 2 | Marketing Eng Team | 2-3 weeks | Complete for current channel stack |
 | 3 | Marketing Eng Team + Ops | 2 weeks | Complete (baseline + lifecycle) |
 | 4 | Marketing Eng Team + Product | 1-2 weeks | Complete (health + SLI UI + alerting) |
-| 5 | Marketing Eng Team + Agent Team | ongoing | In progress (iterative autonomy hardening) |
+| 5 | Marketing Eng Team + Agent Team | ongoing | Implemented baseline; iterative autonomy hardening continues |
 
-**As of 2026-05-14**: Core telemetry rollout is complete; remaining scope is incremental hardening and future provider/channel expansion.
+**As of 2026-05-14**: Core telemetry/autonomy baseline is complete; remaining scope is incremental provider hardening and cross-worker autonomy alignment.
 
 ---
 
@@ -337,6 +340,8 @@ The detailed phase checklists below are preserved as the original planning basel
 - **Typecheck**: `corepack pnpm -C packages/marketer typecheck` passed.
 - **Focused unit suite**: `corepack pnpm vitest run tests/unit/telemetry.test.ts tests/unit/webhooks.test.ts tests/unit/webhook-engagement-update.test.ts tests/unit/push-receipts.test.ts tests/unit/skrip-webhook.test.ts tests/unit/skrip-dispatcher.test.ts tests/unit/admin-outbound.test.ts tests/unit/admin-outbound-slo.test.ts`
    - Result: **8 files, 79 tests passed**.
+- **Comprehensive hardening suite**: `corepack pnpm --filter visibility-marketing exec vitest run tests/unit/webhooks-direct.test.ts tests/unit/route-lanes.test.ts tests/unit/growth-policy.test.ts tests/unit/telemetry.test.ts`
+   - Result: **4 files, 32 tests passed**.
 - **Telemetry-specific assertions now covered**:
    - outbound health snapshot aggregation from D1 telemetry tables
    - SLI breach detection and alert suppression TTL behavior

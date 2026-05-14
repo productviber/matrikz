@@ -271,6 +271,8 @@ export async function handleOutboundSLIView(
         <div class="card"><div class="label">Webhook Receipt</div><div class="value">${fmtPct(telemetry.webhookReceiptRate)}</div></div>
         <div class="card"><div class="label">Avg Latency</div><div class="value">${fmtInt(telemetry.avgLatencyMs)} ms</div></div>
         <div class="card"><div class="label">Binding Errors (24h)</div><div class="value">${fmtInt(telemetry.errorCount24h)}</div></div>
+        <div class="card"><div class="label">Dead-Letter (24h)</div><div class="value">${fmtInt(telemetry.quality.deadLetterCount24h)}</div></div>
+        <div class="card"><div class="label">Schema Coercions (24h)</div><div class="value">${fmtInt(telemetry.schemaAlignment.coercedCount24h)}</div></div>
         <div class="card"><div class="label">Prospects</div><div class="value">${fmtInt(prospectCount?.count ?? 0)}</div></div>
         <div class="card"><div class="label">Active Campaigns</div><div class="value">${fmtInt(campaignCount?.count ?? 0)}</div></div>
         <div class="card"><div class="label">Pending Sends</div><div class="value">${fmtInt(pendingSends?.count ?? 0)}</div></div>
@@ -297,7 +299,7 @@ export async function handleOutboundSLIView(
         <div class="card">
           <div class="label">Active Breaches</div>
           <ul>${breachItems}</ul>
-          <div class="meta">Fallback retryable: ${fmtInt(telemetry.fallbackQueue.retryable)} | dead-letter: ${fmtInt(telemetry.fallbackQueue.deadLetter)}</div>
+          <div class="meta">Fallback retryable: ${fmtInt(telemetry.fallbackQueue.retryable)} | dead-letter queue: ${fmtInt(telemetry.fallbackQueue.deadLetter)} | unresolved outcome DLQ (24h): ${fmtInt(telemetry.quality.deadLetterCount24h)}</div>
           <div class="links">
             <a href="/api/marketing/health" target="_blank" rel="noreferrer">Open JSON health</a>
             <a href="/api/admin/outbound/slo" target="_blank" rel="noreferrer">Open SLO report</a>

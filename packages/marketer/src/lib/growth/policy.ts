@@ -13,6 +13,7 @@ import { now, queryOne } from '../db';
 import { isSuppressed } from '../suppression';
 import { getEligibleSkripIdentities } from '../skrip/outbox';
 import { resolveSkripExecutionDecision } from '../skrip/router';
+import { getOutboundTelemetryHealth } from '../telemetry';
 import { normalizeSubjectId, normalizeTenantId } from './common';
 
 export interface GrowthPolicyInput {
@@ -349,7 +350,65 @@ export async function evaluateGrowthPolicy(env: Env, input: GrowthPolicyInput): 
     }
   }
 
-  // B4: Outcome-calibrated threshold gate for low-risk auto-execution.
+  // B4: Outbound telemetry health gate for autonomous execution.
+  // If reliability drops, we preserve operation safety by requiring operator approval.
+  const autonomyHealthGatedActions = new Set<string>([
+    AGENT_ACTION_TYPE.ENROLL_SEQUENCE,
+    AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+  ]);
+  if (autonomyHealthGatedActions.has(actionType) && blockedReasons.length === 0) {
+    try {
+      const telemetryHealth = await getOutboundTelemetryHealth(env);
+      const emailHealth = telemetryHealth.channels.find((row) => row.channel === 'email');
+      const emailBounceRate = emailHealth && emailHealth.sent > 0
+        ? ((emailHealth.bounced + emailHealth.failed) / emailHealth.sent) * 100
+        : 0;
+
+      const gateFailures: string[] = [];
+      if (telemetryHealth.sendSuccessRate < GROWTH_POLICY.AUTONOMY_MIN_SEND_SUCCESS_RATE) {
+        gateFailures.push('send_success_rate');
+      }
+      if (telemetryHealth.webhookReceiptRate < GROWTH_POLICY.AUTONOMY_MIN_WEBHOOK_RECEIPT_RATE) {
+        gateFailures.push('webhook_receipt_rate');
+      }
+      if (emailBounceRate > GROWTH_POLICY.AUTONOMY_MAX_EMAIL_BOUNCE_RATE) {
+        gateFailures.push('email_bounce_rate');
+      }
+      if (telemetryHealth.quality.deadLetterCount24h > GROWTH_POLICY.AUTONOMY_MAX_DEAD_LETTER_24H) {
+        gateFailures.push('dead_letter_24h');
+      }
+      if (telemetryHealth.schemaAlignment.coercedCount24h > GROWTH_POLICY.AUTONOMY_MAX_SCHEMA_COERCION_24H) {
+        gateFailures.push('schema_alignment');
+      }
+
+      evidence.autonomyHealthGate = {
+        sendSuccessRate: telemetryHealth.sendSuccessRate,
+        webhookReceiptRate: telemetryHealth.webhookReceiptRate,
+        emailBounceRate,
+        deadLetterCount24h: telemetryHealth.quality.deadLetterCount24h,
+        schemaCoercionCount24h: telemetryHealth.schemaAlignment.coercedCount24h,
+        thresholds: {
+          minSendSuccessRate: GROWTH_POLICY.AUTONOMY_MIN_SEND_SUCCESS_RATE,
+          minWebhookReceiptRate: GROWTH_POLICY.AUTONOMY_MIN_WEBHOOK_RECEIPT_RATE,
+          maxEmailBounceRate: GROWTH_POLICY.AUTONOMY_MAX_EMAIL_BOUNCE_RATE,
+          maxDeadLetter24h: GROWTH_POLICY.AUTONOMY_MAX_DEAD_LETTER_24H,
+          maxSchemaCoercion24h: GROWTH_POLICY.AUTONOMY_MAX_SCHEMA_COERCION_24H,
+        },
+        gateFailures,
+      };
+
+      if (gateFailures.length > 0) {
+        requiredApproval = true;
+        warnings.push('autonomy_health_gate_not_met');
+      }
+    } catch {
+      // Health gate should fail-safe to approval required, never to unrestricted auto-execution.
+      requiredApproval = true;
+      warnings.push('autonomy_health_gate_unavailable');
+    }
+  }
+
+  // B5: Outcome-calibrated threshold gate for low-risk auto-execution.
   const configuredThresholdRaw = await env.KV_MARKETING.get(
     `${GROWTH_POLICY.AUTONOMY_THRESHOLD_PREFIX}${actionType}:${tenantId}`,
   );

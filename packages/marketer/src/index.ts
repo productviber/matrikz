@@ -73,6 +73,8 @@
  *
  *   POST /webhooks/brevo                — Brevo deliverability webhooks
  *   POST /webhooks/skrip/v1/outcomes    — Skrip normalized outcome webhooks
+ *   POST /webhooks/providers/fcm         — Direct Firebase Cloud Messaging outcomes
+ *   POST /webhooks/providers/meta-whatsapp — Direct Meta WhatsApp outcomes
  */
 
 import type { Env } from './types';
@@ -180,6 +182,7 @@ import {
 import { handleGdprExport, handleGdprDelete, handleUnsubscribe } from './routes/gdpr';
 import { handleBrevoWebhook, handleBrevoInbound } from './routes/webhooks';
 import { handleSkripOutcomeWebhook } from './routes/webhooks-skrip';
+import { handleFcmDirectWebhook, handleMetaWhatsappDirectWebhook } from './routes/webhooks-direct';
 import { handleDispatchIngress } from './routes/dispatch';
 import {
   handleDispatchSuccessRate,
@@ -668,6 +671,12 @@ export default {
       }
       if (method === 'POST' && path === '/webhooks/skrip/v1/outcomes') {
         return handleSkripOutcomeWebhook(request, env, ctx);
+      }
+      if (method === 'POST' && path === '/webhooks/providers/fcm') {
+        return handleFcmDirectWebhook(request, env);
+      }
+      if (method === 'POST' && path === '/webhooks/providers/meta-whatsapp') {
+        return handleMetaWhatsappDirectWebhook(request, env);
       }
 
       // ── Identity Token (admin lane: mint; system lane: verify) ──

@@ -116,4 +116,52 @@ describe('telemetry utility', () => {
     expect(snapshot.webhookReceiptRate).toBe(100);
     expect(snapshot.breaches).toEqual([]);
   });
+
+  it('surfaces schema-coercion and dead-letter quality breaches', async () => {
+    env.DB.onQuery(/binding = 'schema_alignment'/i, () => [{
+      coercion_count: 2,
+    }]);
+
+    env.DB.onQuery(/binding IN \('analytics_events', 'analytics_events_replay'\)/i, () => [{
+      attempts: 20,
+      success: 20,
+      failures: 0,
+      avg_latency_ms: 250,
+    }]);
+
+    env.DB.onQuery(/FROM telemetry_channel_daily/i, () => [{
+      channel: 'email',
+      sent_count: 100,
+      delivered_count: 98,
+      bounced_count: 1,
+      failed_count: 1,
+      complained_count: 0,
+      unsubscribed_count: 0,
+      dismissed_count: 0,
+      avg_latency_ms: 150,
+      latency_samples: 20,
+    }]);
+
+    env.DB.onQuery(/FROM telemetry_fallback_queue/i, () => [{
+      pending_count: 0,
+      retryable_count: 0,
+      dead_letter_count: 0,
+      oldest_created_at: null,
+    }]);
+
+    env.DB.onQuery(/FROM channel_outcome_dead_letter/i, () => [{
+      dead_letter_count: 30,
+      retryable_dead_letter_count: 20,
+      non_retryable_dead_letter_count: 10,
+      unsupported_outcome_count: 3,
+      reverse_emit_failure_count: 2,
+    }]);
+
+    const snapshot = await getOutboundTelemetryHealth(env as any);
+
+    expect(snapshot.quality.deadLetterCount24h).toBe(30);
+    expect(snapshot.schemaAlignment.coercedCount24h).toBe(2);
+    expect(snapshot.breaches).toContain('dead_letter_24h');
+    expect(snapshot.breaches).toContain('schema_alignment');
+  });
 });

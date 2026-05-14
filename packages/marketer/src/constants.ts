@@ -274,6 +274,16 @@ export const GROWTH_POLICY = {
    * Default when key is absent: level 1.
    */
   AUTONOMY_LEVEL_PREFIX: 'growth:autonomy_level:',
+  /** Outbound SLI floor required for autonomous marketing execution. */
+  AUTONOMY_MIN_SEND_SUCCESS_RATE: 99,
+  /** Minimum receipt coverage required before auto-actions can proceed. */
+  AUTONOMY_MIN_WEBHOOK_RECEIPT_RATE: 95,
+  /** Maximum tolerated email bounce/fail ratio for autonomous execution. */
+  AUTONOMY_MAX_EMAIL_BOUNCE_RATE: 2,
+  /** Maximum unresolved outcome dead-letter items in trailing 24h. */
+  AUTONOMY_MAX_DEAD_LETTER_24H: 25,
+  /** Maximum schema coercions tolerated in trailing 24h for autonomous execution. */
+  AUTONOMY_MAX_SCHEMA_COERCION_24H: 0,
 } as const;
 
 export const AI_ENGINE_CONFIG = {
@@ -296,6 +306,8 @@ export const TELEMETRY = {
   ALERT_WEBHOOK_RECEIPT_RATE_MIN: 90,
   ALERT_AVG_LATENCY_MAX_MS: 10_000,
   ALERT_ERROR_COUNT_MAX_24H: 1_000,
+  ALERT_DEAD_LETTER_MAX_24H: 25,
+  ALERT_SCHEMA_COERCION_MAX_24H: 0,
 } as const;
 
 // ─── Payout Statuses ────────────────────────────────────────────────────────

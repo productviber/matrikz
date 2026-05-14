@@ -39,6 +39,8 @@ const RULES: RouteLaneRule[] = [
   { method: 'POST', match: (path) => path === '/webhooks/brevo', lane: 'webhook' },
   { method: 'POST', match: (path) => path === '/webhooks/brevo/inbound', lane: 'webhook' },
   { method: 'POST', match: (path) => path === '/webhooks/skrip/v1/outcomes', lane: 'webhook' },
+  { method: 'POST', match: (path) => path === '/webhooks/providers/fcm', lane: 'webhook' },
+  { method: 'POST', match: (path) => path === '/webhooks/providers/meta-whatsapp', lane: 'webhook' },
 
   // Skrip push subscription (public user-facing — no auth, rate-limited at handler)
   { method: 'POST', match: (path) => path === '/api/push/subscribe', lane: 'user' },

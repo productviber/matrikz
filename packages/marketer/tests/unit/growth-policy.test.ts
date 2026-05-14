@@ -451,4 +451,176 @@ describe('growth policy', () => {
     expect(policy.warnings).toContain('autonomy_threshold_not_met');
     expect(policy.evidence).toHaveProperty('autonomyThreshold');
   });
+  
+  it('forces approval when outbound telemetry health gate is degraded', async () => {
+    const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
+
+    env.DB.onQuery(/contact_channel_identities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        external_contact_id: 'lead@acme.com',
+        canonical_id: 'skrip_can_1',
+        channel: 'push',
+        address: 'token_1',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    env.DB.onQuery(/channel_authorities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        campaign_id: null,
+        channel: 'push',
+        authority: 'skrip',
+        rollout_state: 'enabled',
+        feature_flag_key: null,
+      },
+    ]);
+
+    env.DB.onQuery(/FROM service_binding_metrics/i, () => [{
+      attempts: 100,
+      success: 94,
+      failures: 6,
+      avg_latency_ms: 400,
+      coercion_count: 1,
+    }]);
+    env.DB.onQuery(/FROM telemetry_channel_daily/i, () => [{
+      channel: 'email',
+      sent_count: 100,
+      delivered_count: 92,
+      bounced_count: 4,
+      failed_count: 1,
+      complained_count: 0,
+      unsubscribed_count: 0,
+      dismissed_count: 0,
+      avg_latency_ms: 300,
+      latency_samples: 10,
+    }]);
+    env.DB.onQuery(/FROM telemetry_fallback_queue/i, () => [{
+      pending_count: 2,
+      retryable_count: 1,
+      dead_letter_count: 1,
+      oldest_created_at: null,
+    }]);
+    env.DB.onQuery(/FROM channel_outcome_dead_letter/i, () => [{
+      dead_letter_count: 30,
+      retryable_dead_letter_count: 20,
+      non_retryable_dead_letter_count: 10,
+      unsupported_outcome_count: 5,
+      reverse_emit_failure_count: 3,
+    }]);
+
+    const policy = await evaluateGrowthPolicy(env as any, {
+      subjectId: 'lead@acme.com',
+      action: {
+        type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+        params: {
+          campaignId: 'cmp_1',
+          interventionMode: 'rescue',
+          context: { signalType: 'cold_clicked_no_reply' },
+        },
+      },
+      riskLevel: 'low',
+      confidence: 80,
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.requiredApproval).toBe(true);
+    expect(policy.warnings).toContain('autonomy_health_gate_not_met');
+    expect(policy.evidence).toHaveProperty('autonomyHealthGate');
+  });
+
+  it('forces approval when outbound telemetry health gate is degraded', async () => {
+    const env = createMockEnv({ SKRIP_DEFAULT_ENABLEMENT: 'true' });
+
+    env.DB.onQuery(/contact_channel_identities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        external_contact_id: 'lead@acme.com',
+        canonical_id: 'skrip_can_1',
+        channel: 'push',
+        address: 'token_1',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+    env.DB.onQuery(/channel_authorities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        campaign_id: null,
+        channel: 'push',
+        authority: 'skrip',
+        rollout_state: 'enabled',
+        feature_flag_key: null,
+      },
+    ]);
+
+    env.DB.onQuery(/FROM service_binding_metrics/i, () => [{
+      attempts: 100,
+      success: 94,
+      failures: 6,
+      avg_latency_ms: 400,
+      coercion_count: 1,
+    }]);
+    env.DB.onQuery(/FROM telemetry_channel_daily/i, () => [{
+      channel: 'email',
+      sent_count: 100,
+      delivered_count: 92,
+      bounced_count: 4,
+      failed_count: 1,
+      complained_count: 0,
+      unsubscribed_count: 0,
+      dismissed_count: 0,
+      avg_latency_ms: 300,
+      latency_samples: 10,
+    }]);
+    env.DB.onQuery(/FROM telemetry_fallback_queue/i, () => [{
+      pending_count: 2,
+      retryable_count: 1,
+      dead_letter_count: 1,
+      oldest_created_at: null,
+    }]);
+    env.DB.onQuery(/FROM channel_outcome_dead_letter/i, () => [{
+      dead_letter_count: 30,
+      retryable_dead_letter_count: 20,
+      non_retryable_dead_letter_count: 10,
+      unsupported_outcome_count: 5,
+      reverse_emit_failure_count: 3,
+    }]);
+
+    const policy = await evaluateGrowthPolicy(env as any, {
+      subjectId: 'lead@acme.com',
+      action: {
+        type: AGENT_ACTION_TYPE.SEND_VIA_SKRIP,
+        params: {
+          campaignId: 'cmp_1',
+          interventionMode: 'rescue',
+          context: { signalType: 'cold_clicked_no_reply' },
+        },
+      },
+      riskLevel: 'low',
+      confidence: 80,
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.requiredApproval).toBe(true);
+    expect(policy.warnings).toContain('autonomy_health_gate_not_met');
+    expect(policy.evidence).toHaveProperty('autonomyHealthGate');
+  });
 });

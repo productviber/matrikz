@@ -85,6 +85,8 @@ export interface Env {
   SKRIP_TIMEOUT_MS?: string;
   /** Optional override for ai-engine advisory timeout in milliseconds */
   AI_ENGINE_TIMEOUT_MS?: string;
+  /** Optional comma-separated telemetry schema versions accepted for outbound emits. */
+  TELEMETRY_SCHEMA_VERSIONS?: string;
   /** Shared secret for growth-agent service authentication */
   INTERNAL_SECRET?: string;
   /** Optional dedicated secret for outbound calls to growth-agent endpoints. */
