@@ -1,5 +1,6 @@
 // Server-side rendering utilities
 import React from 'react'
+import { GLOBAL_PAGE_STYLES } from './pageStyles'
 
 export interface RenderOptions {
   title?: string
@@ -23,7 +24,7 @@ export function renderToHTML(
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>${title}</title>
     <meta name="description" content="${description}" />
-    <link rel="stylesheet" href="https://assets.visibility.clodo.dev/styles/globals.css" />
+    <style>${GLOBAL_PAGE_STYLES}</style>
   </head>
   <body>
     <div id="app">${component}</div>

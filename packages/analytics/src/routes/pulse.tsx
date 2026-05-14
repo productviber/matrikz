@@ -1,3 +1,5 @@
+import { GLOBAL_PAGE_STYLES } from '../lib/pageStyles'
+
 export async function renderPulsePage(request: Request, env?: any) {
   try {
     // This would normally render a React component to HTML
@@ -10,7 +12,7 @@ export async function renderPulsePage(request: Request, env?: any) {
           <meta charset="utf-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1" />
           <title>Pulse - Visibility Cockpit</title>
-          <link rel="stylesheet" href="https://assets.visibility.clodo.dev/styles/globals.css" />
+          <style>${GLOBAL_PAGE_STYLES}</style>
         </head>
         <body>
           <div id="app" data-page="pulse">

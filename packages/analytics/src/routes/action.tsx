@@ -1,3 +1,5 @@
+import { GLOBAL_PAGE_STYLES } from '../lib/pageStyles'
+
 export async function renderActionPage(request: Request, env?: any) {
   const html = `
     <!DOCTYPE html>
@@ -6,7 +8,7 @@ export async function renderActionPage(request: Request, env?: any) {
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Action - Visibility Cockpit</title>
-        <link rel="stylesheet" href="https://assets.visibility.clodo.dev/styles/globals.css" />
+        <style>${GLOBAL_PAGE_STYLES}</style>
       </head>
       <body>
         <div id="app" data-page="action">
