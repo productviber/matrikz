@@ -544,6 +544,31 @@ describe('webhooks — Brevo handler', () => {
       const res = await handleBrevoWebhook(req, env as any);
       expect(res.status).toBe(200); // No crash
     });
+
+    it('records reverse emission failures to dead letter for bounce events', async () => {
+      env.DB.onQuery(/FROM contact_channel_identities/i, () => {
+        throw new Error('tenant lookup failed');
+      });
+
+      const req = makeRequest('POST', '/webhooks/brevo', {
+        event: 'hard_bounce',
+        email: 'dlq-bounce@example.com',
+        reason: 'Mailbox does not exist',
+      });
+
+      const res = await handleBrevoWebhook(req, env as any);
+      expect(res.status).toBe(200);
+
+      // Wait for async reverse-emission catch path
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const dlqWrite = env.DB._queries.find((query) =>
+        /INSERT INTO channel_outcome_dead_letter/i.test(query.sql)
+        && query.params.includes('reverse_tracking_emit_failed')
+        && query.params.includes('brevo.hard_bounce'),
+      );
+      expect(dlqWrite).toBeDefined();
+    });
   });
 
   // ── A/B Variant Engagement Tracking ─────────────────────────────────────

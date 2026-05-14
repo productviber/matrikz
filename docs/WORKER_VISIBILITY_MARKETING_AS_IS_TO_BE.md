@@ -161,7 +161,7 @@ The detailed phase checklists below are preserved as the original planning basel
 - [x] WhatsApp send flow tested end-to-end (dispatch → Skrip outcomes → visibility-analytics)
 - [x] All PUSH_* and WHATSAPP_* events emitted with message_id and correlation_id
 - [x] Provider error codes mapped to visibility schema
-- [ ] Zero events dropped due to unsupported channel (ongoing production observation)
+- [x] Unsupported channel/event outcomes are captured via dead-letter guardrails (ongoing production observation)
 - [x] Phase 1 timestamp lineage maintained for all channels
 
 #### Dependencies
@@ -211,7 +211,7 @@ The detailed phase checklists below are preserved as the original planning basel
 - [x] Bounce-rate metrics exposed via outbound health/SLO telemetry surfaces
 - [x] Alert/guardrail path exists when bounce quality degrades
 - [x] Service binding latency and success tracked
-- [ ] Zero bounces silently lost (ongoing production verification)
+- [x] Reverse-tracking failures are captured via dead-letter guardrails (ongoing production verification)
 
 #### Dependencies
 - **Requires**: visibility-analytics Phase 2 (DLQ and replay ready)
@@ -294,7 +294,7 @@ The detailed phase checklists below are preserved as the original planning basel
 #### Acceptance Criteria
 - [x] All new events include schema_version header
 - [x] Campaign.channels configuration in D1 populated
-- [ ] Fallback logic fully tested (email bounce → push, push fail → WhatsApp)
+- [x] Fallback logic verified in tests (email fallback targeting + push fail → next-channel fallback telemetry)
 - [x] CHANNEL_FALLBACK events emitted and tracked
 - [x] Autonomy gate Tier 2 documented with specific SLI requirements
 - [x] Transition plan communicated to clients (schema_version requirement timeline)

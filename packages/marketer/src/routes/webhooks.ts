@@ -206,8 +206,31 @@ export async function handleBrevoWebhook(
     });
 
     // Emit reverse tracking event to analytics (non-blocking)
-    emitTrackingEvent(env, event, emailLower, payload, correlation, resolvedLineage).catch(() => {
-      /* best-effort — analytics binding may be unavailable */
+    void emitTrackingEvent(env, event, emailLower, payload, correlation, resolvedLineage).catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(`[Webhook:Brevo] reverse tracking emission error for ${event}/${emailLower}:`, err);
+
+      try {
+        await logEvent(env, 'webhook.reverse_tracking_emit_error', {
+          provider: 'brevo',
+          event,
+          email: emailLower,
+          error: errorMessage,
+        }, 'warn');
+      } catch {
+        // Non-fatal fallback path should never block webhook flow.
+      }
+
+      try {
+        await writeReverseTrackingFailureToDlq(env, {
+          event,
+          email: emailLower,
+          payload,
+          error: errorMessage,
+        });
+      } catch (dlqErr) {
+        console.error('[Webhook:Brevo] reverse tracking DLQ write failed:', dlqErr);
+      }
     });
 
     return ok({ processed: true, event, email: emailLower });
@@ -782,6 +805,41 @@ async function resolveTelemetryTenantId(env: Env, email: string): Promise<string
   );
 
   return identity?.tenant_id ?? 'default';
+}
+
+async function writeReverseTrackingFailureToDlq(
+  env: Env,
+  input: {
+    event: string;
+    email: string;
+    payload: BrevoWebhookPayload;
+    error: string;
+  },
+): Promise<void> {
+  const failedAt = now();
+  const eventTs = input.payload.ts_event ?? Math.floor(Date.now() / 1000);
+  const eventId = `brevo:${input.event}:${input.email}:${eventTs}`;
+  await execute(
+    env.DB,
+    `INSERT INTO channel_outcome_dead_letter
+      (tenant_id, event_id, event_type, payload_json, error_code, error_message, retryable, first_failed_at, last_failed_at)
+     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    [
+      null,
+      eventId,
+      `brevo.${input.event}`,
+      JSON.stringify({
+        source: 'brevo_webhook',
+        event: input.event,
+        email: input.email,
+        payload: input.payload,
+      }),
+      'reverse_tracking_emit_failed',
+      input.error,
+      failedAt,
+      failedAt,
+    ],
+  );
 }
 
 /**

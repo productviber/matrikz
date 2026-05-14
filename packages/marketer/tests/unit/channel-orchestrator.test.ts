@@ -342,6 +342,79 @@ describe('executeSecondaryChannels()', () => {
     expect(fallbackTelemetryCounter).toBeDefined();
   });
 
+  it('resolves campaign fallback target from email to push before whatsapp', async () => {
+    env = createMockEnv({
+      ENVIRONMENT: 'production' as any,
+      SKRIP_DEFAULT_ENABLEMENT: 'true',
+    });
+
+    env.DB.onQuery(/FROM contact_channel_identities/i, () => [
+      {
+        id: 1,
+        tenant_id: 'default',
+        external_contact_id: testEmail,
+        canonical_id: 'skrip_can_push',
+        channel: 'push',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+      {
+        id: 2,
+        tenant_id: 'default',
+        external_contact_id: testEmail,
+        canonical_id: 'skrip_can_whatsapp',
+        channel: 'whatsapp',
+        consent_state: 'opted_in',
+        suppression_state: 'clear',
+        availability_state: 'available',
+        identity_confidence: 1,
+        registration_state: 'registered',
+        last_reconciled_at: null,
+        created_at: 1,
+        updated_at: 1,
+      },
+    ]);
+
+    env.DB.onQuery(/FROM channel_authorities/i, (params) => [{
+      id: 1,
+      tenant_id: 'default',
+      campaign_id: 'test-campaign',
+      channel: String(params?.[1] ?? 'push'),
+      authority: 'skrip',
+      rollout_state: 'dry_run',
+      feature_flag_key: null,
+      created_at: 1,
+      updated_at: 1,
+    }]);
+
+    await executeSecondaryChannels(
+      env as any,
+      testDomain,
+      testEmail,
+      testContext,
+      'cold-outreach-step1',
+      'test-campaign',
+      {
+        allowedSkripChannels: ['push', 'whatsapp'],
+        fallbackChain: ['email', 'push', 'whatsapp'],
+      },
+    );
+
+    const fallbackQueueEntry = env.DB._queries.find((query) =>
+      query.sql.includes('INSERT INTO telemetry_fallback_queue')
+      && query.params.some((param) => typeof param === 'string' && param.includes('outbound.channel_fallback'))
+      && query.params.some((param) => typeof param === 'string' && param.includes('"toChannel":"push"')),
+    );
+
+    expect(fallbackQueueEntry).toBeDefined();
+  });
+
   it('attempts contact form on step1 when channel exists and no prior attempt', async () => {
     // Register handler: prospect_channels SELECT returns a form
     env.DB.onQuery(/SELECT[\s\S]*prospect_channels[\s\S]*contact_form/, () => [

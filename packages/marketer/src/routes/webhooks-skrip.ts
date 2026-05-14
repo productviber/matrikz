@@ -4,7 +4,7 @@ import { execute, now, queryOne } from '../lib/db';
 import { ok, badRequest, serverError } from '../lib/response';
 import { verifySkripSignature } from '../lib/skrip/signing';
 import { logEvent } from '../lib/observability';
-import { emitTelemetryEvent } from '../lib/telemetry';
+import { emitChannelFallbackEvent, emitTelemetryEvent } from '../lib/telemetry';
 import { recordAgentActionOutcome } from '../lib/growth/actions';
 import { getDispatchCorrelation, normalizeOutcomeMetric } from '../lib/growth/closedLoop';
 import { sendOutcomeFeedback } from '../lib/growth/feedbackClient';
@@ -30,6 +30,8 @@ interface SkripOutcomePayload {
   metadata?: Record<string, unknown> | null;
 }
 
+const SUPPORTED_CAMPAIGN_CHANNELS = ['email', 'push', 'whatsapp', 'sms', 'telegram', 'contact_form'] as const;
+
 function mapSkripOutcomeToTelemetryType(payload: SkripOutcomePayload): string | null {
   const event = payload.eventType.toLowerCase();
   const channel = payload.channel.toLowerCase();
@@ -53,6 +55,77 @@ function mapSkripOutcomeToTelemetryType(payload: SkripOutcomePayload): string | 
   }
 
   return null;
+}
+
+function parseCampaignChannels(value: string | null | undefined): string[] | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const normalized = Array.from(
+      new Set(
+        parsed
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim().toLowerCase())
+          .filter((item) => (SUPPORTED_CAMPAIGN_CHANNELS as readonly string[]).includes(item)),
+      ),
+    );
+    return normalized.length > 0 ? normalized : null;
+  } catch {
+    return null;
+  }
+}
+
+function shouldEmitFallbackFromOutcome(payload: SkripOutcomePayload): boolean {
+  const eventType = payload.eventType.toLowerCase();
+  return eventType.includes('failed') || eventType.includes('bounce');
+}
+
+async function resolveNextFallbackChannel(env: Env, payload: SkripOutcomePayload): Promise<string | null> {
+  const currentChannel = payload.channel.trim().toLowerCase();
+  if (!currentChannel || !payload.campaignId) return null;
+
+  try {
+    const campaign = await queryOne<{
+      fallback_chain_json: string | null;
+      channels_json: string | null;
+    }>(
+      env.DB,
+      `SELECT fallback_chain_json, channels_json
+         FROM outbound_campaigns
+        WHERE slug = ?
+        ORDER BY started_at DESC
+        LIMIT 1`,
+      [payload.campaignId],
+    );
+
+    const fallbackChain = parseCampaignChannels(campaign?.fallback_chain_json)
+      ?? parseCampaignChannels(campaign?.channels_json)
+      ?? null;
+    if (!fallbackChain || fallbackChain.length === 0) {
+      return null;
+    }
+
+    const currentIndex = fallbackChain.indexOf(currentChannel);
+    if (currentIndex < 0 || currentIndex >= fallbackChain.length - 1) {
+      return null;
+    }
+
+    for (let index = currentIndex + 1; index < fallbackChain.length; index += 1) {
+      const candidate = fallbackChain[index];
+      if (candidate !== currentChannel) {
+        return candidate;
+      }
+    }
+
+    return null;
+  } catch (err) {
+    console.log(
+      `[Webhook:Skrip] fallback-chain lookup failed for campaign ${payload.campaignId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
 }
 
 function resolveFallbackActionTaken(payload: SkripOutcomePayload): string {
@@ -99,14 +172,15 @@ async function writeOutcomeToDlq(
   tenantId: string | null,
   errorCode: string,
   errorMessage: string,
+  retryable = 1,
 ): Promise<void> {
   const epoch = now();
   await execute(
     env.DB,
     `INSERT INTO channel_outcome_dead_letter
       (tenant_id, event_id, event_type, payload_json, error_code, error_message, retryable, first_failed_at, last_failed_at)
-     VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)`,
-    [tenantId, eventId, eventType, payload, errorCode, errorMessage, epoch, epoch],
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [tenantId, eventId, eventType, payload, errorCode, errorMessage, retryable, epoch, epoch],
   );
 }
 
@@ -237,6 +311,29 @@ export async function handleSkripOutcomeWebhook(
         },
         eventPayload: payload.metadata ?? {},
       });
+    } else {
+      const unsupportedReason = `Unsupported telemetry mapping for channel=${payload.channel} eventType=${payload.eventType}`;
+      await logEvent(env, 'skrip.outcome.unmapped', {
+        eventId: payload.eventId,
+        eventType: payload.eventType,
+        tenantId: payload.tenantId,
+        channel: payload.channel,
+      }, 'warn');
+
+      try {
+        await writeOutcomeToDlq(
+          env,
+          rawBody,
+          payload.eventId,
+          payload.eventType,
+          payload.tenantId,
+          'unsupported_outcome_mapping',
+          unsupportedReason,
+          0,
+        );
+      } catch (dlqErr) {
+        console.error('[Webhook:Skrip] unsupported mapping DLQ write failed:', dlqErr);
+      }
     }
 
     await logEvent(env, 'skrip.outcome.processed', {
@@ -382,6 +479,23 @@ export async function handleSkripOutcomeWebhook(
             [payload.reason ?? 'unknown', epoch, payload.contactId],
           );
         }
+      }
+    }
+
+    if (shouldEmitFallbackFromOutcome(payload)) {
+      const nextChannel = await resolveNextFallbackChannel(env, payload);
+      if (nextChannel) {
+        await emitChannelFallbackEvent(env, {
+          tenantId: payload.tenantId,
+          messageId: payload.messageId,
+          correlationId: payload.correlationId,
+          fromChannel: payload.channel.toLowerCase(),
+          toChannel: nextChannel,
+          reason: 'channel_delivery_failed',
+          campaignId: payload.campaignId,
+          stepId: payload.stepId,
+          contactId: payload.contactId,
+        });
       }
     }
 
