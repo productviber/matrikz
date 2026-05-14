@@ -1,5 +1,5 @@
 import type { Env } from '../../types';
-import { OUTCOME_DELTA_MAP } from '@clodo/growth-agent-contracts';
+import { OUTCOME_DELTA_MAP, type OutcomeMetric } from './contractAdapter';
 import { normalizeTenantId, stableStringify } from './common';
 import {
   isUuidV4,
@@ -9,7 +9,6 @@ import {
 } from './closedLoop';
 
 export { OUTCOME_DELTA_MAP };
-export type OutcomeMetric = keyof typeof OUTCOME_DELTA_MAP;
 
 export interface SendOutcomeFeedbackParams {
   correlationId: string;

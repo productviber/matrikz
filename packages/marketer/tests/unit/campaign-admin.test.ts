@@ -39,6 +39,8 @@ describe('Campaign Admin Endpoints', () => {
           daily_limit: 10,
           total_sent: 0,
           source_filter: '{"sources":["hackernews"],"min_score":50}',
+          channels_json: '["email","push","whatsapp"]',
+          fallback_chain_json: '["email","push","whatsapp"]',
           created_at: 1700000000,
           updated_at: 1700000000,
         },
@@ -52,6 +54,8 @@ describe('Campaign Admin Endpoints', () => {
       expect(body.data.campaigns).toHaveLength(1);
       expect(body.data.campaigns[0].slug).toBe('cold-outreach-v1');
       expect(body.data.campaigns[0].sourceFilter).toEqual({ sources: ['hackernews'], min_score: 50 });
+      expect(body.data.campaigns[0].channels).toEqual(['email', 'push', 'whatsapp']);
+      expect(body.data.campaigns[0].fallbackChain).toEqual(['email', 'push', 'whatsapp']);
     });
 
     it('includes throttle info', async () => {
@@ -89,6 +93,8 @@ describe('Campaign Admin Endpoints', () => {
           status: 'active',
           daily_limit: 10,
           source_filter: null,
+          channels_json: '["email","push"]',
+          fallback_chain_json: '["email","push"]',
           total_sent: 5,
           warmup_day: 3,
           started_at: 1700000000,
@@ -108,6 +114,8 @@ describe('Campaign Admin Endpoints', () => {
 
       expect(res.status).toBe(200);
       expect(body.data.campaign.name).toBe('Cold Outreach v1');
+      expect(body.data.campaign.channels).toEqual(['email', 'push']);
+      expect(body.data.campaign.fallbackChain).toEqual(['email', 'push']);
       expect(body.data.throttle).toBeDefined();
       expect(body.data.sendsByStatus.sent).toBe(3);
     });
@@ -168,6 +176,8 @@ describe('Campaign Admin Endpoints', () => {
         name: 'My Campaign',
         slug: 'my-campaign',
         daily_limit: 10,
+        channels: ['email', 'push', 'whatsapp'],
+        fallback_chain: ['email', 'push', 'whatsapp'],
       }, adminHeaders);
       const res = await handleCreateOutboundCampaign(req, env as any);
 
@@ -178,6 +188,22 @@ describe('Campaign Admin Endpoints', () => {
       expect(insertQuery).toBeDefined();
       expect(insertQuery!.params).toContain('My Campaign');
       expect(insertQuery!.params).toContain('my-campaign');
+      expect(insertQuery!.params).toContain('["email","push","whatsapp"]');
+      expect(insertQuery!.params).toContain('["email","push","whatsapp"]');
+    });
+
+    it('rejects fallback chain entries not present in channels', async () => {
+      env.DB.onQuery(/SELECT.*outbound_campaigns/, () => []);
+
+      const req = makeRequest('POST', '/api/admin/campaigns/outbound', {
+        name: 'Bad Chain',
+        slug: 'bad-chain',
+        channels: ['email'],
+        fallback_chain: ['email', 'push'],
+      }, adminHeaders);
+      const res = await handleCreateOutboundCampaign(req, env as any);
+
+      expect(res.status).toBe(400);
     });
 
     it('caps daily_limit at 200', async () => {

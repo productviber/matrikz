@@ -1,9 +1,10 @@
 import type { Env } from '../types';
-import { CONTENT_TYPE_JSON, KV_PREFIX, SKRIP_CONFIG } from '../constants';
-import { execute, now } from '../lib/db';
+import { CONTENT_TYPE_JSON, EVENT_TYPES, KV_PREFIX, SKRIP_CONFIG } from '../constants';
+import { execute, now, queryOne } from '../lib/db';
 import { ok, badRequest, serverError } from '../lib/response';
 import { verifySkripSignature } from '../lib/skrip/signing';
 import { logEvent } from '../lib/observability';
+import { emitTelemetryEvent } from '../lib/telemetry';
 import { recordAgentActionOutcome } from '../lib/growth/actions';
 import { getDispatchCorrelation, normalizeOutcomeMetric } from '../lib/growth/closedLoop';
 import { sendOutcomeFeedback } from '../lib/growth/feedbackClient';
@@ -27,6 +28,31 @@ interface SkripOutcomePayload {
   correlationId: string;
   reason?: string | null;
   metadata?: Record<string, unknown> | null;
+}
+
+function mapSkripOutcomeToTelemetryType(payload: SkripOutcomePayload): string | null {
+  const event = payload.eventType.toLowerCase();
+  const channel = payload.channel.toLowerCase();
+
+  if (channel === 'push') {
+    if (event.includes('delivered')) return EVENT_TYPES.OUTBOUND_PUSH_DELIVERED;
+    if (event.includes('clicked')) return EVENT_TYPES.OUTBOUND_PUSH_CLICKED;
+    if (event.includes('opened')) return EVENT_TYPES.OUTBOUND_PUSH_OPENED;
+    if (event.includes('dismissed')) return EVENT_TYPES.OUTBOUND_PUSH_DISMISSED;
+    if (event.includes('failed')) return EVENT_TYPES.OUTBOUND_PUSH_FAILED;
+    if (event.includes('unsubscribed') || event.includes('optout')) return EVENT_TYPES.OUTBOUND_PUSH_UNSUBSCRIBED;
+    return null;
+  }
+
+  if (channel === 'whatsapp') {
+    if (event.includes('delivered')) return EVENT_TYPES.OUTBOUND_WHATSAPP_DELIVERED;
+    if (event.includes('read')) return EVENT_TYPES.OUTBOUND_WHATSAPP_READ;
+    if (event.includes('replied') || event.includes('reply')) return EVENT_TYPES.OUTBOUND_WHATSAPP_REPLIED;
+    if (event.includes('failed')) return EVENT_TYPES.OUTBOUND_WHATSAPP_FAILED;
+    return null;
+  }
+
+  return null;
 }
 
 function resolveFallbackActionTaken(payload: SkripOutcomePayload): string {
@@ -145,6 +171,18 @@ export async function handleSkripOutcomeWebhook(
   try {
     const occurredAtEpoch = Math.floor(Date.parse(payload.occurredAt) / 1000);
     const epoch = now();
+    const existingLineage = await queryOne<{
+      first_sent_at: number | null;
+    }>(
+      env.DB,
+      `SELECT first_sent_at
+         FROM channel_message_lineage
+        WHERE message_id = ?
+        LIMIT 1`,
+      [payload.messageId],
+    );
+    const firstSentAt = existingLineage?.first_sent_at ?? null;
+
     await execute(
       env.DB,
       `INSERT INTO channel_message_lineage
@@ -154,6 +192,7 @@ export async function handleSkripOutcomeWebhook(
          skrip_outbound_id = COALESCE(excluded.skrip_outbound_id, channel_message_lineage.skrip_outbound_id),
          provider_ref = COALESCE(excluded.provider_ref, channel_message_lineage.provider_ref),
          latest_status = excluded.latest_status,
+         first_sent_at = COALESCE(channel_message_lineage.first_sent_at, excluded.first_sent_at),
          last_outcome_at = excluded.last_outcome_at,
          updated_at = excluded.updated_at`,
       [
@@ -168,12 +207,37 @@ export async function handleSkripOutcomeWebhook(
         payload.providerRef ?? null,
         payload.messageId,
         payload.eventType,
-        occurredAtEpoch,
+        firstSentAt,
         occurredAtEpoch,
         epoch,
         epoch,
       ],
     );
+
+    const telemetryType = mapSkripOutcomeToTelemetryType(payload);
+    if (telemetryType) {
+      await emitTelemetryEvent(env, {
+        type: telemetryType,
+        tenantId: payload.tenantId,
+        messageId: payload.messageId,
+        correlationId: payload.correlationId,
+        channel: payload.channel,
+        timestamp: occurredAtEpoch,
+        sendTimestamp: firstSentAt,
+        receiptTimestamp: occurredAtEpoch,
+        providerMessageId: payload.providerRef ?? payload.skripOutboundId ?? null,
+        campaignId: payload.campaignId,
+        stepId: payload.stepId,
+        contactId: payload.contactId,
+        reason: payload.reason ?? null,
+        metadata: {
+          eventId: payload.eventId,
+          sourceSystem: payload.sourceSystem,
+          rawEventType: payload.eventType,
+        },
+        eventPayload: payload.metadata ?? {},
+      });
+    }
 
     await logEvent(env, 'skrip.outcome.processed', {
       eventId: payload.eventId,
@@ -239,6 +303,86 @@ export async function handleSkripOutcomeWebhook(
             AND channel = 'push'`,
         [epoch, payload.tenantId, payload.contactId],
       );
+    }
+
+    if (payload.contactId.includes('@')) {
+      const channel = payload.channel.toLowerCase();
+      const event = payload.eventType.toLowerCase();
+      if (channel === 'push') {
+        await execute(
+          env.DB,
+          `UPDATE marketing_contacts
+              SET push_sent_at = COALESCE(push_sent_at, ?),
+                  updated_at = ?
+            WHERE email = ?`,
+          [firstSentAt ?? occurredAtEpoch, epoch, payload.contactId],
+        );
+
+        if (event.includes('clicked') || event.includes('opened')) {
+          await execute(
+            env.DB,
+            `UPDATE marketing_contacts
+                SET push_last_opened_at = COALESCE(push_last_opened_at, ?),
+                    last_engaged_at = CASE
+                      WHEN last_engaged_at IS NULL THEN ?
+                      ELSE MAX(last_engaged_at, ?)
+                    END,
+                    status = CASE WHEN status = 'prospect' THEN 'engaged' ELSE status END,
+                    updated_at = ?
+              WHERE email = ?`,
+            [occurredAtEpoch, occurredAtEpoch, occurredAtEpoch, epoch, payload.contactId],
+          );
+        }
+
+        if (event.includes('failed')) {
+          await execute(
+            env.DB,
+            `UPDATE marketing_contacts
+                SET push_bounce_reason = ?,
+                    updated_at = ?
+              WHERE email = ?`,
+            [payload.reason ?? 'unknown', epoch, payload.contactId],
+          );
+        }
+      }
+
+      if (channel === 'whatsapp') {
+        await execute(
+          env.DB,
+          `UPDATE marketing_contacts
+              SET whatsapp_sent_at = COALESCE(whatsapp_sent_at, ?),
+                  updated_at = ?
+            WHERE email = ?`,
+          [firstSentAt ?? occurredAtEpoch, epoch, payload.contactId],
+        );
+
+        if (event.includes('read') || event.includes('replied') || event.includes('reply')) {
+          await execute(
+            env.DB,
+            `UPDATE marketing_contacts
+                SET whatsapp_last_read_at = COALESCE(whatsapp_last_read_at, ?),
+                    last_engaged_at = CASE
+                      WHEN last_engaged_at IS NULL THEN ?
+                      ELSE MAX(last_engaged_at, ?)
+                    END,
+                    status = CASE WHEN status = 'prospect' THEN 'engaged' ELSE status END,
+                    updated_at = ?
+              WHERE email = ?`,
+            [occurredAtEpoch, occurredAtEpoch, occurredAtEpoch, epoch, payload.contactId],
+          );
+        }
+
+        if (event.includes('failed')) {
+          await execute(
+            env.DB,
+            `UPDATE marketing_contacts
+                SET whatsapp_bounce_reason = ?,
+                    updated_at = ?
+              WHERE email = ?`,
+            [payload.reason ?? 'unknown', epoch, payload.contactId],
+          );
+        }
+      }
     }
 
     return ok({ accepted: true, eventId: payload.eventId, processedAt: new Date().toISOString() });

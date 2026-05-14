@@ -13,10 +13,11 @@
  */
 
 import type { ChannelExecutionOutboxRow, ChannelMessageLineageRow, Env } from '../../types';
-import { SKRIP_CONFIG, SKRIP_OUTBOX_STATUS, TTL } from '../../constants';
+import { EVENT_TYPES, SKRIP_CONFIG, SKRIP_OUTBOX_STATUS, TTL } from '../../constants';
 import { batch, execute, now, query } from '../db';
 import { createSkripClient } from './client';
 import { getCorrelationId } from '../correlation';
+import { emitTelemetryEvent } from '../telemetry';
 
 // ── Internal types for Skrip send/response shapes ─────────────────────────
 
@@ -173,6 +174,54 @@ async function markDispatched(
         epoch,
       ],
     );
+  }
+
+  const sentEventType = r.channel === 'push'
+    ? EVENT_TYPES.OUTBOUND_PUSH_SENT
+    : r.channel === 'whatsapp'
+      ? EVENT_TYPES.OUTBOUND_WHATSAPP_SENT
+      : null;
+
+  if (sentEventType) {
+    await emitTelemetryEvent(env, {
+      type: sentEventType,
+      tenantId: r.tenant_id,
+      messageId,
+      correlationId: r.correlation_id,
+      channel: r.channel,
+      timestamp: epoch,
+      sendTimestamp: epoch,
+      campaignId: r.campaign_id,
+      stepId: r.step_id,
+      contactId: r.contact_id,
+      providerMessageId: skripOutboundId,
+      metadata: {
+        idempotencyKey: r.idempotency_key,
+        outboxId,
+      },
+    });
+
+    if (r.contact_id.includes('@')) {
+      if (r.channel === 'push') {
+        await execute(
+          env.DB,
+          `UPDATE marketing_contacts
+              SET push_sent_at = COALESCE(push_sent_at, ?),
+                  updated_at = ?
+            WHERE email = ?`,
+          [epoch, epoch, r.contact_id],
+        );
+      } else if (r.channel === 'whatsapp') {
+        await execute(
+          env.DB,
+          `UPDATE marketing_contacts
+              SET whatsapp_sent_at = COALESCE(whatsapp_sent_at, ?),
+                  updated_at = ?
+            WHERE email = ?`,
+          [epoch, epoch, r.contact_id],
+        );
+      }
+    }
   }
 }
 

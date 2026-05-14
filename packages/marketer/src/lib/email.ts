@@ -14,6 +14,8 @@ import {
   TLD_UTC_OFFSET,
   SEND_WINDOW,
   CRON_EMAIL_TIME_BUDGET_MS,
+  EVENT_TYPES,
+  SKRIP_CONFIG,
 } from '../constants';
 import { query, queryOne, execute, now } from './db';
 import { runWithConcurrency } from './concurrency';
@@ -32,6 +34,7 @@ import {
 } from './email/context';
 import { renderTemplate } from './email/renderer';
 import { sendWithProvider } from './email/provider';
+import { emitTelemetryEvent } from './telemetry';
 import {
   checkThrottle,
   checkDomainGap,
@@ -46,6 +49,7 @@ import type { WarmupStep } from './warmup';
 import { createAiEngineClient } from './ai-engine/client';
 
 const WARM_EMAIL_CONCURRENCY = 4;
+const CAMPAIGN_CHANNELS = ['email', 'push', 'whatsapp', 'sms', 'telegram', 'contact_form'] as const;
 
 /**
  * Resolve recipient UTC offset from email domain TLD with compound-TLD support.
@@ -115,6 +119,26 @@ function sanitizeSubjectLine(value: unknown): string | null {
   if (!trimmed) return null;
   if (trimmed.length > 160) return trimmed.slice(0, 160).trim();
   return trimmed;
+}
+
+function parseCampaignChannelsJson(value: string | null | undefined): string[] | null {
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    const normalized = Array.from(
+      new Set(
+        parsed
+          .filter((item): item is string => typeof item === 'string')
+          .map((item) => item.trim().toLowerCase())
+          .filter((item) => (CAMPAIGN_CHANNELS as readonly string[]).includes(item)),
+      ),
+    );
+    return normalized.length > 0 ? normalized : null;
+  } catch {
+    return null;
+  }
 }
 
 function sanitizePersonalizationCopy(value: unknown): string | null {
@@ -367,14 +391,51 @@ export async function processDueEmails(
 
   let activeCampaignSlug = 'cold-outreach-v1';
   let activeCampaignSchedule: ReadonlyArray<WarmupStep> | undefined;
+  let activeCampaignChannels: string[] | null = null;
+  let activeCampaignFallbackChain: string[] | null = null;
   {
-    const campaign = await queryOne<{ slug: string; warmup_schedule: string | null }>(
-      env.DB,
-      `SELECT slug, warmup_schedule FROM outbound_campaigns WHERE status = 'active' ORDER BY started_at DESC LIMIT 1`
-    );
+    let campaign: {
+      slug: string;
+      warmup_schedule: string | null;
+      channels_json?: string | null;
+      fallback_chain_json?: string | null;
+    } | null = null;
+
+    try {
+      campaign = await queryOne<{
+        slug: string;
+        warmup_schedule: string | null;
+        channels_json: string | null;
+        fallback_chain_json: string | null;
+      }>(
+        env.DB,
+        `SELECT slug, warmup_schedule, channels_json, fallback_chain_json
+           FROM outbound_campaigns
+          WHERE status = 'active'
+          ORDER BY started_at DESC
+          LIMIT 1`,
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.toLowerCase().includes('no such column')) {
+        throw err;
+      }
+
+      campaign = await queryOne<{ slug: string; warmup_schedule: string | null }>(
+        env.DB,
+        `SELECT slug, warmup_schedule
+           FROM outbound_campaigns
+          WHERE status = 'active'
+          ORDER BY started_at DESC
+          LIMIT 1`,
+      );
+    }
+
     if (campaign) {
       activeCampaignSlug = campaign.slug;
       activeCampaignSchedule = parseCampaignSchedule(campaign.warmup_schedule);
+      activeCampaignChannels = parseCampaignChannelsJson(campaign.channels_json);
+      activeCampaignFallbackChain = parseCampaignChannelsJson(campaign.fallback_chain_json);
     }
   }
 
@@ -538,7 +599,11 @@ export async function processDueEmails(
         templateKey: send.template_key,
         context,
         sendId: send.id,
+        messageId: crypto.randomUUID(),
       });
+
+      const localMessageId = providerResult.localMessageId;
+      const sentAt = now();
 
       // Persist engagement correlator for webhook (see constants.KV_PREFIX.AB_SEND).
       // Best-effort — webhook has a fallback query path if this KV write fails.
@@ -566,6 +631,7 @@ export async function processDueEmails(
         `UPDATE email_sends
             SET status = '${EMAIL_STATUS.SENT}',
                 sent_at = ?,
+                message_id = ?,
                 rendered_subject = ?,
                 subject_variant_idx = ?,
                 body_variant_idx = ?,
@@ -573,7 +639,8 @@ export async function processDueEmails(
                 framing_tier = ?
           WHERE id = ?`,
         [
-          now(),
+          sentAt,
+          localMessageId,
           subject,
           subjectVariantIdx,
           bodyVariantIdx,
@@ -582,6 +649,69 @@ export async function processDueEmails(
           send.id,
         ],
       );
+
+      const tenantId = typeof context.tenantId === 'string' && context.tenantId.trim().length > 0
+        ? context.tenantId.trim()
+        : SKRIP_CONFIG.DEFAULT_TENANT_ID;
+      const campaignId = typeof context.campaignSlug === 'string' && context.campaignSlug.trim().length > 0
+        ? context.campaignSlug.trim()
+        : activeCampaignSlug;
+      const journeyId = typeof context.journeyId === 'string' && context.journeyId.trim().length > 0
+        ? context.journeyId.trim()
+        : null;
+      const stepId = send.template_key;
+
+      await execute(
+        env.DB,
+        `INSERT INTO channel_message_lineage
+          (tenant_id, campaign_id, journey_id, step_id, contact_id, channel, message_id, skrip_outbound_id, provider_ref, idempotency_key, latest_status, first_sent_at, last_outcome_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 'email', ?, NULL, ?, ?, 'sent', ?, NULL, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+           provider_ref = COALESCE(excluded.provider_ref, channel_message_lineage.provider_ref),
+           latest_status = 'sent',
+           first_sent_at = COALESCE(channel_message_lineage.first_sent_at, excluded.first_sent_at),
+           updated_at = excluded.updated_at`,
+        [
+          tenantId,
+          campaignId,
+          journeyId,
+          stepId,
+          send.contact_email,
+          localMessageId,
+          providerResult.messageId,
+          `email:${send.id}`,
+          sentAt,
+          sentAt,
+          sentAt,
+        ],
+      );
+
+      const variantLabel = (subjectVariantIdx != null || bodyVariantIdx != null)
+        ? `s${subjectVariantIdx ?? 'na'}-b${bodyVariantIdx ?? 'na'}`
+        : null;
+      await emitTelemetryEvent(env, {
+        type: EVENT_TYPES.OUTBOUND_EMAIL_SENT,
+        tenantId,
+        messageId: localMessageId,
+        correlationId: localMessageId,
+        channel: 'email',
+        timestamp: sentAt,
+        sendTimestamp: sentAt,
+        prospectEmail: send.contact_email,
+        providerMessageId: providerResult.messageId,
+        aBVariant: variantLabel,
+        campaignId,
+        stepId,
+        contactId: send.contact_email,
+        metadata: {
+          sendId: send.id,
+          sequenceId: send.sequence_id,
+          templateKey: send.template_key,
+          subjectVariantIdx,
+          bodyVariantIdx,
+          framingTier,
+        },
+      });
 
       if (isColdOutreach) {
         await incrementSendCounter(env.KV_MARKETING, dateKey);
@@ -601,7 +731,13 @@ export async function processDueEmails(
               send.contact_email,
               context,
               send.template_key,
-              activeCampaignSlug
+              activeCampaignSlug,
+              {
+                tenantId,
+                messageId: localMessageId,
+                allowedSkripChannels: activeCampaignChannels,
+                fallbackChain: activeCampaignFallbackChain,
+              },
             );
             if (secondaryChannels.length > 0) {
               console.log(`[Email] Secondary channels used for ${send.contact_email}: ${secondaryChannels.join(', ')}`);
@@ -756,6 +892,8 @@ interface EmailPayload {
   context: Record<string, unknown>;
   /** email_sends.id threaded to the provider as a tag for webhook correlation. */
   sendId?: number;
+  /** Canonical local message id persisted on email_sends.message_id. */
+  messageId: string;
 }
 
 /**
@@ -768,12 +906,12 @@ interface EmailPayload {
 async function sendEmail(
   env: Env,
   payload: EmailPayload,
-): Promise<{ messageId: string | null }> {
-  const { to, subject, templateKey, context, sendId } = payload;
+): Promise<{ messageId: string | null; localMessageId: string }> {
+  const { to, subject, templateKey, context, sendId, messageId } = payload;
 
   if (await isUnsubscribed(env, to)) {
     console.log(`[Email] Skipping send to ${to} - unsubscribed`);
-    return { messageId: null };
+    return { messageId: null, localMessageId: messageId };
   }
 
   let htmlBody = await renderTemplate(env, templateKey, {
@@ -791,13 +929,18 @@ async function sendEmail(
 
   if (env.ENVIRONMENT === 'development' || !env.EMAIL_API_KEY) {
     console.log(`[Email:Dev] Would send to ${to}: "${subject}" (template: ${templateKey})`);
-    return { messageId: null };
+    return { messageId: null, localMessageId: messageId };
   }
 
   const isCold = templateKey.startsWith('cold-outreach-');
-  return sendWithProvider(env, to, subject, htmlBody, {
+  const providerResult = await sendWithProvider(env, to, subject, htmlBody, {
     skipBulkHeaders: isCold,
     sendId,
+    messageId,
     templateKey,
   });
+  return {
+    messageId: providerResult.messageId,
+    localMessageId: messageId,
+  };
 }

@@ -73,8 +73,8 @@ describe('constants', () => {
       expect(EVENT_TYPES.LEAD_CAPTURED).toBe('lead.captured');
     });
 
-    it('has 33 event types', () => {
-      expect(Object.keys(EVENT_TYPES)).toHaveLength(33);
+    it('has 46 event types', () => {
+      expect(Object.keys(EVENT_TYPES)).toHaveLength(46);
     });
   });
 

@@ -50,6 +50,19 @@ export const EVENT_TYPES = {
   OUTBOUND_EMAIL_BOUNCED: 'outbound.email_bounced',
   OUTBOUND_EMAIL_COMPLAINED: 'outbound.email_complained',
   OUTBOUND_EMAIL_REPLIED: 'outbound.email_replied',
+  OUTBOUND_PUSH_SENT: 'outbound.push_sent',
+  OUTBOUND_PUSH_DELIVERED: 'outbound.push_delivered',
+  OUTBOUND_PUSH_OPENED: 'outbound.push_opened',
+  OUTBOUND_PUSH_CLICKED: 'outbound.push_clicked',
+  OUTBOUND_PUSH_DISMISSED: 'outbound.push_dismissed',
+  OUTBOUND_PUSH_FAILED: 'outbound.push_failed',
+  OUTBOUND_PUSH_UNSUBSCRIBED: 'outbound.push_unsubscribed',
+  OUTBOUND_WHATSAPP_SENT: 'outbound.whatsapp_sent',
+  OUTBOUND_WHATSAPP_DELIVERED: 'outbound.whatsapp_delivered',
+  OUTBOUND_WHATSAPP_READ: 'outbound.whatsapp_read',
+  OUTBOUND_WHATSAPP_REPLIED: 'outbound.whatsapp_replied',
+  OUTBOUND_WHATSAPP_FAILED: 'outbound.whatsapp_failed',
+  OUTBOUND_CHANNEL_FALLBACK: 'outbound.channel_fallback',
   OUTBOUND_UNSUBSCRIBED: 'outbound.unsubscribed',
   /** Cold-email prospect completed OAuth — closes the attribution loop. */
   OUTBOUND_PROSPECT_CONVERTED: 'outbound.prospect_converted',
@@ -272,6 +285,19 @@ export const AI_ENGINE_CONFIG = {
   RESPONSE_SCHEMA_VERSION: 'growth-action-v1',
 } as const;
 
+export const TELEMETRY = {
+  SCHEMA_VERSION: 'v1',
+  ANALYTICS_EVENT_URL: 'https://analytics/api/events',
+  ANALYTICS_CIRCUIT_FAILURE_THRESHOLD: 3,
+  ANALYTICS_CIRCUIT_TTL_SECS: 60,
+  FALLBACK_MAX_RETRIES: 5,
+  ALERT_SUPPRESSION_TTL_SECS: 15 * 60,
+  ALERT_SEND_SUCCESS_RATE_MIN: 95,
+  ALERT_WEBHOOK_RECEIPT_RATE_MIN: 90,
+  ALERT_AVG_LATENCY_MAX_MS: 10_000,
+  ALERT_ERROR_COUNT_MAX_24H: 1_000,
+} as const;
+
 // ─── Payout Statuses ────────────────────────────────────────────────────────
 
 export const PAYOUT_STATUS = {
@@ -421,6 +447,12 @@ export const KV_PREFIX = {
   AI_ENGINE_CIRCUIT: 'ai-engine:circuit:',
   /** Consecutive failure counters for ai-engine advisory calls */
   AI_ENGINE_FAILURE: 'ai-engine:failure:',
+  /** Circuit breaker state for analytics event binding calls */
+  ANALYTICS_CIRCUIT: 'analytics:circuit:',
+  /** Consecutive failure counters for analytics event binding calls */
+  ANALYTICS_FAILURE: 'analytics:failure:',
+  /** Alert de-duplication key prefix for outbound telemetry SLI alerts */
+  OUTBOUND_ALERT_SUPPRESS: 'outbound:alert:suppress:',
   /** Daily fallback rate counter for ai-engine advisory calls */
   AI_ENGINE_FALLBACK_RATE: 'ai-engine:fallback-rate:',
   /** Correlation lookup record from dispatcher ingress to outcome hooks. */

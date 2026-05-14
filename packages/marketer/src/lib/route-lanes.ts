@@ -69,6 +69,7 @@ const RULES: RouteLaneRule[] = [
 
   // Admin surfaces
   { method: 'GET', match: (path) => path === '/api/health', lane: 'admin' },
+  { method: 'GET', match: (path) => path === '/api/marketing/health', lane: 'admin' },
   { method: 'POST', match: (path) => path === '/api/affiliate/approve', lane: 'admin' },
   { method: 'GET', match: (path) => path === '/api/affiliate/applications', lane: 'admin' },
   { method: '*', match: (path) => path.startsWith('/api/admin/'), lane: 'admin' },

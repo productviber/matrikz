@@ -14,11 +14,12 @@
 
 import type { Env } from '../types';
 import { ok, badRequest, serverError, unauthorized } from '../lib/response';
-import { execute, query, queryOne } from '../lib/db';
+import { execute, now, query, queryOne } from '../lib/db';
 import { recordVariantEngagement, incrementCampaignMetric } from '../lib/email';
 import { upsertGrowthSignal } from '../lib/growth/signals';
 import { ensureWebhookAccess, accessDenied } from '../lib/access';
 import { logEvent } from '../lib/observability';
+import { emitTelemetryEvent } from '../lib/telemetry';
 import { addSuppression } from '../lib/suppression';
 import {
   KV_UNSUBSCRIBE_PREFIX,
@@ -136,14 +137,20 @@ export async function handleBrevoWebhook(
   // Extract our send-id from the Brevo tag ("send:<id>") we attach at send-time.
   // Brevo surfaces the first tag in `payload.tag`. Other tags (e.g. "tpl:...")
   // are ignored here.
-  const correlation: { sendId?: number | null; messageId?: string | null } = {
+  const correlation: { sendId?: number | null; providerMessageId?: string | null; localMessageId?: string | null } = {
     sendId: null,
-    messageId: payload['message-id'] ?? null,
+    providerMessageId: payload['message-id'] ?? null,
+    localMessageId: null,
   };
   if (typeof payload.tag === 'string' && payload.tag.startsWith('send:')) {
     const n = Number.parseInt(payload.tag.slice(5), 10);
     if (Number.isFinite(n) && n > 0) correlation.sendId = n;
+  } else if (typeof payload.tag === 'string' && payload.tag.startsWith('msg:')) {
+    const localMessageId = payload.tag.slice(4).trim();
+    if (localMessageId.length > 0) correlation.localMessageId = localMessageId;
   }
+
+  const resolvedLineage = await resolveEmailSendLineage(env, emailLower, correlation);
 
   try {
     switch (event) {
@@ -167,7 +174,7 @@ export async function handleBrevoWebhook(
       case 'delivered':
       case 'opened':
       case 'click':
-        await trackPositiveEvent(env, emailLower, event, ts, correlation);
+        await trackPositiveEvent(env, emailLower, event, ts, correlation, resolvedLineage);
         break;
 
       case 'blocked':
@@ -199,7 +206,7 @@ export async function handleBrevoWebhook(
     });
 
     // Emit reverse tracking event to analytics (non-blocking)
-    emitTrackingEvent(env, event, emailLower, payload).catch(() => {
+    emitTrackingEvent(env, event, emailLower, payload, correlation, resolvedLineage).catch(() => {
       /* best-effort — analytics binding may be unavailable */
     });
 
@@ -254,6 +261,15 @@ async function handlePermanentBounce(
     `UPDATE email_sends SET status = ? WHERE contact_email = ? AND status = ?`,
     [EMAIL_STATUS.CANCELLED, email, EMAIL_STATUS.SCHEDULED]
   );
+
+  await execute(
+    env.DB,
+    `UPDATE marketing_contacts
+        SET email_bounce_type = 'permanent',
+            updated_at = ?
+      WHERE email = ?`,
+    [now(), email],
+  );
 }
 
 /**
@@ -266,16 +282,25 @@ async function handleSoftBounce(
 ): Promise<void> {
   console.log(`[Webhook:Brevo] soft_bounce: ${email} — ${reason ?? 'no reason'}`);
 
+  await execute(
+    env.DB,
+    `UPDATE marketing_contacts
+        SET email_bounce_type = 'transient',
+            updated_at = ?
+      WHERE email = ?`,
+    [now(), email],
+  );
+
   const key = `${KV_PREFIX.OUTBOUND_BOUNCE}soft:${email}`;
   const existing = await env.KV_MARKETING.get(key);
   const bounces: number[] = existing ? JSON.parse(existing) : [];
 
-  const now = Math.floor(Date.now() / 1000);
-  const windowStart = now - COMPLIANCE.SOFT_BOUNCE_WINDOW;
+  const currentTs = Math.floor(Date.now() / 1000);
+  const windowStart = currentTs - COMPLIANCE.SOFT_BOUNCE_WINDOW;
 
   // Keep only bounces within the compliance window
   const recent = bounces.filter((ts: number) => ts > windowStart);
-  recent.push(now);
+  recent.push(currentTs);
 
   if (recent.length >= COMPLIANCE.SOFT_BOUNCE_THRESHOLD) {
     // Auto-suppress after threshold soft bounces in window
@@ -310,6 +335,15 @@ async function handleComplaint(env: Env, email: string): Promise<void> {
     [EMAIL_STATUS.CANCELLED, email, EMAIL_STATUS.SCHEDULED]
   );
 
+  await execute(
+    env.DB,
+    `UPDATE marketing_contacts
+        SET email_bounce_type = 'permanent',
+            updated_at = ?
+      WHERE email = ?`,
+    [now(), email],
+  );
+
   // Store complaint for threshold checking
   await env.KV_MARKETING.put(`${KV_PREFIX.OUTBOUND_BOUNCE}complaint:${email}`, JSON.stringify({
     ts: Math.floor(Date.now() / 1000),
@@ -336,6 +370,72 @@ async function handleProviderUnsubscribe(env: Env, email: string): Promise<void>
   );
 }
 
+interface ResolvedEmailLineage {
+  id: number;
+  sequence_id: number;
+  trigger_event: string | null;
+  template_key: string;
+  subject_variant_idx: number | null;
+  body_variant_idx: number | null;
+  framing_tier: string | null;
+  sent_at: number | null;
+  message_id: string | null;
+  brevo_message_id: string | null;
+}
+
+async function resolveEmailSendLineage(
+  env: Env,
+  email: string,
+  correlation?: { sendId?: number | null; providerMessageId?: string | null; localMessageId?: string | null },
+): Promise<ResolvedEmailLineage | null> {
+  const baseSql =
+    `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key,
+            es.subject_variant_idx, es.body_variant_idx, es.framing_tier,
+            es.sent_at, es.message_id, es.brevo_message_id
+       FROM email_sends es
+       JOIN email_steps est ON est.id = es.step_id
+       JOIN email_sequences seq ON seq.id = es.sequence_id`;
+
+  if (correlation?.sendId) {
+    const bySendId = await queryOne<ResolvedEmailLineage>(
+      env.DB,
+      `${baseSql} WHERE es.id = ? AND es.contact_email = ? LIMIT 1`,
+      [correlation.sendId, email],
+    );
+    if (bySendId) return bySendId;
+  }
+
+  if (correlation?.localMessageId) {
+    const byLocalMessage = await queryOne<ResolvedEmailLineage>(
+      env.DB,
+      `${baseSql} WHERE es.message_id = ? LIMIT 1`,
+      [correlation.localMessageId],
+    );
+    if (byLocalMessage) return byLocalMessage;
+  }
+
+  if (correlation?.providerMessageId) {
+    const byProviderMessage = await queryOne<ResolvedEmailLineage>(
+      env.DB,
+      `${baseSql} WHERE es.brevo_message_id = ? LIMIT 1`,
+      [correlation.providerMessageId],
+    );
+    if (byProviderMessage) return byProviderMessage;
+  }
+
+  const mostRecent = await queryOne<ResolvedEmailLineage>(
+    env.DB,
+    `${baseSql}
+      WHERE es.contact_email = ?
+        AND es.status = 'sent'
+      ORDER BY es.sent_at DESC
+      LIMIT 1`,
+    [email],
+  );
+
+  return mostRecent ?? null;
+}
+
 /**
  * Track positive deliverability signals (delivered, opened, click).
  * For opens/clicks, also:
@@ -354,7 +454,8 @@ async function trackPositiveEvent(
   email: string,
   event: string,
   ts: number,
-  correlation?: { sendId?: number | null; messageId?: string | null },
+  correlation?: { sendId?: number | null; providerMessageId?: string | null; localMessageId?: string | null },
+  preResolvedLineage?: ResolvedEmailLineage | null,
 ): Promise<void> {
   // Store last engagement for the contact (useful for re-engagement logic)
   const key = `${KV_PREFIX.OUTBOUND_ENGAGEMENT}${email}`;
@@ -372,80 +473,7 @@ async function trackPositiveEvent(
     return;
   }
 
-  // ── Resolve the matching email_sends row ──────────────────────────────────
-  let send: {
-    id: number;
-    sequence_id: number;
-    trigger_event: string | null;
-    template_key: string;
-    subject_variant_idx: number | null;
-    body_variant_idx: number | null;
-    framing_tier: string | null;
-  } | undefined;
-
-  if (correlation?.sendId) {
-    const row = await queryOne<{
-      id: number;
-      sequence_id: number;
-      trigger_event: string | null;
-      template_key: string;
-      subject_variant_idx: number | null;
-      body_variant_idx: number | null;
-      framing_tier: string | null;
-    }>(
-      env.DB,
-      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
-         FROM email_sends es
-         JOIN email_steps est ON est.id = es.step_id
-         JOIN email_sequences seq ON seq.id = es.sequence_id
-        WHERE es.id = ? AND es.contact_email = ? LIMIT 1`,
-      [correlation.sendId, email],
-    );
-    if (row) send = row;
-  }
-
-  if (!send && correlation?.messageId) {
-    const row = await queryOne<{
-      id: number;
-      sequence_id: number;
-      trigger_event: string | null;
-      template_key: string;
-      subject_variant_idx: number | null;
-      body_variant_idx: number | null;
-      framing_tier: string | null;
-    }>(
-      env.DB,
-      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
-         FROM email_sends es
-         JOIN email_steps est ON est.id = es.step_id
-         JOIN email_sequences seq ON seq.id = es.sequence_id
-        WHERE es.brevo_message_id = ? LIMIT 1`,
-      [correlation.messageId],
-    );
-    if (row) send = row;
-  }
-
-  if (!send) {
-    const rows = await query<{
-      id: number;
-      sequence_id: number;
-      trigger_event: string | null;
-      template_key: string;
-      subject_variant_idx: number | null;
-      body_variant_idx: number | null;
-      framing_tier: string | null;
-    }>(
-      env.DB,
-      `SELECT es.id, es.sequence_id, seq.trigger_event, est.template_key, es.subject_variant_idx, es.body_variant_idx, es.framing_tier
-         FROM email_sends es
-         JOIN email_steps est ON est.id = es.step_id
-         JOIN email_sequences seq ON seq.id = es.sequence_id
-        WHERE es.contact_email = ? AND es.status = 'sent'
-        ORDER BY es.sent_at DESC LIMIT 1`,
-      [email],
-    );
-    if (rows[0]) send = rows[0];
-  }
+  const send = preResolvedLineage ?? await resolveEmailSendLineage(env, email, correlation);
 
   if (!send) {
     return; // No row to credit — likely an old contact from before persistence was wired.
@@ -462,6 +490,20 @@ async function trackPositiveEvent(
           WHERE id = ?`,
         [ts, send.id],
       );
+
+      await execute(
+        env.DB,
+        `UPDATE marketing_contacts
+            SET email_opened_at = COALESCE(email_opened_at, ?),
+                last_engaged_at = CASE
+                  WHEN last_engaged_at IS NULL THEN ?
+                  ELSE MAX(last_engaged_at, ?)
+                END,
+                status = CASE WHEN status = 'prospect' THEN 'engaged' ELSE status END,
+                updated_at = ?
+          WHERE email = ?`,
+        [ts, ts, ts, now(), email],
+      );
     } else {
       await execute(
         env.DB,
@@ -471,6 +513,20 @@ async function trackPositiveEvent(
                 opened_at = COALESCE(opened_at, ?)
           WHERE id = ?`,
         [ts, ts, send.id],
+      );
+
+      await execute(
+        env.DB,
+        `UPDATE marketing_contacts
+            SET email_opened_at = COALESCE(email_opened_at, ?),
+                last_engaged_at = CASE
+                  WHEN last_engaged_at IS NULL THEN ?
+                  ELSE MAX(last_engaged_at, ?)
+                END,
+                status = CASE WHEN status = 'prospect' THEN 'engaged' ELSE status END,
+                updated_at = ?
+          WHERE email = ?`,
+        [ts, ts, ts, now(), email],
       );
     }
   } catch (err) {
@@ -488,7 +544,7 @@ async function trackPositiveEvent(
         signalType: GROWTH_SIGNAL_TYPE.COLD_CLICKED_NO_REPLY,
         severity: GROWTH_SIGNAL_SEVERITY.HIGH,
         confidence: 84,
-        sourceEventId: correlation?.messageId ?? `email_send_${send.id}`,
+        sourceEventId: correlation?.providerMessageId ?? correlation?.localMessageId ?? send.message_id ?? `email_send_${send.id}`,
         evidence: { provider: 'brevo', sendId: send.id, sequenceId: send.sequence_id, templateKey: send.template_key },
       }).catch(() => { /* Non-critical growth signal projection. */ });
     }
@@ -713,6 +769,21 @@ const BREVO_TO_OUTBOUND: Record<string, string> = {
   click: EVENT_TYPES.OUTBOUND_EMAIL_CLICKED,
 };
 
+async function resolveTelemetryTenantId(env: Env, email: string): Promise<string> {
+  const identity = await queryOne<{ tenant_id: string }>(
+    env.DB,
+    `SELECT tenant_id
+       FROM contact_channel_identities
+      WHERE external_contact_id = ?
+        AND channel = 'email'
+      ORDER BY updated_at DESC
+      LIMIT 1`,
+    [email],
+  );
+
+  return identity?.tenant_id ?? 'default';
+}
+
 /**
  * Emit a reverse tracking event to the analytics worker via service binding.
  * Best-effort — failures are logged but never block the webhook response.
@@ -721,32 +792,91 @@ async function emitTrackingEvent(
   env: Env,
   brevoEvent: string,
   email: string,
-  payload: BrevoWebhookPayload
+  payload: BrevoWebhookPayload,
+  correlation?: { sendId?: number | null; providerMessageId?: string | null; localMessageId?: string | null },
+  resolvedLineage?: ResolvedEmailLineage | null,
 ): Promise<void> {
   const eventType = BREVO_TO_OUTBOUND[brevoEvent];
-  if (!eventType || !env.ANALYTICS) return;
+  if (!eventType) return;
 
-  try {
-    await env.ANALYTICS.fetch('https://analytics/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        type: eventType,
-        source: 'visibility-marketing',
-        data: {
-          email,
-          brevoEvent,
-          reason: payload.reason ?? null,
-          messageId: payload['message-id'] ?? null,
-          tag: payload.tag ?? null,
-          link: payload.link ?? null,
-          ts: payload.ts_event ?? Math.floor(Date.now() / 1000),
-        },
-      }),
-    });
-  } catch (err) {
-    console.warn(`[Webhook:Brevo] Failed to emit tracking event ${eventType}:`, err);
-  }
+  const receiptTs = payload.ts_event ?? Math.floor(Date.now() / 1000);
+  const sendTs = resolvedLineage?.sent_at ?? null;
+  const localMessageId = resolvedLineage?.message_id
+    ?? correlation?.localMessageId
+    ?? correlation?.providerMessageId
+    ?? `brevo:${email}:${receiptTs}`;
+  const tenantId = await resolveTelemetryTenantId(env, email);
+  const activeCampaignSlug = await getActiveCampaignSlug(env);
+  const bounceType = brevoEvent === 'soft_bounce'
+    ? 'transient'
+    : brevoEvent === 'hard_bounce' || brevoEvent === 'invalid_email'
+      ? 'permanent'
+      : null;
+
+  await emitTelemetryEvent(env, {
+    type: eventType,
+    tenantId,
+    messageId: localMessageId,
+    correlationId: localMessageId,
+    channel: 'email',
+    timestamp: receiptTs,
+    sendTimestamp: sendTs,
+    receiptTimestamp: receiptTs,
+    prospectEmail: email,
+    providerMessageId: correlation?.providerMessageId ?? resolvedLineage?.brevo_message_id ?? null,
+    campaignId: activeCampaignSlug,
+    stepId: resolvedLineage?.template_key ?? null,
+    contactId: email,
+    metadata: {
+      brevoEvent,
+      reason: payload.reason ?? null,
+      link: payload.link ?? null,
+      tag: payload.tag ?? null,
+      sendId: correlation?.sendId ?? null,
+      bounceType,
+    },
+  });
+
+  const lineageStatus =
+    brevoEvent === 'opened' ? 'message.opened'
+      : brevoEvent === 'click' ? 'message.clicked'
+        : brevoEvent === 'delivered' ? 'message.delivered'
+          : brevoEvent === 'reply' ? 'message.replied'
+            : brevoEvent === 'spam' ? 'message.complained'
+              : brevoEvent === 'unsubscribed' ? 'message.unsubscribed'
+                : brevoEvent === 'hard_bounce' || brevoEvent === 'soft_bounce' || brevoEvent === 'invalid_email'
+                  ? 'message.bounced'
+                  : null;
+
+  if (!lineageStatus) return;
+
+  const epoch = now();
+  await execute(
+    env.DB,
+    `INSERT INTO channel_message_lineage
+      (tenant_id, campaign_id, journey_id, step_id, contact_id, channel, message_id, skrip_outbound_id, provider_ref, idempotency_key, latest_status, first_sent_at, last_outcome_at, created_at, updated_at)
+     VALUES (?, ?, NULL, ?, ?, 'email', ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(message_id) DO UPDATE SET
+       provider_ref = COALESCE(excluded.provider_ref, channel_message_lineage.provider_ref),
+       latest_status = excluded.latest_status,
+       first_sent_at = COALESCE(channel_message_lineage.first_sent_at, excluded.first_sent_at),
+       last_outcome_at = excluded.last_outcome_at,
+       updated_at = excluded.updated_at`,
+    [
+      tenantId,
+      activeCampaignSlug ?? 'cold-outreach-v1',
+      resolvedLineage?.template_key ?? 'brevo-webhook',
+      email,
+      localMessageId,
+      correlation?.providerMessageId ?? resolvedLineage?.brevo_message_id ?? null,
+      `email-webhook:${localMessageId}`,
+      lineageStatus,
+      sendTs,
+      receiptTs,
+      epoch,
+      epoch,
+    ],
+  );
 }
 
 // ─── Channel Attempt Sync ───────────────────────────────────────────────────
@@ -814,10 +944,18 @@ export async function handleBrevoInbound(
     );
 
     // 2. Update marketing contact status to indicate engagement
+    const engagedTs = Math.floor(Date.now() / 1000);
     await execute(
       env.DB,
-      `UPDATE marketing_contacts SET status = 'engaged', updated_at = ? WHERE email = ?`,
-      [Math.floor(Date.now() / 1000), fromEmail]
+      `UPDATE marketing_contacts
+          SET status = 'engaged',
+              last_engaged_at = CASE
+                WHEN last_engaged_at IS NULL THEN ?
+                ELSE MAX(last_engaged_at, ?)
+              END,
+              updated_at = ?
+        WHERE email = ?`,
+      [engagedTs, engagedTs, engagedTs, fromEmail]
     );
 
     // 3. Store reply metadata in KV for admin visibility
@@ -885,24 +1023,31 @@ export async function handleBrevoInbound(
       }
     } catch { /* Non-critical — A/B tracking failure shouldn't block reply processing */ }
 
-    // 4. Emit reply event to analytics
-    if (env.ANALYTICS) {
-      try {
-        await env.ANALYTICS.fetch('https://analytics/api/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            type: EVENT_TYPES.OUTBOUND_EMAIL_REPLIED,
-            source: 'visibility-marketing',
-            data: {
-              email: fromEmail,
-              subject: payload.Subject ?? null,
-              ts: Math.floor(Date.now() / 1000),
-            },
-          }),
-        });
-      } catch { /* best-effort */ }
-    }
+    // 4. Emit reply event to analytics with send/receipt lineage.
+    const replyTs = Math.floor(Date.now() / 1000);
+    const replyLineage = await resolveEmailSendLineage(env, fromEmail);
+    const tenantId = await resolveTelemetryTenantId(env, fromEmail);
+    const messageId = replyLineage?.message_id ?? `reply:${fromEmail}:${replyTs}`;
+
+    await emitTelemetryEvent(env, {
+      type: EVENT_TYPES.OUTBOUND_EMAIL_REPLIED,
+      tenantId,
+      messageId,
+      correlationId: messageId,
+      channel: 'email',
+      timestamp: replyTs,
+      sendTimestamp: replyLineage?.sent_at ?? null,
+      receiptTimestamp: replyTs,
+      prospectEmail: fromEmail,
+      providerMessageId: replyLineage?.brevo_message_id ?? null,
+      campaignId: await getActiveCampaignSlug(env),
+      stepId: replyLineage?.template_key ?? null,
+      contactId: fromEmail,
+      metadata: {
+        subject: payload.Subject ?? null,
+        source: 'brevo-inbound',
+      },
+    });
 
     // 5. Update deliverability counters
     await incrementDeliverabilityCounter(env, 'reply' as BrevoEventType);

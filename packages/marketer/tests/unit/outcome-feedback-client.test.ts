@@ -1,9 +1,29 @@
 import { describe, expect, it, vi } from 'vitest';
 import { KV_PREFIX } from '../../src/constants';
-import { sendOutcomeFeedback } from '../../src/lib/growth/feedbackClient';
+import { OUTCOME_DELTA_MAP, sendOutcomeFeedback } from '../../src/lib/growth/feedbackClient';
 import { createMockEnv } from '../helpers';
 
 describe('outcome feedback client', () => {
+  it('uses the canonical Matrikz outcome vocabulary through the local adapter', () => {
+    expect(Object.keys(OUTCOME_DELTA_MAP).sort()).toEqual([
+      'accepted',
+      'bounced',
+      'clicked',
+      'converted',
+      'delivered',
+      'dismissed',
+      'dlq_dropped',
+      'no_action_recorded',
+      'no_response',
+      'opened',
+      'overridden',
+      'recommended',
+      'replied',
+      'sent',
+      'unsubscribed',
+    ]);
+  });
+
   it('sends required headers including UUIDv4 idempotency key', async () => {
     let capturedHeaders: Headers = new Headers();
     const fetcher = {

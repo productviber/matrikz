@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   handleOutboundSLO,
+  handleOutboundSLIView,
   handleCrossSystemHealth,
   handleReputationTrend,
   handleOutboundFunnel,
@@ -132,6 +133,33 @@ describe('handleOutboundSLO()', () => {
     // 50% enrichment < 70% target → not met
     expect(data.slis.enrichment_rate.value).toBeCloseTo(0.5, 2);
     expect(data.slis.enrichment_rate.met).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// handleOutboundSLIView()
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('handleOutboundSLIView()', () => {
+  let env: MockEnv;
+
+  beforeEach(() => {
+    env = createMockEnv();
+  });
+
+  it('returns HTML dashboard content with outbound telemetry markers', async () => {
+    const req = makeRequest('GET', '/api/admin/outbound/sli', undefined, {
+      Authorization: `Bearer ${env.ADMIN_TOKEN}`,
+    });
+    const res = await handleOutboundSLIView(req, env as any);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/html');
+
+    const html = await res.text();
+    expect(html).toContain('Outbound Reliability SLI');
+    expect(html).toContain('Per-Channel Breakdown (24h)');
+    expect(html).toContain('/api/marketing/health');
   });
 });
 

@@ -43,6 +43,8 @@
  *   GET  /api/admin/share-owners        — Admin: list share owner stats
  *   GET  /api/admin/pql-leads           — Admin: list PQL-qualified leads
  *   GET  /api/admin/outbound/health     — Admin: outbound delivery health
+ *   GET  /api/admin/outbound/sli        — Admin: dedicated outbound SLI dashboard view
+ *   GET  /api/marketing/health          — Admin: telemetry-centric marketing health snapshot
  *   GET  /api/admin/campaigns/outbound  — Admin: list outbound campaigns
  *   POST /api/admin/campaigns/outbound  — Admin: create outbound campaign
  *   GET  /api/admin/campaigns/outbound/:id         — Admin: get campaign
@@ -128,6 +130,7 @@ import {
   handleListShareOwners,
   handleListPQLLeads,
   handleOutboundHealth,
+  handleOutboundSLIView,
   handleListOutboundCampaigns,
   handleGetOutboundCampaign,
   handleCreateOutboundCampaign,
@@ -211,6 +214,7 @@ import { checkRateLimit } from './lib/rate-limit';
 import { validateConfig } from './lib/config';
 import { toErrorResponse } from './lib/errors';
 import { logEvent } from './lib/observability';
+import { evaluateOutboundTelemetryAlerts, flushTelemetryFallbackQueue } from './lib/telemetry';
 import { correlationIdFromRequest, setCorrelationId, clearCorrelationId } from './lib/correlation';
 import { captureReputationSnapshot } from './lib/reputation';
 import { dispatchOutboxBatch } from './lib/skrip/dispatcher';
@@ -480,6 +484,12 @@ export default {
 
       // ── Outbound Admin Routes ──
       if (method === 'GET' && path === '/api/admin/outbound/health') {
+        return handleOutboundHealth(request, env);
+      }
+      if (method === 'GET' && path === '/api/admin/outbound/sli') {
+        return handleOutboundSLIView(request, env);
+      }
+      if (method === 'GET' && path === '/api/marketing/health') {
         return handleOutboundHealth(request, env);
       }
       if (method === 'GET' && path === '/api/admin/outbound/funnel') {
@@ -756,6 +766,30 @@ export default {
         return logEvent(env, 'cron.processDueEmails.failed', {
           error: err instanceof Error ? err.message : String(err),
         }, 'error');
+      })
+    );
+
+    // Replay telemetry events that were queued while analytics binding was unavailable.
+    ctx.waitUntil(
+      flushTelemetryFallbackQueue(env, PAGINATION.CRON_BATCH_SIZE).then((result) => {
+        if (result.scanned > 0 || result.failed > 0) {
+          console.log(
+            `[Cron] Telemetry replay: scanned=${result.scanned} replayed=${result.replayed} failed=${result.failed}`,
+          );
+        }
+      }).catch((err) => {
+        console.warn('[Cron] Telemetry replay error:', err instanceof Error ? err.message : err);
+      })
+    );
+
+    // Evaluate outbound telemetry SLIs and emit de-duplicated alerts for breaches.
+    ctx.waitUntil(
+      evaluateOutboundTelemetryAlerts(env).then((result) => {
+        if (result.emitted.length > 0) {
+          console.warn(`[Cron] Telemetry SLI alerts emitted: ${result.emitted.join(', ')}`);
+        }
+      }).catch((err) => {
+        console.warn('[Cron] Telemetry alert evaluation error:', err instanceof Error ? err.message : err);
       })
     );
 

@@ -3,6 +3,7 @@ import { ok, badRequest, unauthorized, notFound, serverError, created } from '..
 import { query, queryOne, execute, now } from '../../lib/db';
 import { checkThrottle, getSentToday, todayDateKey, WARMUP_PRESETS, isValidSchedule, resolveWarmupProfile } from '../../lib/warmup';
 import { getProspectChannels, getChannelStats, recordChannelAttempt } from '../../lib/channel-orchestrator';
+import { getOutboundTelemetryHealth } from '../../lib/telemetry';
 import { KV_PREFIX } from '../../constants';
 import { parsePositiveIntParam, safeJsonParse } from './admin-lib';
 import { getCorrelationId } from '../../lib/correlation';
@@ -14,6 +15,8 @@ interface CampaignRow {
   slug: string;
   sequence_id: number | null;
   source_filter: string | null;
+  channels_json?: string | null;
+  fallback_chain_json?: string | null;
   status: string;
   daily_limit: number;
   warmup_day: number;
@@ -31,6 +34,54 @@ interface CampaignRow {
 }
 
 const VALID_CAMPAIGN_STATUSES = ['draft', 'active', 'paused', 'completed'] as const;
+const VALID_CAMPAIGN_CHANNELS = ['email', 'push', 'whatsapp', 'sms', 'telegram', 'contact_form'] as const;
+
+function escapeHtml(value: unknown): string {
+  const text = String(value ?? '');
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function fmtPct(value: number): string {
+  return `${value.toFixed(1)}%`;
+}
+
+function fmtInt(value: number): string {
+  return Number.isFinite(value) ? Math.round(value).toLocaleString('en-US') : '0';
+}
+
+function normalizeChannelArray(input: unknown, fieldName: string): string[] | null {
+  if (input == null) return null;
+  if (!Array.isArray(input)) {
+    throw new Error(`${fieldName} must be an array of channel names`);
+  }
+
+  const normalized = Array.from(
+    new Set(
+      input
+        .filter((value): value is string => typeof value === 'string')
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => value.length > 0),
+    ),
+  );
+
+  if (normalized.length === 0) {
+    throw new Error(`${fieldName} must contain at least one channel`);
+  }
+
+  const invalid = normalized.filter(
+    (channel) => !(VALID_CAMPAIGN_CHANNELS as readonly string[]).includes(channel),
+  );
+  if (invalid.length > 0) {
+    throw new Error(`${fieldName} contains unsupported channels: ${invalid.join(', ')}`);
+  }
+
+  return normalized;
+}
 
 export async function handleOutboundHealth(
   request: Request,
@@ -94,6 +145,7 @@ export async function handleOutboundHealth(
     }
     const totalSent = (sendCounts['sent'] ?? 0) + (sendCounts['failed'] ?? 0);
     const bounceRate = totalSent > 0 ? ((sendCounts['failed'] ?? 0) / totalSent * 100).toFixed(1) : '0.0';
+    const telemetry = await getOutboundTelemetryHealth(env);
 
     return ok({
       prospects: {
@@ -111,10 +163,160 @@ export async function handleOutboundHealth(
         bounceRate: `${bounceRate}%`,
         recentSends,
       },
+      telemetry,
     });
   } catch (err) {
     console.error('[Admin] handleOutboundHealth error:', err);
     return serverError('Failed to load outbound health');
+  }
+}
+
+export async function handleOutboundSLIView(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  try {
+    const [telemetry, prospectCount, campaignCount, pendingSends] = await Promise.all([
+      getOutboundTelemetryHealth(env),
+      queryOne<{ count: number }>(
+        env.DB,
+        `SELECT COUNT(*) as count FROM marketing_contacts WHERE source = 'outbound'`,
+      ),
+      queryOne<{ count: number }>(
+        env.DB,
+        `SELECT COUNT(*) as count FROM outbound_campaigns WHERE status IN ('active', 'paused')`,
+      ),
+      queryOne<{ count: number }>(
+        env.DB,
+        `SELECT COUNT(*) as count FROM email_sends WHERE status = 'scheduled'`,
+      ),
+    ]);
+
+    const generatedAtIso = new Date(telemetry.generatedAt * 1000).toISOString();
+    const healthLabel = telemetry.breaches.length === 0 ? 'HEALTHY' : 'DEGRADED';
+    const healthClass = telemetry.breaches.length === 0 ? 'ok' : 'warn';
+
+    const channelRows = telemetry.channels.length > 0
+      ? telemetry.channels.map((channel) => `
+          <tr>
+            <td>${escapeHtml(channel.channel)}</td>
+            <td>${fmtInt(channel.sent)}</td>
+            <td>${fmtInt(channel.receipts)}</td>
+            <td>${fmtPct(channel.sendSuccessRate)}</td>
+            <td>${fmtPct(channel.webhookReceiptRate)}</td>
+            <td>${fmtInt(channel.avgLatencyMs)} ms</td>
+          </tr>
+        `).join('')
+      : '<tr><td colspan="6">No channel telemetry samples available yet.</td></tr>';
+
+    const breachItems = telemetry.breaches.length > 0
+      ? telemetry.breaches.map((breach) => `<li>${escapeHtml(breach)}</li>`).join('')
+      : '<li>No active SLI breaches.</li>';
+
+    const html = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Outbound SLI Dashboard</title>
+    <style>
+      :root {
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #12263a;
+        --muted: #64748b;
+        --border: #e2e8f0;
+        --ok: #0f766e;
+        --warn: #b45309;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; font-family: Segoe UI, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); }
+      .wrap { max-width: 1200px; margin: 0 auto; padding: 24px; }
+      .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+      h1 { margin: 0 0 6px 0; font-size: 28px; }
+      .sub { margin: 0; color: var(--muted); }
+      .pill { border-radius: 999px; padding: 6px 12px; font-weight: 600; display: inline-block; }
+      .pill.ok { background: #ccfbf1; color: var(--ok); }
+      .pill.warn { background: #ffedd5; color: var(--warn); }
+      .grid { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+      .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px; }
+      .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+      .value { font-size: 24px; font-weight: 700; }
+      .split { margin-top: 18px; display: grid; grid-template-columns: 2fr 1fr; gap: 14px; }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { padding: 10px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+      th { color: var(--muted); font-weight: 600; }
+      ul { margin: 0; padding-left: 18px; }
+      .meta { margin-top: 12px; color: var(--muted); font-size: 13px; }
+      .links { margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap; }
+      a { color: #1d4ed8; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      @media (max-width: 900px) {
+        .split { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="top">
+        <div>
+          <h1>Outbound Reliability SLI</h1>
+          <p class="sub">Dedicated visibility-marketing view for outreach telemetry health.</p>
+        </div>
+        <span class="pill ${healthClass}">${healthLabel}</span>
+      </div>
+
+      <div class="grid">
+        <div class="card"><div class="label">Send Success</div><div class="value">${fmtPct(telemetry.sendSuccessRate)}</div></div>
+        <div class="card"><div class="label">Webhook Receipt</div><div class="value">${fmtPct(telemetry.webhookReceiptRate)}</div></div>
+        <div class="card"><div class="label">Avg Latency</div><div class="value">${fmtInt(telemetry.avgLatencyMs)} ms</div></div>
+        <div class="card"><div class="label">Binding Errors (24h)</div><div class="value">${fmtInt(telemetry.errorCount24h)}</div></div>
+        <div class="card"><div class="label">Prospects</div><div class="value">${fmtInt(prospectCount?.count ?? 0)}</div></div>
+        <div class="card"><div class="label">Active Campaigns</div><div class="value">${fmtInt(campaignCount?.count ?? 0)}</div></div>
+        <div class="card"><div class="label">Pending Sends</div><div class="value">${fmtInt(pendingSends?.count ?? 0)}</div></div>
+        <div class="card"><div class="label">Fallback Queue</div><div class="value">${fmtInt(telemetry.fallbackQueue.pending)}</div></div>
+      </div>
+
+      <div class="split">
+        <div class="card">
+          <div class="label">Per-Channel Breakdown (24h)</div>
+          <table>
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Sent</th>
+                <th>Receipts</th>
+                <th>Success Rate</th>
+                <th>Receipt Rate</th>
+                <th>Avg Latency</th>
+              </tr>
+            </thead>
+            <tbody>${channelRows}</tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="label">Active Breaches</div>
+          <ul>${breachItems}</ul>
+          <div class="meta">Fallback retryable: ${fmtInt(telemetry.fallbackQueue.retryable)} | dead-letter: ${fmtInt(telemetry.fallbackQueue.deadLetter)}</div>
+          <div class="links">
+            <a href="/api/marketing/health" target="_blank" rel="noreferrer">Open JSON health</a>
+            <a href="/api/admin/outbound/slo" target="_blank" rel="noreferrer">Open SLO report</a>
+            <a href="/api/admin/outbound/health" target="_blank" rel="noreferrer">Open admin health</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="meta">Generated at ${escapeHtml(generatedAtIso)} | window ${fmtInt(telemetry.windowHours)}h</div>
+    </div>
+  </body>
+</html>`;
+
+    return new Response(html, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    });
+  } catch (err) {
+    console.error('[Admin] handleOutboundSLIView error:', err);
+    return serverError('Failed to render outbound SLI dashboard');
   }
 }
 
@@ -223,7 +425,9 @@ export async function handleListOutboundCampaigns(
     return ok({
       campaigns: campaigns.map((c) => ({
         ...c,
-        sourceFilter: c.source_filter ? JSON.parse(c.source_filter) : null,
+        sourceFilter: c.source_filter ? safeJsonParse(c.source_filter, null) : null,
+        channels: c.channels_json ? safeJsonParse(c.channels_json, null) : null,
+        fallbackChain: c.fallback_chain_json ? safeJsonParse(c.fallback_chain_json, null) : null,
       })),
       throttle: {
         sentToday,
@@ -268,7 +472,9 @@ export async function handleGetOutboundCampaign(
     return ok({
       campaign: {
         ...campaign,
-        sourceFilter: campaign.source_filter ? JSON.parse(campaign.source_filter) : null,
+        sourceFilter: campaign.source_filter ? safeJsonParse(campaign.source_filter, null) : null,
+        channels: campaign.channels_json ? safeJsonParse(campaign.channels_json, null) : null,
+        fallbackChain: campaign.fallback_chain_json ? safeJsonParse(campaign.fallback_chain_json, null) : null,
       },
       throttle,
       sendsByStatus: sendStats.reduce(
@@ -292,6 +498,8 @@ export async function handleCreateOutboundCampaign(
       slug?: string;
       sequence_id?: number;
       source_filter?: { sources?: string[]; min_score?: number };
+      channels?: string[];
+      fallback_chain?: string[];
       daily_limit?: number;
       warmup_profile?: string;
       warmup_schedule?: Array<{ day: number; dailyLimit: number }>;
@@ -323,6 +531,26 @@ export async function handleCreateOutboundCampaign(
       ? JSON.stringify(body.source_filter)
       : null;
 
+    let channels: string[] | null;
+    let fallbackChain: string[] | null;
+    try {
+      channels = normalizeChannelArray(body.channels, 'channels');
+      fallbackChain = normalizeChannelArray(body.fallback_chain, 'fallback_chain');
+    } catch (validationErr) {
+      return badRequest(validationErr instanceof Error ? validationErr.message : 'Invalid channel configuration');
+    }
+
+    if (fallbackChain && channels && fallbackChain.some((channel) => !channels.includes(channel))) {
+      return badRequest('fallback_chain must be a subset of channels');
+    }
+
+    if (!fallbackChain && channels) {
+      fallbackChain = [...channels];
+    }
+
+    const channelsJson = channels ? JSON.stringify(channels) : null;
+    const fallbackChainJson = fallbackChain ? JSON.stringify(fallbackChain) : null;
+
     let warmupScheduleJson: string | null = null;
     if (body.warmup_schedule) {
       if (!isValidSchedule(body.warmup_schedule)) {
@@ -337,12 +565,37 @@ export async function handleCreateOutboundCampaign(
       warmupScheduleJson = JSON.stringify(resolveWarmupProfile(body.warmup_profile));
     }
 
-    await execute(
-      env.DB,
-      `INSERT INTO outbound_campaigns (name, slug, sequence_id, source_filter, daily_limit, warmup_schedule)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [body.name, body.slug, body.sequence_id ?? null, sourceFilter, dailyLimit, warmupScheduleJson]
-    );
+    try {
+      await execute(
+        env.DB,
+        `INSERT INTO outbound_campaigns
+          (name, slug, sequence_id, source_filter, daily_limit, warmup_schedule, channels_json, fallback_chain_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          body.name,
+          body.slug,
+          body.sequence_id ?? null,
+          sourceFilter,
+          dailyLimit,
+          warmupScheduleJson,
+          channelsJson,
+          fallbackChainJson,
+        ]
+      );
+    } catch (insertErr) {
+      const message = insertErr instanceof Error ? insertErr.message : String(insertErr);
+      if (!message.toLowerCase().includes('no such column')) {
+        throw insertErr;
+      }
+
+      // Backward-compatible path for environments where migration 0022 is not yet applied.
+      await execute(
+        env.DB,
+        `INSERT INTO outbound_campaigns (name, slug, sequence_id, source_filter, daily_limit, warmup_schedule)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [body.name, body.slug, body.sequence_id ?? null, sourceFilter, dailyLimit, warmupScheduleJson]
+      );
+    }
 
     const campaign = await queryOne<CampaignRow>(
       env.DB,

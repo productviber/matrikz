@@ -26,6 +26,7 @@ import type { Env, ContactForm, SocialHandles } from '../types';
 import { execute, query, queryOne } from './db';
 import { submitContactForm } from './contact-form';
 import { enqueueEligibleSkripChannels } from './skrip/outbox';
+import { emitChannelFallbackEvent } from './telemetry';
 
 // ── Channel Priority Map ────────────────────────────────────────────────
 
@@ -194,23 +195,50 @@ export async function executeSecondaryChannels(
   email: string,
   context: Record<string, unknown>,
   stepKey: string,
-  campaignSlug: string
+  campaignSlug: string,
+  options: {
+    tenantId?: string | null;
+    messageId?: string | null;
+    allowedSkripChannels?: string[] | null;
+    fallbackChain?: string[] | null;
+  } = {},
 ): Promise<string[]> {
   const usedChannels: string[] = [];
 
   try {
     const skripEnqueues = await enqueueEligibleSkripChannels(env, {
+      tenantId: options.tenantId ?? undefined,
       campaignId: campaignSlug,
       stepId: stepKey,
       contactId: email,
       domain,
       context,
+      allowedChannels: options.allowedSkripChannels ?? undefined,
+      fallbackChain: options.fallbackChain ?? undefined,
     });
 
     if (skripEnqueues.length > 0) {
       console.log(
         `[Orchestrator] Staged ${skripEnqueues.length} Skrip channel(s) for ${email}: ${skripEnqueues.map((entry) => `${entry.channel}:${entry.status}`).join(', ')}`,
       );
+
+      const activeFallbackChain = options.fallbackChain ?? [];
+      const resolvedTarget = activeFallbackChain.find((channel) => channel !== 'email' && skripEnqueues.some((entry) => entry.channel === channel))
+        ?? skripEnqueues[0].channel;
+
+      if (resolvedTarget) {
+        await emitChannelFallbackEvent(env, {
+          tenantId: options.tenantId ?? 'default',
+          messageId: options.messageId ?? `fallback:${email}:${Date.now()}`,
+          correlationId: options.messageId ?? undefined,
+          fromChannel: 'email',
+          toChannel: resolvedTarget,
+          reason: 'campaign_secondary_channel_stage',
+          campaignId: campaignSlug,
+          stepId: stepKey,
+          contactId: email,
+        });
+      }
     }
   } catch (err) {
     console.log(`[Orchestrator] Skrip staging error for ${email}: ${err instanceof Error ? err.message : err}`);

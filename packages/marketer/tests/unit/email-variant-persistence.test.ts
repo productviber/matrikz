@@ -83,19 +83,21 @@ describe('processDueEmails — P0 variant persistence', () => {
         );
         expect(persistQuery).toBeDefined();
         if (persistQuery) {
-            // params order: [now, rendered_subject, subjectVariantIdx, bodyVariantIdx, messageId, framingTier, id]
-            expect(persistQuery.params[4]).toBe('brevo-msg-abc-123');
-            // framing_tier is a string (resolved from score) or null for scoreless sends.
-            expect(
-                persistQuery.params[5] === null || typeof persistQuery.params[5] === 'string',
-            ).toBe(true);
-            expect(persistQuery.params[6]).toBe(42);
-            // rendered_subject should be a non-empty string (template will have had companyName replaced or left as-is).
+            // params order: [sentAt, localMessageId, renderedSubject, subjectVariantIdx, bodyVariantIdx, brevoMessageId, framingTier, id]
             expect(typeof persistQuery.params[1]).toBe('string');
             expect((persistQuery.params[1] as string).length).toBeGreaterThan(0);
+            expect(persistQuery.params[5]).toBe('brevo-msg-abc-123');
+            // framing_tier is a string (resolved from score) or null for scoreless sends.
+            expect(
+                persistQuery.params[6] === null || typeof persistQuery.params[6] === 'string',
+            ).toBe(true);
+            expect(persistQuery.params[7]).toBe(42);
+            // rendered_subject should be a non-empty string (template will have had companyName replaced or left as-is).
+            expect(typeof persistQuery.params[2]).toBe('string');
+            expect((persistQuery.params[2] as string).length).toBeGreaterThan(0);
             // variant indices are either numeric or null but must be present (not undefined).
-            expect(persistQuery.params[2] === null || typeof persistQuery.params[2] === 'number').toBe(true);
             expect(persistQuery.params[3] === null || typeof persistQuery.params[3] === 'number').toBe(true);
+            expect(persistQuery.params[4] === null || typeof persistQuery.params[4] === 'number').toBe(true);
         }
 
         // ── Assertion 2: KV ab:send correlator written ──

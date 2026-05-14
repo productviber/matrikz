@@ -30,6 +30,8 @@ describe('route lane resolver', () => {
     expect(resolveRouteLane('GET', '/api/campaigns/my-campaign')).toBe('admin');
     expect(resolveRouteLane('PUT', '/api/campaigns/my-campaign')).toBe('admin');
     expect(resolveRouteLane('GET', '/api/health')).toBe('admin');
+    expect(resolveRouteLane('GET', '/api/marketing/health')).toBe('admin');
+    expect(resolveRouteLane('GET', '/api/admin/outbound/sli')).toBe('admin');
     expect(resolveRouteLane('POST', '/api/affiliate/approve')).toBe('admin');
     expect(resolveRouteLane('GET', '/api/affiliate/applications')).toBe('admin');
   });

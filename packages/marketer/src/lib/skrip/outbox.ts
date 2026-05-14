@@ -19,6 +19,8 @@ export interface SkripOutboxEnqueueInput {
   domain?: string | null;
   context?: Record<string, unknown>;
   scheduleAt?: number;
+  allowedChannels?: string[];
+  fallbackChain?: string[];
   /** Originating agent action ID for lineage tracing (D3 linkage). */
   agentActionId?: string | null;
 }
@@ -67,8 +69,39 @@ export async function enqueueEligibleSkripChannels(
   const scheduleSlot = new Date(scheduleAt * 1000).toISOString().slice(0, 16) + 'Z';
   const identities = await getEligibleSkripIdentities(env, tenantId, input.contactId);
 
+  const configuredChannels = Array.from(
+    new Set(
+      (input.allowedChannels ?? [])
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => (SKRIP_CHANNELS as readonly string[]).includes(value)),
+    ),
+  );
+  const allowedChannels = new Set<string>(
+    configuredChannels.length > 0
+      ? configuredChannels
+      : [...SKRIP_CHANNELS],
+  );
+
+  const fallbackOrder = Array.from(
+    new Set(
+      (input.fallbackChain ?? [])
+        .map((value) => value.trim().toLowerCase())
+        .filter((value) => allowedChannels.has(value)),
+    ),
+  );
+  const fallbackRank = new Map<string, number>(fallbackOrder.map((channel, idx) => [channel, idx]));
+
+  const orderedIdentities = identities
+    .filter((identity) => allowedChannels.has(identity.channel))
+    .sort((a, b) => {
+      const aRank = fallbackRank.get(a.channel) ?? Number.MAX_SAFE_INTEGER;
+      const bRank = fallbackRank.get(b.channel) ?? Number.MAX_SAFE_INTEGER;
+      if (aRank !== bRank) return aRank - bRank;
+      return 0;
+    });
+
   const results: SkripOutboxEnqueueResult[] = [];
-  for (const identity of identities) {
+  for (const identity of orderedIdentities) {
     if (!(SKRIP_CHANNELS as readonly string[]).includes(identity.channel)) {
       continue;
     }

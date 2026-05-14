@@ -1,8 +1,9 @@
 import type { Env } from '../types';
-import { SKRIP_CONFIG } from '../constants';
+import { EVENT_TYPES, SKRIP_CONFIG } from '../constants';
 import { execute, now, queryOne } from '../lib/db';
 import { badRequest, ok } from '../lib/response';
 import { getCorrelationId } from '../lib/correlation';
+import { emitTelemetryEvent } from '../lib/telemetry';
 
 type PushReceiptType = 'delivered' | 'clicked' | 'dismissed';
 
@@ -95,9 +96,63 @@ export async function handlePushReceipt(request: Request, env: Env): Promise<Res
   const receiptId = normalizeOptionalString(body.receiptId);
   const epoch = now();
 
+  const existing = await queryOne<{ sent_at: number | null }>(
+    env.DB,
+    `SELECT sent_at FROM push_notifications WHERE notification_id = ? LIMIT 1`,
+    [notificationId],
+  );
+
   const deliveredAt = receiptType === 'delivered' || receiptType === 'clicked' ? occurredAt : null;
   const clickedAt = receiptType === 'clicked' ? occurredAt : null;
   const dismissedAt = receiptType === 'dismissed' ? occurredAt : null;
+
+  const telemetryType = receiptType === 'delivered'
+    ? EVENT_TYPES.OUTBOUND_PUSH_DELIVERED
+    : receiptType === 'clicked'
+      ? EVENT_TYPES.OUTBOUND_PUSH_CLICKED
+      : EVENT_TYPES.OUTBOUND_PUSH_DISMISSED;
+
+  await emitTelemetryEvent(env, {
+    type: telemetryType,
+    tenantId,
+    messageId: notificationId,
+    correlationId: getCorrelationId(),
+    contactId,
+    campaignId,
+    stepId,
+    timestamp: occurredAt,
+    sendTimestamp: existing?.sent_at ?? null,
+    receiptTimestamp: occurredAt,
+    channel: 'push',
+    metadata: {
+      receiptType,
+      receiptId,
+      source,
+      openedEquivalent: receiptType === 'clicked',
+    },
+    eventPayload: {
+      metadata: body.metadata ?? null,
+    },
+  });
+
+  if (receiptType === 'clicked') {
+    await emitTelemetryEvent(env, {
+      type: EVENT_TYPES.OUTBOUND_PUSH_OPENED,
+      tenantId,
+      messageId: notificationId,
+      correlationId: getCorrelationId(),
+      contactId,
+      campaignId,
+      stepId,
+      timestamp: occurredAt,
+      sendTimestamp: existing?.sent_at ?? null,
+      receiptTimestamp: occurredAt,
+      channel: 'push',
+      metadata: {
+        source: 'click-derived-open',
+      },
+    });
+  }
 
   await execute(
     env.DB,
@@ -171,6 +226,33 @@ export async function handlePushReceipt(request: Request, env: Env): Promise<Res
       WHERE message_id = ?`,
     [lineageStatus, occurredAt, epoch, notificationId],
   );
+
+  if (contactId) {
+    await execute(
+      env.DB,
+      `UPDATE marketing_contacts
+          SET push_sent_at = COALESCE(push_sent_at, ?),
+              updated_at = ?
+        WHERE email = ?`,
+      [existing?.sent_at ?? occurredAt, epoch, contactId],
+    );
+
+    if (receiptType === 'clicked') {
+      await execute(
+        env.DB,
+        `UPDATE marketing_contacts
+            SET push_last_opened_at = COALESCE(push_last_opened_at, ?),
+                last_engaged_at = CASE
+                  WHEN last_engaged_at IS NULL THEN ?
+                  ELSE MAX(last_engaged_at, ?)
+                END,
+                status = CASE WHEN status = 'prospect' THEN 'engaged' ELSE status END,
+                updated_at = ?
+          WHERE email = ?`,
+        [occurredAt, occurredAt, occurredAt, epoch, contactId],
+      );
+    }
+  }
 
   return ok({
     accepted: true,

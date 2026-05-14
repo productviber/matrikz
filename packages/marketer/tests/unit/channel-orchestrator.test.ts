@@ -332,9 +332,14 @@ describe('executeSecondaryChannels()', () => {
       q.params.includes('push') &&
       q.params.includes('dry_run')
     );
+    const fallbackTelemetryCounter = env.DB._queries.find(q =>
+      q.sql.includes('INSERT INTO telemetry_channel_daily') &&
+      q.params.includes('system')
+    );
 
     expect(used).toEqual([]);
     expect(outboxInsert).toBeDefined();
+    expect(fallbackTelemetryCounter).toBeDefined();
   });
 
   it('attempts contact form on step1 when channel exists and no prior attempt', async () => {

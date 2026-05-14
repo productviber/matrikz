@@ -529,8 +529,8 @@ describe('webhooks — Brevo handler', () => {
       expect(fetchCalled).toBe(true);
       expect(fetchBody.type).toBe('outbound.email_sent');
       expect(fetchBody.source).toBe('visibility-marketing');
-      expect(fetchBody.data.email).toBe('tracked@example.com');
-      expect(fetchBody.data.tag).toBe('campaign-1');
+      expect(fetchBody.data.prospect_email).toBe('tracked@example.com');
+      expect(fetchBody.data.metadata?.tag).toBe('campaign-1');
     });
 
     it('does not throw if analytics binding is unavailable', async () => {

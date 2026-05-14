@@ -21,12 +21,13 @@
  */
 
 import type { Env, OutboundProspectDiscoveredData, OutboundProspectEnrichedData, ContactForm, SocialHandles } from '../types';
-import { CONTACT_STATUS, CONTACT_SOURCE, EVENT_TYPES, KV_PREFIX, TTL, isPersonalEmail } from '../constants';
+import { CONTACT_STATUS, CONTACT_SOURCE, EVENT_TYPES, KV_PREFIX, SKRIP_CONFIG, TTL, isPersonalEmail } from '../constants';
 import { upsertContact } from '../lib/crm';
 import { enrollInSequences } from '../lib/email';
 import { execute } from '../lib/db';
 import { storeProspectChannels, executeWithoutEmail } from '../lib/channel-orchestrator';
 import { isSuppressed } from '../lib/suppression';
+import { emitTelemetryEvent } from '../lib/telemetry';
 
 /**
  * Handle outbound.prospect_discovered event.
@@ -58,6 +59,7 @@ export async function handleProspectDiscovered(
     return;
   }
 
+
   // Check permanent suppression list (CAN-SPAM — survives KV TTL expiry)
   if (await isSuppressed(env.DB, contactEmail)) {
     console.log(`[Outbound] Permanently suppressed: ${contactEmail} — skipping enrollment`);
@@ -78,6 +80,22 @@ export async function handleProspectDiscovered(
       prospectScore: score,
       discoveredAt: timestamp,
     }),
+  });
+
+  // ── Emit telemetry event for prospect discovered ──
+  await emitTelemetryEvent(env, {
+    type: EVENT_TYPES.OUTBOUND_PROSPECT_DISCOVERED,
+    tenantId: SKRIP_CONFIG.DEFAULT_TENANT_ID,
+    messageId: `outbound-discovered:${prospectId}`,
+    correlationId: `outbound-discovered:${prospectId}`,
+    prospectEmail: contactEmail,
+    prospectId,
+    timestamp: Math.floor(Date.parse(timestamp) / 1000),
+    metadata: {
+      domain,
+      source,
+      score,
+    },
   });
 
   // ── 2. Store prospect context in KV for template rendering ──
@@ -183,6 +201,21 @@ export async function handleProspectEnriched(
     } catch (err) {
       console.error(`[Outbound] No-email channel attempt failed for ${domain}: ${err instanceof Error ? err.message : err}`);
     }
+    // Emit telemetry for non-email channel enrichment
+    await emitTelemetryEvent(env, {
+      type: EVENT_TYPES.OUTBOUND_PROSPECT_ENRICHED,
+      tenantId: SKRIP_CONFIG.DEFAULT_TENANT_ID,
+      messageId: `outbound-enriched:${prospectId}`,
+      correlationId: `outbound-enriched:${prospectId}`,
+      prospectId,
+      timestamp: Math.floor(Date.parse(timestamp) / 1000),
+      metadata: {
+        domain,
+        score,
+        auditScore,
+        auditGrade,
+      },
+    });
     return;
   }
 
@@ -230,6 +263,23 @@ export async function handleProspectEnriched(
   }
 
   await upsertContact(env, contactEmail, upsertFields);
+
+  // ── Emit telemetry event for prospect enriched ──
+  await emitTelemetryEvent(env, {
+    type: EVENT_TYPES.OUTBOUND_PROSPECT_ENRICHED,
+    tenantId: SKRIP_CONFIG.DEFAULT_TENANT_ID,
+    messageId: `outbound-enriched:${prospectId}`,
+    correlationId: `outbound-enriched:${prospectId}`,
+    prospectEmail: contactEmail,
+    prospectId,
+    timestamp: Math.floor(Date.parse(timestamp) / 1000),
+    metadata: {
+      domain,
+      score,
+      auditScore,
+      auditGrade,
+    },
+  });
 
   // ── 2. Update KV context with full enrichment data for template rendering ──
   const contextKey = `${KV_PREFIX.EMAIL_CONTEXT}${contactEmail}:cold-outreach`;
